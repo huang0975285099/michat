@@ -2,12 +2,13 @@
     <q-page class="q-pa-md">
         <!-- 搜索栏 -->
         <q-input
-            v-model="searchId"
+            :model-value="searchId"
             outlined
             dense
             placeholder="输入对方 Chat ID（如 1234-ABCD）"
             class="q-mb-md"
             maxlength="9"
+            @update:model-value="searchId = ($event || '').toUpperCase()"
             @keyup.enter="search"
         >
             <template #append>

@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { loadKeyPair, generateAndStoreKeyPair, clearKeyPair, exportPrivateKey, hasSecurityCode, isUnlocked, unlock, lock, startAutoLock, loadLockConfig, saveLockConfig, setupSecurityCode, disableSecurityCode } from 'src/services/crypto'
 import { identityApi, friendApi, inviteApi, deviceApi } from 'src/services/api'
 import { registerPushToken } from 'src/boot/chat-service'
-import { connect } from 'src/services/websocket'
+import { connect, clearPendingQueue } from 'src/services/websocket'
 import { useChatStore } from 'src/stores/chat'
 
 export const useIdentityStore = defineStore('identity', () => {
@@ -259,6 +259,7 @@ export const useIdentityStore = defineStore('identity', () => {
 
     await clearKeyPair()
     await useChatStore().clearAll()
+    clearPendingQueue()
     localStorage.removeItem('session_token')
     localStorage.removeItem('chat_id')
     localStorage.removeItem('nickname')

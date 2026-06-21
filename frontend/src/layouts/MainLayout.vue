@@ -102,7 +102,7 @@ import { useChatStore } from "src/stores/chat";
 import { useIdentityStore } from "src/stores/identity";
 import { useCallStore } from "src/stores/call";
 import { wsConnected, on, off } from "src/services/websocket";
-import { notifyNewMessage } from "src/services/notify";
+import { notifyNewMessage, initNotifications } from "src/services/notify";
 import LockScreen from "src/components/LockScreen.vue";
 import CallBar from "src/components/CallBar.vue";
 import VideoCallView from "src/components/VideoCallView.vue";
@@ -137,6 +137,7 @@ onMounted(() => {
     stopListening = chatStore.startListening();
     stopCallListening = callStore.startListening();
     on("friend_request", onFriendRequestGlobal);
+    initNotifications();
 });
 onUnmounted(() => {
     off("friend_request", onFriendRequestGlobal);

@@ -135,6 +135,18 @@
                 </q-item-section>
             </q-item>
 
+            <q-item clickable @click="openCamDialog">
+                <q-item-section avatar
+                    ><q-icon name="videocam" color="indigo"
+                /></q-item-section>
+                <q-item-section>
+                    <q-item-label>摄像头检测</q-item-label>
+                    <q-item-label caption
+                        >检查摄像头权限和画面是否正常</q-item-label
+                    >
+                </q-item-section>
+            </q-item>
+
             <q-item clickable @click="confirmClear">
                 <q-item-section avatar
                     ><q-icon name="delete_forever" color="negative"
@@ -457,11 +469,82 @@
                 </q-card-actions>
             </q-card>
         </q-dialog>
+
+        <!-- 摄像头检测对话框 -->
+        <q-dialog v-model="showCamDialog" @hide="stopCamTest">
+            <q-card style="min-width: 340px">
+                <q-card-section>
+                    <div class="text-h6">摄像头检测</div>
+                </q-card-section>
+
+                <q-card-section>
+                    <div v-if="camStatus === 'idle'" class="text-center q-py-lg">
+                        <q-icon name="videocam" size="48px" color="grey-5" />
+                        <div class="text-grey q-mt-sm">点击下方按钮开始检测</div>
+                    </div>
+
+                    <div v-else-if="camStatus === 'checking'" class="text-center q-py-lg">
+                        <q-spinner color="primary" size="48px" />
+                        <div class="text-grey q-mt-sm">正在请求摄像头权限...</div>
+                    </div>
+
+                    <div v-else-if="camStatus === 'error'" class="text-center q-py-lg">
+                        <q-icon name="videocam_off" size="48px" color="negative" />
+                        <div class="text-negative q-mt-sm">{{ camError }}</div>
+                        <q-btn
+                            flat
+                            color="primary"
+                            label="重试"
+                            class="q-mt-sm"
+                            @click="startCamTest"
+                        />
+                    </div>
+
+                    <div v-show="camStatus === 'ok'">
+                        <div class="row items-center q-mb-md">
+                            <q-icon name="check_circle" color="positive" size="24px" class="q-mr-sm" />
+                            <span class="text-positive">摄像头正常</span>
+                        </div>
+
+                        <video
+                            ref="camVideo"
+                            class="cam-preview q-mb-md"
+                            autoplay
+                            playsinline
+                            muted
+                        ></video>
+
+                        <div class="text-caption text-grey q-mb-xs">选择设备</div>
+                        <q-select
+                            v-model="selectedCamId"
+                            :options="camDevices"
+                            outlined
+                            dense
+                            emit-value
+                            map-options
+                            class="q-mb-sm"
+                            @update:model-value="switchCamDevice"
+                        />
+                    </div>
+                </q-card-section>
+
+                <q-card-actions align="right">
+                    <q-btn
+                        v-if="camStatus === 'idle'"
+                        unelevated
+                        color="primary"
+                        label="开始检测"
+                        @click="startCamTest"
+                    />
+                    <q-btn flat label="关闭" v-close-popup />
+                </q-card-actions>
+            </q-card>
+        </q-dialog>
     </q-page>
 </template>
 
 <script setup>
-import { ref, watch, computed, onMounted } from "vue";
+import { ref, watch, computed, onMounted, nextTick } from "vue";
 import { useQuasar } from "quasar";
 import { useRouter } from "vue-router";
 import { useIdentityStore } from "src/stores/identity";
@@ -737,6 +820,97 @@ function stopMicTest() {
     micLevel.value = 0;
 }
 
+// 摄像头检测
+const showCamDialog = ref(false);
+const camStatus = ref("idle");
+const camError = ref("");
+const camDevices = ref([]);
+const selectedCamId = ref(null);
+const camVideo = ref(null);
+
+let camStream = null;
+
+function openCamDialog() {
+    camStatus.value = "idle";
+    camError.value = "";
+    showCamDialog.value = true;
+}
+
+function camErrorMessage(e) {
+    if (e.name === "NotFoundError" || e.name === "DevicesNotFoundError") {
+        return "未找到摄像头设备，请检查设备连接";
+    }
+    if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
+        return "摄像头权限被拒绝，请在浏览器设置中允许摄像头访问";
+    }
+    if (e.name === "NotReadableError") {
+        return "摄像头被其他程序占用，请关闭后重试";
+    }
+    return "无法访问摄像头：" + (e.message || e.name);
+}
+
+async function startCamTest() {
+    camStatus.value = "checking";
+    camError.value = "";
+    stopCamStream();
+
+    try {
+        camStream = await navigator.mediaDevices.getUserMedia({
+            video: selectedCamId.value
+                ? { deviceId: { exact: selectedCamId.value } }
+                : true,
+        });
+
+        await enumerateCams();
+        camStatus.value = "ok";
+        await nextTick();
+        if (camVideo.value) {
+            camVideo.value.srcObject = camStream;
+            camVideo.value.play().catch(() => {});
+        }
+    } catch (e) {
+        camStatus.value = "error";
+        camError.value = camErrorMessage(e);
+    }
+}
+
+async function enumerateCams() {
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        camDevices.value = devices
+            .filter((d) => d.kind === "videoinput")
+            .map((d) => ({
+                label: d.label || "未知设备",
+                value: d.deviceId,
+            }));
+        if (!selectedCamId.value && camDevices.value.length > 0) {
+            selectedCamId.value = camDevices.value[0].value;
+        }
+    } catch {}
+}
+
+async function switchCamDevice(deviceId) {
+    selectedCamId.value = deviceId;
+    if (camStatus.value === "ok") {
+        startCamTest();
+    }
+}
+
+function stopCamStream() {
+    if (camVideo.value) {
+        camVideo.value.srcObject = null;
+    }
+    if (camStream) {
+        camStream.getTracks().forEach((t) => t.stop());
+        camStream = null;
+    }
+}
+
+function stopCamTest() {
+    stopCamStream();
+    camStatus.value = "idle";
+}
+
 function confirmClear() {
     $q.dialog({
         title: "注销账号",
@@ -820,6 +994,17 @@ function confirmClear() {
     50% {
         transform: translateY(-10px);
     }
+}
+
+/* 摄像头检测预览 */
+.cam-preview {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    background: #000;
+    border-radius: 8px;
+    object-fit: cover;
+    /* 镜像显示，符合用户习惯 */
+    transform: scaleX(-1);
 }
 
 

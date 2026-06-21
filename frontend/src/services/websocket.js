@@ -10,7 +10,32 @@ let socket = null
 let reconnectTimer = null
 let authPending = false
 const listeners = new Map() // type → Set<callback>
-const pendingQueue = []     // 断连期间缓存的消息
+const PENDING_QUEUE_KEY = 'ws_pending_queue'  // 已读回执等关键消息的持久化队列
+const pendingQueue = loadPendingQueue()        // 断连期间缓存的消息（跨刷新保留）
+
+function loadPendingQueue() {
+  try {
+    const raw = localStorage.getItem(PENDING_QUEUE_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function savePendingQueue() {
+  try {
+    if (pendingQueue.length === 0) localStorage.removeItem(PENDING_QUEUE_KEY)
+    else localStorage.setItem(PENDING_QUEUE_KEY, JSON.stringify(pendingQueue))
+  } catch {
+    // 存储不可用时忽略，退化为内存队列
+  }
+}
+
+// 清空待发队列（内存 + 持久化）。注销/删除账号时调用，避免旧身份的已读回执被新身份重发
+export function clearPendingQueue() {
+  pendingQueue.length = 0
+  savePendingQueue()
+}
 
 // 响应式连接状态，供 UI 监听
 export const wsConnected = ref(false)
@@ -166,6 +191,7 @@ export function send(type, payload) {
   if (!socket || socket.readyState !== WebSocket.OPEN || authPending) {
     if (type === 'read') {
       pendingQueue.push({ type, payload })
+      savePendingQueue()
     }
     console.warn('[ws] not connected or auth pending, message dropped')
     return false
@@ -176,14 +202,12 @@ export function send(type, payload) {
 
 function flushPendingQueue() {
   while (pendingQueue.length > 0) {
-    const { type, payload } = pendingQueue.shift()
-    if (socket && socket.readyState === WebSocket.OPEN && !authPending) {
-      socket.send(JSON.stringify({ type, payload }))
-    } else {
-      pendingQueue.unshift({ type, payload })
-      break
-    }
+    if (!(socket && socket.readyState === WebSocket.OPEN && !authPending)) break
+    const { type, payload } = pendingQueue[0]
+    socket.send(JSON.stringify({ type, payload }))
+    pendingQueue.shift()
   }
+  savePendingQueue()
 }
 
 /**

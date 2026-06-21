@@ -222,6 +222,22 @@ async function dbMarkMessageRead(msgId) {
   })
 }
 
+// 标记某条消息的已读回执「已确认发出」，持久化以便刷新后不丢失
+async function dbMarkReceiptSent(msgId) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    const store = tx.objectStore(STORE_NAME)
+    const req = store.get(msgId)
+    req.onsuccess = (e) => {
+      const record = e.target.result
+      if (record) { record.receiptSent = true; store.put(record) }
+    }
+    tx.oncomplete = () => resolve()
+    tx.onerror = (e) => reject(e.target.error)
+  })
+}
+
 async function dbUpdateMessageTs(msgId, ts) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {
@@ -333,6 +349,7 @@ export const useChatStore = defineStore('chat', () => {
         ts: msg.ts,
         mine: msg.mine,
         read: msg.read || false,
+        receiptSent: msg.receiptSent || false,
         burnAfterRead: msg.burnAfterRead || false,
         burnAt: msg.burnAt || null
       })
@@ -504,7 +521,8 @@ export const useChatStore = defineStore('chat', () => {
         text: encryptedText,
         ts: msg.ts,
         mine: msg.mine,
-        read: false
+        read: false,
+        receiptSent: false
       })
     } catch (e) {
       console.error('[chat] persist file message failed:', e)
@@ -964,19 +982,34 @@ function validateMsgId(msgId) {
    */
   async function markAsRead(chatId) {
     const msgs = messages.value[chatId] || []
-    const unreadIds = []
+    const newlyRead = []        // 本次新标记为已读的（用于持久化 read）
+    const pendingReceiptIds = []  // 需要（重）发回执的：本地已读但回执尚未确认送达
     for (const m of msgs) {
-      if (!m.mine && !m.read) {
+      if (m.mine) continue
+      if (!m.read) {
         m.read = true
-        unreadIds.push(m.id)
+        newlyRead.push(m.id)
       }
+      // 只要回执还没确认送达就需要补发——服务器 RecordRead 幂等，重发安全
+      if (!m.receiptSent) pendingReceiptIds.push(m.id)
     }
-    if (unreadIds.length === 0) return
-    // 持久化已读状态到 IndexedDB
-    await Promise.all(unreadIds.map(id => dbMarkMessageRead(id).catch(() => {})))
+    // 持久化新标记的已读状态到 IndexedDB
+    if (newlyRead.length > 0) {
+      await Promise.all(newlyRead.map(id => dbMarkMessageRead(id).catch(() => {})))
+    }
+    if (pendingReceiptIds.length === 0) return
     // 发送已读回执到服务器，to 是消息发送者（对方）
     const { send } = await import('src/services/websocket')
-    send('read', { to: chatId, msg_id: unreadIds })
+    const ok = send('read', { to: chatId, msg_id: pendingReceiptIds })
+    // 仅在确认成功发出后才记录 receiptSent；否则保持 false，下次打开聊天会重发，
+    // 避免「本地已读但回执丢失」导致发送方永远停在单勾
+    if (ok) {
+      const sentSet = new Set(pendingReceiptIds)
+      for (const m of msgs) {
+        if (sentSet.has(m.id)) m.receiptSent = true
+      }
+      await Promise.all(pendingReceiptIds.map(id => dbMarkReceiptSent(id).catch(() => {})))
+    }
   }
 
   /**
