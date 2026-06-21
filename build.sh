@@ -20,6 +20,13 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 VERSION=$(date +%Y%m%d%H%M%S)
 OUTPUT_DIR="./dist"
 
+# ================= 目标服务器配置 =================
+REMOTE_USER="root"
+REMOTE_IP="47.108.52.145"
+REMOTE_DIR="/opt/e2eechat"
+# 注意：SSL 证书需手动上传，本脚本不会自动上传
+# =================================================
+
 clean() {
     log_info "清理旧的构建文件..."
     rm -rf $OUTPUT_DIR
@@ -168,11 +175,37 @@ package() {
     ls -lh $OUTPUT_DIR/
     ls -lh e2eechat-deploy-$VERSION.tar.gz
     echo ""
-    echo "部署步骤:"
-    echo "  1. 上传: scp e2eechat-deploy-$VERSION.tar.gz root@47.109.67.6:/opt/e2eechat/"
-    echo "  2. 解压: cd /opt/e2eechat && tar -xzf e2eechat-deploy-$VERSION.tar.gz && ./load.sh"
-    echo "  3. 上传SSL证书: scp ssl/yb.yzs88.com.pem ssl/yb.yzs88.com.key root@47.109.67.6:/etc/nginx/ssl/"
-    echo "  4. 加载: ./load.sh"
+}
+
+upload() {
+    log_info "上传发布文件到 ${REMOTE_USER}@${REMOTE_IP}:${REMOTE_DIR}/ ..."
+    # 仅上传打包产物，SSL 证书需手动上传，此处不处理
+    ssh "${REMOTE_USER}@${REMOTE_IP}" "mkdir -p ${REMOTE_DIR}"
+    scp -C -r \
+        "$OUTPUT_DIR/config.prod.yaml" \
+        "$OUTPUT_DIR/docker-compose.yml" \
+        "$OUTPUT_DIR/e2eechat-backend.tar.gz" \
+        "$OUTPUT_DIR/e2eechat-frontend.tar.gz" \
+        "$OUTPUT_DIR/load.sh" \
+        "$OUTPUT_DIR/migrations" \
+        "$OUTPUT_DIR/nginx-vhost" \
+        "${REMOTE_USER}@${REMOTE_IP}:${REMOTE_DIR}/"
+    ssh "${REMOTE_USER}@${REMOTE_IP}" "chmod +x ${REMOTE_DIR}/load.sh"
+    log_info "上传完成"
+}
+
+deploy() {
+    log_info "在远程服务器上执行 load.sh 进行部署..."
+    # load.sh 会从 ${REMOTE_DIR}/.env 读取 MySQL 密码（需提前存在），否则会卡在交互输入
+    ssh "${REMOTE_USER}@${REMOTE_IP}" "cd ${REMOTE_DIR} && ./load.sh"
+
+    echo ""
+    echo "=========================================="
+    echo "  ✓ 部署完成！https://yb.yzs88.com"
+    echo "=========================================="
+    echo ""
+    echo "提示: (首次) SSL 证书需手动上传:"
+    echo "  scp ssl/yb.yzs88.com.pem ssl/yb.yzs88.com.key ${REMOTE_USER}@${REMOTE_IP}:/etc/nginx/ssl/"
     echo ""
 }
 
@@ -194,6 +227,8 @@ main() {
     copy_configs
     create_load_script
     package
+    upload
+    deploy
 }
 
 main "$@"
