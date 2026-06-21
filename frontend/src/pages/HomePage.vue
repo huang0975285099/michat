@@ -372,9 +372,9 @@ function downloadFile(url) {
 }
 
 onMounted(async () => {
-    // 已登录用户可以跳转到聊天页面
+    // 已登录用户自动跳转到聊天页面，无需手动点击"进入"
     if (identity.isReady) {
-        // 显示"进入聊天"按钮而不是"获取邀请码"
+        router.replace("/chats");
     }
 });
 

@@ -91,9 +91,10 @@ function showWebNotification() {
  * 仅在页面不在前台时提醒，避免用户正在看时打扰。
  */
 export function notifyNewMessage() {
-  // Electron：任务栏闪烁
-  if (window.myAPI?.flashWindow) {
-    window.myAPI.flashWindow()
+  // Electron：弹原生系统 Toast + 任务栏闪烁
+  if (window.myAPI?.isElectron) {
+    window.myAPI.notify?.(NOTIFY_BODY)
+    window.myAPI.flashWindow?.()
     return
   }
 

@@ -3,7 +3,7 @@
         <img :src="logoUrl" alt="云密" width="80" style="border-radius: 16px" @click="goHome" />
         <div class="text-h5 text-weight-bold q-mb-sm q-mt-sm">云密</div>
         <div class="text-body2 text-grey q-mb-xl text-center">
-            端到端加密聊天，消息只有你和对方能看到
+            端到端加密聊天
         </div>
 
         <!-- 无邀请码提示（native app 不显示） -->
@@ -21,7 +21,7 @@
                 />
                 <div class="text-subtitle2 text-orange">请获取邀请码</div>
                 <div class="text-caption text-grey q-mb-md">
-                    云密采用邀请制注册，请从已有用户处获取邀请链接
+                    云密采用邀请制注册，请从好友那获取邀请链接
                 </div>
             </q-card-section>
         </q-card>

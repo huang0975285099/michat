@@ -1,10 +1,15 @@
-import { app, BrowserWindow, Menu, session, ipcMain } from "electron";
+import { app, BrowserWindow, Menu, session, ipcMain, Notification } from "electron";
 import path from "path";
 import os from "os";
 import { fileURLToPath } from "url";
 
 const platform = process.platform || os.platform();
 const currentDir = fileURLToPath(new URL(".", import.meta.url));
+
+// Windows 上设置 AppUserModelID，确保 Toast 显示正确的应用名而非「electron.app.Electron」
+if (platform === "win32") {
+    app.setAppUserModelId("云密");
+}
 
 let mainWindow;
 
@@ -57,6 +62,24 @@ ipcMain.on("focus-window", () => {
         if (mainWindow.isMinimized()) mainWindow.restore();
         mainWindow.focus();
     }
+});
+
+// 渲染进程请求弹系统 Toast 通知（仅在窗口未聚焦时弹）
+ipcMain.on("notify-message", (_event, body) => {
+    if (!Notification.isSupported()) return;
+    if (mainWindow && mainWindow.isFocused()) return;
+    const n = new Notification({
+        title: "云密",
+        body: body || "收到新消息",
+        icon: path.resolve(currentDir, "icons/icon.png"),
+    });
+    n.on("click", () => {
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.focus();
+        }
+    });
+    n.show();
 });
 
 app.whenReady().then(async () => {
