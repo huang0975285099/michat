@@ -1,0 +1,29 @@
+server:
+  port: 8888
+  # 覆写：JWT_SECRET 环境变量
+  jwt_secret: "dev-only-secret-32chars-not-prod!!"
+
+mysql:
+  # 覆写：MYSQL_DSN 环境变量
+  dsn: "root:123@123qwe@tcp(127.0.0.1:3306)/e2eechat?charset=utf8mb4&parseTime=True&loc=Local"
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 0
+
+turn:
+  # 覆写：TURN_SECRET 环境变量
+  secret: "8642c022c77b01f463a84f842d074ccc500bb3d2b220249ee2cd02cd07a6af27"
+  host: "yb.yzs88.com"
+  port: 3478
+
+# CORS 和 WebSocket 允许的来源（生产环境务必填写实际域名）
+# 留空或填 "*" 表示允许所有来源（仅开发用）
+jpush:
+  app_key: "8ae2c1c5587c62b88ace4630"
+  master_secret: "3c65dad5a20799c4b7787bf1"
+  enabled: true
+
+allowed_origins:
+  - "*"

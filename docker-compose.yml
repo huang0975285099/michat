@@ -1,0 +1,30 @@
+# E2EE Chat - Docker Compose 配置
+# 部署域名: https://yb.yzs88.com
+# 复用服务器上已有的 yzs-mysql / yzs-redis 容器
+
+services:
+  backend:
+    image: e2eechat-backend:latest
+    pull_policy: never
+    restart: always
+    environment:
+      CONFIG: /app/config.yaml
+    volumes:
+      - ./config.prod.yaml:/app/config.yaml:ro
+    networks:
+      - default
+      - e2eechat-net
+
+  frontend:
+    image: e2eechat-frontend:latest
+    pull_policy: never
+    restart: always
+    depends_on:
+      - backend
+    volumes:
+      - /usr/share/nginx/html/download:/usr/share/nginx/html/download:ro
+
+networks:
+  default: {}
+  e2eechat-net:
+    external: true

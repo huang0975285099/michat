@@ -1,0 +1,16 @@
+{
+  "appId": "com.yzs88.e2eechat",
+  "appName": "云密",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https",
+    "allowNavigation": [
+      "yb.yzs88.com"
+    ]
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 0
+    }
+  }
+}

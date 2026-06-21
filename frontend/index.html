@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>云密</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="msapplication-tap-highlight" content="no" />
+    <link rel="icon" type="image/png" href="icons/favicon-128x128.png" />
+    <style>
+      #browser-warning{display:none;text-align:center;padding:60px 20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+      #browser-warning .icon{font-size:64px;margin-bottom:16px}
+      #browser-warning h2{color:#c62828;margin:0 0 12px}
+      #browser-warning p{color:#666;line-height:1.6;margin:0 0 20px}
+      #browser-warning .hint{background:#fff3e0;padding:12px 16px;border-radius:8px;color:#e65100;font-size:14px;display:inline-block}
+    </style>
+  </head>
+  <body>
+    <div id="browser-warning">
+      <div class="icon">⚠️</div>
+      <h2>浏览器版本过低</h2>
+      <p>您的浏览器版本太低，无法正常运行云密。<br>请使用系统自带的浏览器或升级设备后再试。</p>
+      <div class="hint">建议使用 Android 10 及以上设备</div>
+    </div>
+    <script>
+    (function(){try{var v=navigator.userAgent.match(/Chrome\/(\d+)/);if(v&&parseInt(v[1],10)<66){document.getElementById("browser-warning").style.display="block";document.body.removeChild(document.getElementById("q-app")||document.body.firstChild)}}catch(e){}}());
+    </script>
+    <!-- quasar:entry-point -->
+  </body>
+</html>

@@ -1,0 +1,9 @@
+CREATE TABLE IF NOT EXISTS device_tokens (
+    id         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    chat_id    CHAR(9)      NOT NULL,
+    reg_id     VARCHAR(255) NOT NULL,
+    created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_chat_reg (chat_id, reg_id),
+    KEY idx_chat (chat_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

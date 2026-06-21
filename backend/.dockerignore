@@ -1,0 +1,23 @@
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+
+# Development files
+config.yaml
+*.log
+.env
+
+# VCS
+.git
+.github
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
