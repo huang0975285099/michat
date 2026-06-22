@@ -139,6 +139,7 @@ import {
     APP_VERSION,
     cmpVersion,
     fetchVersionInfo,
+    isNativeClient,
     forceRefresh,
 } from "src/services/version";
 import LockScreen from "src/components/LockScreen.vue";
@@ -196,7 +197,7 @@ const forceUpdating = ref(false);
 async function doForceUpdate() {
     if (forceUpdating.value) return;
     forceUpdating.value = true;
-    if (forceUpdateUrl) {
+    if (isNativeClient() && forceUpdateUrl) {
         window.open(forceUpdateUrl, "_blank");
         forceUpdating.value = false;
         return;
