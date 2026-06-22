@@ -44,6 +44,12 @@ type Config struct {
 		MasterSecret string `yaml:"master_secret"`
 		Enabled      bool   `yaml:"enabled"`
 	} `yaml:"jpush"`
+	Version struct {
+		Latest       string `yaml:"latest"`
+		MinSupported string `yaml:"min_supported"`
+		URL          string `yaml:"url"`
+		Notes        string `yaml:"notes"`
+	} `yaml:"version"`
 	AllowedOrigins []string `yaml:"allowed_origins"`
 }
 
@@ -76,6 +82,19 @@ func main() {
 	}
 	if v := os.Getenv("JPUSH_MASTER_SECRET"); v != "" {
 		cfg.JPush.MasterSecret = v
+	}
+	// 版本信息（在 docker-compose 环境变量里维护，每次发版更新）
+	if v := os.Getenv("APP_LATEST_VERSION"); v != "" {
+		cfg.Version.Latest = v
+	}
+	if v := os.Getenv("APP_MIN_VERSION"); v != "" {
+		cfg.Version.MinSupported = v
+	}
+	if v := os.Getenv("APP_UPDATE_URL"); v != "" {
+		cfg.Version.URL = v
+	}
+	if v := os.Getenv("APP_VERSION_NOTES"); v != "" {
+		cfg.Version.Notes = v
 	}
 
 	if cfg.Server.JWTSecret == "" || cfg.MySQL.DSN == "" || cfg.Turn.Secret == "" {
@@ -119,6 +138,7 @@ func main() {
 	turnHandler := handler.NewTurnHandler(cfg.Turn.Secret, cfg.Turn.Host, cfg.Turn.Port)
 	messagesHandler := handler.NewMessagesHandler(messageReadSvc)
 	deviceHandler := handler.NewDeviceHandler(db)
+	versionHandler := handler.NewVersionHandler(cfg.Version.Latest, cfg.Version.MinSupported, cfg.Version.URL, cfg.Version.Notes)
 
 	// 限流：公开接口 20 次/分钟/IP
 	publicRL := middleware.NewRateLimiter(20, time.Minute)
@@ -134,6 +154,7 @@ func main() {
 		open.GET("/identity/reauth/challenge", identHandler.GetReauthChallenge)
 		open.POST("/identity/reauth", identHandler.Reauth)
 		open.GET("/invite/validate", inviteHandler.Validate)
+		open.GET("/version", versionHandler.Get)
 
 		// 需要鉴权
 		auth := api.Group("", middleware.Auth(identSvc))

@@ -25,5 +25,12 @@ jpush:
   master_secret: "3c65dad5a20799c4b7787bf1"
   enabled: true
 
+# 版本信息（生产环境用 docker-compose 的环境变量覆写：APP_LATEST_VERSION 等）
+version:
+  latest: "1.0.0"
+  min_supported: "1.0.0"
+  url: "https://yb.yzs88.com"
+  notes: ""
+
 allowed_origins:
   - "*"

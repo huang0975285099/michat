@@ -238,6 +238,27 @@ async function dbMarkReceiptSent(msgId) {
   })
 }
 
+// 接收端首次读到阅后即焚消息时，启动销毁倒计时并持久化（保留记录的其他字段）
+async function dbStartBurnCountdown(msgId, readReceivedAt, burnAt) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    const store = tx.objectStore(STORE_NAME)
+    const req = store.get(msgId)
+    req.onsuccess = (e) => {
+      const record = e.target.result
+      if (record) {
+        record.read = true
+        record.readReceivedAt = readReceivedAt
+        record.burnAt = burnAt
+        store.put(record)
+      }
+    }
+    tx.oncomplete = () => resolve()
+    tx.onerror = (e) => reject(e.target.error)
+  })
+}
+
 async function dbUpdateMessageTs(msgId, ts) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {
@@ -554,6 +575,48 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
+   * 等待接收端确认收齐并解密成功（file_done），或收到 file_error / 超时
+   */
+  function waitForFileDone(transferId, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        off('file_done', onDone)
+        off('file_error', onErr)
+        reject(new Error('对方未确认接收，文件可能未送达'))
+      }, timeoutMs)
+
+      function cleanup() { clearTimeout(timer); off('file_done', onDone); off('file_error', onErr) }
+      function onDone(p) { if (p.transfer_id === transferId) { cleanup(); resolve(p.ts) } }
+      function onErr(p) { if (p.transfer_id === transferId) { cleanup(); reject(new Error(p.reason || '对方接收失败')) } }
+
+      on('file_done', onDone)
+      on('file_error', onErr)
+    })
+  }
+
+  // ── 接收端传输看门狗：检测分块停滞，避免某块丢失导致永久卡死 ──────────
+  const RECEIVE_STALL_MS = 30000  // 30s 内无新进展则判定传输失败
+
+  function armReceiveWatchdog(transferId) {
+    const t = fileTransfers.value[transferId]
+    if (!t) return
+    if (t.timer) clearTimeout(t.timer)
+    t.timer = setTimeout(() => {
+      const tr = fileTransfers.value[transferId]
+      if (!tr || tr.status === 'done' || tr.status === 'error') return
+      tr.status = 'error'
+      tr.errorReason = '传输超时'
+      tr.errorAt = Date.now()
+      send('file_error', { to: tr.fromChatId, transfer_id: transferId, reason: '接收超时' })
+    }, RECEIVE_STALL_MS)
+  }
+
+  function clearReceiveWatchdog(transferId) {
+    const t = fileTransfers.value[transferId]
+    if (t && t.timer) { clearTimeout(t.timer); t.timer = null }
+  }
+
+  /**
    * 组装并解密接收到的文件数据块
    */
   async function assembleAndDecrypt(transfer) {
@@ -562,6 +625,7 @@ export const useChatStore = defineStore('chat', () => {
     if (transfer.chunks.some(c => !c)) return
 
     transfer.status = 'done'
+    clearReceiveWatchdog(transfer.id)
     try {
       let totalBytes = 0
       const bufs = transfer.chunks.map(c => { const b = new Uint8Array(b64ToBuf(c)); totalBytes += b.length; return b })
@@ -587,11 +651,15 @@ export const useChatStore = defineStore('chat', () => {
         filetype: transfer.filetype,
         objectUrl,
         mine: false,
-        ts: Date.now()
+        ts: transfer.ts  // 服务器时间戳，与发送端一致
       })
+      // 通知发送端：已收齐并解密成功，回带服务器时间戳供发送端统一显示
+      send('file_done', { to: transfer.fromChatId, transfer_id: transfer.id, ts: transfer.ts })
     } catch (e) {
       transfer.status = 'error'
       transfer.errorReason = '文件解密失败'
+      transfer.errorAt = Date.now()
+      clearReceiveWatchdog(transfer.id)
       send('file_error', { to: transfer.fromChatId, transfer_id: transfer.id, reason: '文件解密失败' })
       console.error('[chat] file decrypt failed:', e)
     }
@@ -680,6 +748,10 @@ export const useChatStore = defineStore('chat', () => {
       // 发送完成信号
       send('file_complete', { to: toChatId, transfer_id: transferId })
       fileTransfers.value[transferId].progress = 100
+
+      // 等待接收端确认收齐并解密成功；超时或收到 file_error 则按失败处理
+      // 返回的 ts 为服务器时间戳，与接收端显示一致
+      const doneTs = await waitForFileDone(transferId, 30000)
       fileTransfers.value[transferId].status = 'done'
 
       // 发送方本地展示
@@ -693,7 +765,7 @@ export const useChatStore = defineStore('chat', () => {
         filetype: file.type,
         objectUrl,
         mine: true,
-        ts: Date.now()
+        ts: (typeof doneTs === 'number' && doneTs > 0) ? doneTs : Date.now()  // 服务器时间戳，与接收端一致
       })
 
       return transferId
@@ -701,6 +773,7 @@ export const useChatStore = defineStore('chat', () => {
       if (fileTransfers.value[transferId]) {
         fileTransfers.value[transferId].status = 'error'
         fileTransfers.value[transferId].errorReason = e.message
+        fileTransfers.value[transferId].errorAt = Date.now()
       }
       send('file_error', { to: toChatId, transfer_id: transferId, reason: e.message })
       throw e
@@ -885,8 +958,12 @@ function validateMsgId(msgId) {
         progress: 0,
         status: 'transferring',
         ephemeralPubKey: ephemeral_pub_key,
-        iv
+        iv,
+        ts: (typeof payload.ts === 'number' && payload.ts > 0) ? payload.ts : Date.now(),  // 服务器时间戳，两端统一
+        timer: null
       }
+      // 启动停滞看门狗，避免某块丢失导致永久卡在传输中
+      armReceiveWatchdog(transfer_id)
       // 自动接受
       send('file_accept', { to: from, transfer_id })
     }
@@ -900,6 +977,7 @@ function validateMsgId(msgId) {
       transfer.chunks[chunk_index] = data
       transfer.receivedCount++
       transfer.progress = Math.round(transfer.receivedCount / transfer.totalChunks * 95)
+      armReceiveWatchdog(transfer_id)  // 有新进展则重置停滞计时
 
       // 全部到齐时自动组装（无需等 file_complete）
       if (transfer.receivedCount === transfer.totalChunks) {
@@ -910,7 +988,16 @@ function validateMsgId(msgId) {
     function onFileComplete(payload) {
       const { transfer_id } = payload
       const transfer = fileTransfers.value[transfer_id]
-      if (!transfer || transfer.direction !== 'receive') return
+      if (!transfer || transfer.direction !== 'receive' || transfer.status !== 'transferring') return
+      // 收齐则组装；缺块则判定失败并通知发送方，避免发送端误以为成功
+      if (transfer.receivedCount < transfer.totalChunks || transfer.chunks.some(c => !c)) {
+        transfer.status = 'error'
+        transfer.errorReason = '文件传输不完整'
+        transfer.errorAt = Date.now()
+        clearReceiveWatchdog(transfer_id)
+        send('file_error', { to: transfer.fromChatId, transfer_id, reason: '接收不完整' })
+        return
+      }
       assembleAndDecrypt(transfer)
     }
 
@@ -920,6 +1007,8 @@ function validateMsgId(msgId) {
       if (transfer && transfer.status !== 'done') {
         transfer.status = 'error'
         transfer.errorReason = reason || '传输失败'
+        transfer.errorAt = Date.now()
+        clearReceiveWatchdog(transfer_id)
       }
     }
 
@@ -982,24 +1071,36 @@ function validateMsgId(msgId) {
    */
   async function markAsRead(chatId) {
     const msgs = messages.value[chatId] || []
+    const readReceivedAt = Date.now()
     const newlyRead = []        // 本次新标记为已读的（用于持久化 read）
+    const burnReads = []        // 接收端首次读到的阅后即焚消息，需启动销毁倒计时
     const pendingReceiptIds = []  // 需要（重）发回执的：本地已读但回执尚未确认送达
     for (const m of msgs) {
       if (m.mine) continue
       if (!m.read) {
         m.read = true
         newlyRead.push(m.id)
+        // 阅后即焚：接收端读到后即启动销毁倒计时（销毁的是「看的人」这份）
+        if (m.burnAfterRead) {
+          m.readReceivedAt = readReceivedAt
+          m.burnAt = readReceivedAt + BURN_AFTER_READ_DELAY
+          burnReads.push(m.id)
+        }
       }
       // 只要回执还没确认送达就需要补发——服务器 RecordRead 幂等，重发安全
       if (!m.receiptSent) pendingReceiptIds.push(m.id)
     }
     // 持久化新标记的已读状态到 IndexedDB
     if (newlyRead.length > 0) {
-      await Promise.all(newlyRead.map(id => dbMarkMessageRead(id).catch(() => {})))
+      const burnSet = new Set(burnReads)
+      await Promise.all(newlyRead.map(id =>
+        burnSet.has(id)
+          ? dbStartBurnCountdown(id, readReceivedAt, readReceivedAt + BURN_AFTER_READ_DELAY).catch(() => {})
+          : dbMarkMessageRead(id).catch(() => {})
+      ))
     }
     if (pendingReceiptIds.length === 0) return
-    // 发送已读回执到服务器，to 是消息发送者（对方）
-    const { send } = await import('src/services/websocket')
+    // 发送已读回执到服务器，to 是消息发送者（对方）（send 已在文件顶部静态导入）
     const ok = send('read', { to: chatId, msg_id: pendingReceiptIds })
     // 仅在确认成功发出后才记录 receiptSent；否则保持 false，下次打开聊天会重发，
     // 避免「本地已读但回执丢失」导致发送方永远停在单勾

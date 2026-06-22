@@ -126,10 +126,14 @@ CREATE USER IF NOT EXISTS 'e2eechat'@'%' IDENTIFIED BY 'e2eechat123';
 GRANT ALL PRIVILEGES ON e2eechat.* TO 'e2eechat'@'%';
 FLUSH PRIVILEGES;
 SQL
-docker exec -i yzs-mysql mysql -uroot -p"$MYSQL_ROOT_PASSWORD" e2eechat \
-    < "$REMOTE_DIR/migrations/001_init.sql" 2>/dev/null || true
-docker exec -i yzs-mysql mysql -uroot -p"$MYSQL_ROOT_PASSWORD" e2eechat \
-    < "$REMOTE_DIR/migrations/002_message_reads.sql" 2>/dev/null || true
+# 按文件名顺序应用全部迁移（SQL 均为 IF NOT EXISTS，幂等可重复执行）
+# 后端启动时的 AutoMigrate 也会再执行一遍，二者互为兜底
+for sql_file in "$REMOTE_DIR"/migrations/*.sql; do
+    [ -f "$sql_file" ] || continue
+    log_info "应用迁移: $(basename "$sql_file")"
+    docker exec -i yzs-mysql mysql -uroot -p"$MYSQL_ROOT_PASSWORD" e2eechat \
+        < "$sql_file" 2>/dev/null || true
+done
 log_info "数据库就绪"
 
 log_info "停止旧容器..."

@@ -1,4 +1,5 @@
 import { register } from 'register-service-worker'
+import { Notify } from 'quasar'
 
 // The ready(), registered(), cached(), updatefound() and updated()
 // events passes a ServiceWorkerRegistration instance in their arguments.
@@ -28,7 +29,19 @@ register(process.env.SERVICE_WORKER_FILE, {
   },
 
   updated (/* registration */) {
-    // console.log('New content is available; please refresh.')
+    // 检测到新版本：提示用户一键刷新（无需手动强刷）
+    // 配合 skipWaiting + clientsClaim，新 SW 已接管，reload 即可加载最新资源
+    Notify.create({
+      type: 'info',
+      message: '发现新版本',
+      caption: '点击刷新即可更新到最新版',
+      timeout: 0,
+      position: 'top',
+      actions: [
+        { label: '刷新', color: 'white', handler: () => window.location.reload() },
+        { label: '稍后', color: 'white', handler: () => {} }
+      ]
+    })
   },
 
   offline () {

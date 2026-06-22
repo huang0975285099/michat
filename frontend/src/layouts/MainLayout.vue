@@ -91,6 +91,30 @@
         <call-bar />
         <video-call-view />
         <incoming-call-dialog />
+
+        <!-- 强制更新：当前版本低于 min_supported 时阻断使用 -->
+        <q-dialog v-model="forceUpdate" persistent no-esc-dismiss no-backdrop-dismiss>
+            <q-card style="min-width: 300px; max-width: 360px">
+                <q-card-section class="row items-center q-gutter-sm">
+                    <q-icon name="system_update" color="primary" size="28px" />
+                    <div class="text-h6">需要更新</div>
+                </q-card-section>
+                <q-card-section class="text-body2 text-grey-8 q-pt-none">
+                    当前版本（v{{ appVersion }}）过低，无法继续使用，请更新到最新版本。
+                    <div v-if="forceUpdateNotes" class="text-caption text-grey q-mt-sm">
+                        {{ forceUpdateNotes }}
+                    </div>
+                </q-card-section>
+                <q-card-actions align="right">
+                    <q-btn
+                        unelevated
+                        color="primary"
+                        label="立即更新"
+                        @click="doForceUpdate"
+                    />
+                </q-card-actions>
+            </q-card>
+        </q-dialog>
     </q-layout>
 </template>
 
@@ -103,6 +127,13 @@ import { useIdentityStore } from "src/stores/identity";
 import { useCallStore } from "src/stores/call";
 import { wsConnected, on, off } from "src/services/websocket";
 import { notifyNewMessage, initNotifications } from "src/services/notify";
+import {
+    APP_VERSION,
+    cmpVersion,
+    fetchVersionInfo,
+    isNativeClient,
+    forceRefresh,
+} from "src/services/version";
 import LockScreen from "src/components/LockScreen.vue";
 import CallBar from "src/components/CallBar.vue";
 import VideoCallView from "src/components/VideoCallView.vue";
@@ -133,11 +164,40 @@ function onFriendRequestGlobal() {
     notifyNewMessage();
 }
 
+// 强制更新：当前版本低于后端 min_supported 时阻断使用
+const appVersion = APP_VERSION || "未知";
+const forceUpdate = ref(false);
+const forceUpdateNotes = ref("");
+let forceUpdateUrl = "";
+
+async function checkForceUpdate() {
+    if (!APP_VERSION) return; // 版本未注入（异常）时不强制，避免误锁
+    try {
+        const info = await fetchVersionInfo();
+        forceUpdateUrl = info.url || "";
+        forceUpdateNotes.value = info.notes || "";
+        if (info.min_supported && cmpVersion(APP_VERSION, info.min_supported) < 0) {
+            forceUpdate.value = true;
+        }
+    } catch {
+        // 拉取失败则不强制，避免网络问题误锁用户
+    }
+}
+
+function doForceUpdate() {
+    if (isNativeClient()) {
+        if (forceUpdateUrl) window.open(forceUpdateUrl, "_blank");
+        return;
+    }
+    forceRefresh();
+}
+
 onMounted(() => {
     stopListening = chatStore.startListening();
     stopCallListening = callStore.startListening();
     on("friend_request", onFriendRequestGlobal);
     initNotifications();
+    checkForceUpdate();
 });
 onUnmounted(() => {
     off("friend_request", onFriendRequestGlobal);

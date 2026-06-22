@@ -27,6 +27,7 @@ const (
 	pingPeriod     = 30 * time.Second
 	maxMessageSize = 256 * 1024       // 256KB（支持文件分块传输）
 	maxChunkData   = 200 * 1024       // 单块 base64 数据最大长度
+	fileChunkSize  = 128 * 1024       // 前端分块大小（原始字节），用于校验 total_chunks 与 filesize 是否相符
 	maxFileSize    = 10 * 1024 * 1024 // 10MB
 	maxFilename    = 255
 	maxTotalChunks = 100
@@ -281,7 +282,7 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 		h.handleFileOffer(c, msg.Payload)
 	case "file_chunk":
 		h.handleFileChunk(c, msg.Payload)
-	case "file_accept", "file_reject", "file_complete", "file_error":
+	case "file_accept", "file_reject", "file_complete", "file_error", "file_done":
 		h.handleFileSimpleRelay(c, msg.Type, msg.Payload)
 	case "call_offer":
 		h.handleCallOffer(c, msg.Payload)
@@ -566,6 +567,13 @@ func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
 		log.Printf("[ws] file_offer invalid total_chunks %d from %s", p.TotalChunks, from.ChatID)
 		return
 	}
+	// 交叉校验：total_chunks 必须与声明的 filesize 相符，防止 filesize 很小却用大量分块放大流量
+	// 密文 = filesize + GCM tag，按 fileChunkSize 分块；+1 容纳加密开销与边界
+	maxChunksForSize := int((p.Filesize+fileChunkSize-1)/fileChunkSize) + 1
+	if p.TotalChunks > maxChunksForSize {
+		log.Printf("[ws] file_offer total_chunks %d exceeds size-implied max %d (filesize=%d) from %s", p.TotalChunks, maxChunksForSize, p.Filesize, from.ChatID)
+		return
+	}
 	if p.EphemeralPubKey == "" || p.IV == "" {
 		log.Printf("[ws] file_offer missing encryption fields from %s", from.ChatID)
 		return
@@ -611,6 +619,7 @@ func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
 		TotalChunks     int    `json:"total_chunks"`
 		EphemeralPubKey string `json:"ephemeral_pub_key"`
 		IV              string `json:"iv"`
+		Timestamp       int64  `json:"ts"` // 服务器时间戳，两端据此统一文件消息时间
 	}
 	fwd, _ := json.Marshal(Message{
 		Type: "file_offer",
@@ -624,6 +633,7 @@ func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
 			TotalChunks:     p.TotalChunks,
 			EphemeralPubKey: p.EphemeralPubKey,
 			IV:              p.IV,
+			Timestamp:       time.Now().UnixMilli(),
 		}),
 	})
 	select {
@@ -692,6 +702,7 @@ func (h *Hub) handleFileSimpleRelay(from *Client, msgType string, payload json.R
 		To         string `json:"to"`
 		TransferID string `json:"transfer_id"`
 		Reason     string `json:"reason,omitempty"`
+		Timestamp  int64  `json:"ts,omitempty"` // file_done 回带 file_offer 的服务器时间戳
 	}
 	if err := json.Unmarshal(payload, &p); err != nil {
 		log.Printf("[ws] invalid %s from %s: %v", msgType, from.ChatID, err)
@@ -706,6 +717,7 @@ func (h *Hub) handleFileSimpleRelay(from *Client, msgType string, payload json.R
 		From       string `json:"from"`
 		TransferID string `json:"transfer_id"`
 		Reason     string `json:"reason,omitempty"`
+		Timestamp  int64  `json:"ts,omitempty"`
 	}
 	fwd, _ := json.Marshal(Message{
 		Type: msgType,
@@ -713,6 +725,7 @@ func (h *Hub) handleFileSimpleRelay(from *Client, msgType string, payload json.R
 			From:       from.ChatID,
 			TransferID: p.TransferID,
 			Reason:     p.Reason,
+			Timestamp:  p.Timestamp,
 		}),
 	})
 

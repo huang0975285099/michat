@@ -74,4 +74,9 @@ export const deviceApi = {
   remove: () => api.delete('/device/token')
 }
 
+// 版本信息（公开接口，返回线上最新版本）
+export const versionApi = {
+  get: () => api.get('/version')
+}
+
 export default api

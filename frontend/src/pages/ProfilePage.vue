@@ -169,6 +169,22 @@
             @click="doLockNow"
         />
 
+        <!-- 版本号 + 更新检查 -->
+        <div class="text-center text-caption text-grey-6 q-mt-xl q-mb-md">
+            <div>云密 v{{ appVersion }}<span v-if="buildDate"> · {{ buildDate }}</span></div>
+            <div class="q-mt-xs">
+                <span v-if="updateState === 'checking'" class="text-grey">检查更新中…</span>
+                <span v-else-if="updateState === 'latest'" class="text-positive">✅ 已是最新版本</span>
+                <a
+                    v-else-if="updateState === 'outdated'"
+                    class="text-primary"
+                    style="cursor: pointer; text-decoration: none"
+                    @click="onUpdateClick"
+                >🔔 有新版本 v{{ latestVersion }}，点击更新</a>
+                <span v-else class="text-grey">无法检查更新</span>
+            </div>
+        </div>
+
         <!-- 备份对话框 -->
         <q-dialog v-model="showBackupDialog">
             <q-card style="min-width: 320px">
@@ -548,11 +564,58 @@ import { ref, watch, computed, onMounted, nextTick } from "vue";
 import { useQuasar } from "quasar";
 import { useRouter } from "vue-router";
 import { useIdentityStore } from "src/stores/identity";
+import {
+    APP_VERSION,
+    BUILD_TIME,
+    cmpVersion,
+    fetchVersionInfo,
+    isNativeClient,
+    forceRefresh,
+} from "src/services/version";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
 
 const $q = useQuasar();
 const router = useRouter();
 const identity = useIdentityStore();
+
+// 版本号（构建时注入，见 quasar.config.js）
+const appVersion = APP_VERSION || "未知";
+const buildDate = (BUILD_TIME || "").slice(0, 10);
+
+// 更新检查：与后端 /api/version 返回的线上最新版本对比
+const updateState = ref("checking"); // checking | latest | outdated | unknown
+const latestVersion = ref("");
+const updateUrl = ref("");
+
+async function checkVersion() {
+    updateState.value = "checking";
+    try {
+        const info = await fetchVersionInfo();
+        latestVersion.value = info.latest || "";
+        updateUrl.value = info.url || "";
+        if (!latestVersion.value || !APP_VERSION) {
+            updateState.value = "unknown";
+            return;
+        }
+        updateState.value =
+            cmpVersion(APP_VERSION, latestVersion.value) < 0
+                ? "outdated"
+                : "latest";
+    } catch {
+        updateState.value = "unknown";
+    }
+}
+
+async function onUpdateClick() {
+    // 原生端（桌面/安卓）：打开下载页更新安装包
+    if (isNativeClient()) {
+        if (updateUrl.value) window.open(updateUrl.value, "_blank");
+        return;
+    }
+    // 浏览器 / PWA：清缓存 + 注销 SW 后刷新，用户无需手动强刷
+    $q.loading.show({ message: "正在更新到最新版…" });
+    await forceRefresh();
+}
 
 // 浏览器检测
 const isWechat = ref(false);
@@ -565,6 +628,7 @@ function detectBrowser() {
 
 onMounted(() => {
     detectBrowser();
+    checkVersion();
 });
 
 const showBackupDialog = ref(false);

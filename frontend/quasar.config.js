@@ -1,4 +1,8 @@
 import { defineConfig } from '#q-app/wrappers'
+import { readFileSync } from 'node:fs'
+
+// 读取 package.json 的版本号，构建时注入到应用，供「我」页面展示
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8'))
 
 export default defineConfig(() => {
   return {
@@ -9,6 +13,10 @@ export default defineConfig(() => {
     extras: ['material-icons'],
 
     build: {
+      env: {
+        APP_VERSION: pkg.version,
+        BUILD_TIME: new Date().toISOString()
+      },
       target: {
         browser: ['es2017', 'chrome66', 'safari11', 'firefox60'],
         node: 'node20'
@@ -47,6 +55,13 @@ export default defineConfig(() => {
     ssr: { pwa: false },
     pwa: {
       workboxMode: 'GenerateSW',
+      // 新 Service Worker 安装后立即接管并清理旧缓存，配合 register-service-worker 的刷新提示，
+      // 确保发版后用户无需手动强刷即可更新到最新版本
+      extendGenerateSWOptions(cfg) {
+        cfg.skipWaiting = true
+        cfg.clientsClaim = true
+        cfg.cleanupOutdatedCaches = true
+      },
       manifest: {
         name: '云密',
         short_name: 'yunChat',
