@@ -170,8 +170,8 @@
         />
 
         <!-- 版本号 + 更新检查 -->
-        <div class="text-center text-caption text-grey-6 q-mt-xl q-mb-md">
-            <div>云密 v{{ appVersion }}<span v-if="buildDate"> · {{ buildDate }}</span></div>
+        <div class="text-center text-caption text-grey-6 q-mt-xs">
+            <div>v{{ appVersion }}<span v-if="buildDate"> · {{ buildDate }}</span></div>
             <div class="q-mt-xs">
                 <span v-if="updateState === 'checking'" class="text-grey">检查更新中…</span>
                 <span v-else-if="updateState === 'latest'" class="text-positive">✅ 已是最新版本</span>

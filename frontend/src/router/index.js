@@ -10,6 +10,7 @@ const routes = [
       { path: 'chats', component: () => import('src/pages/ChatsPage.vue') },
       { path: 'chat/:chatId', component: () => import('src/pages/ChatPage.vue') },
       { path: 'friends', component: () => import('src/pages/FriendsPage.vue') },
+      { path: 'games', component: () => import('src/pages/GamesPage.vue') },
       { path: 'profile', component: () => import('src/pages/ProfilePage.vue') }
     ]
   },

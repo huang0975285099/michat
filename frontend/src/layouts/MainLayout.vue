@@ -12,6 +12,7 @@
                 />
                 <q-toolbar-title>{{ pageTitle }}</q-toolbar-title>
                 <q-btn
+                    v-if="!wsConnected"
                     flat
                     dense
                     round
@@ -35,7 +36,7 @@
 
         <q-page-container>
             <router-view v-slot="{ Component }">
-                <keep-alive :include="['ChatsPage', 'FriendsPage', 'ProfilePage']">
+                <keep-alive :include="['ChatsPage', 'FriendsPage', 'GamesPage', 'ProfilePage']">
                     <component :is="Component" />
                 </keep-alive>
             </router-view>
@@ -76,6 +77,12 @@
                         :label="identity.pendingRequestCount > 99 ? '99+' : identity.pendingRequestCount"
                     />
                 </q-tab>
+                <q-tab
+                    name="games"
+                    icon="sports_esports"
+                    label="游戏"
+                    @click="router.push('/games')"
+                />
                 <q-tab
                     name="profile"
                     icon="person"
@@ -146,6 +153,7 @@ const identity = useIdentityStore();
 function pathToTab(path) {
     if (path.startsWith("/chat/")) return "chats";
     if (path === "/friends") return "friends";
+    if (path === "/games") return "games";
     if (path === "/profile") return "profile";
     return "chats";
 }
@@ -235,6 +243,7 @@ const pageTitle = computed(() => {
     if (route.path === "/") return "云密";
     if (route.path.startsWith("/chat/")) return route.query.nickname || "聊天";
     if (route.path === "/friends") return "好友";
+    if (route.path === "/games") return "游戏中心";
     if (route.path === "/profile") return "我的资料";
     return "云密";
 });
