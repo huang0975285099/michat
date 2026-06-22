@@ -45,5 +45,7 @@ export async function forceRefresh() {
   } catch {
     // 清理失败也继续刷新
   }
-  window.location.reload()
+  // 带时间戳跳转，绕过浏览器对 index.html 的 HTTP 缓存
+  const { pathname, hash } = window.location
+  window.location.replace(pathname + '?_r=' + Date.now() + (hash || ''))
 }

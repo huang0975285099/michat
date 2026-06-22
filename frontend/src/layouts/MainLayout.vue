@@ -117,6 +117,7 @@
                         unelevated
                         color="primary"
                         label="立即更新"
+                        :loading="forceUpdating"
                         @click="doForceUpdate"
                     />
                 </q-card-actions>
@@ -138,7 +139,6 @@ import {
     APP_VERSION,
     cmpVersion,
     fetchVersionInfo,
-    isNativeClient,
     forceRefresh,
 } from "src/services/version";
 import LockScreen from "src/components/LockScreen.vue";
@@ -192,12 +192,16 @@ async function checkForceUpdate() {
     }
 }
 
-function doForceUpdate() {
-    if (isNativeClient()) {
-        if (forceUpdateUrl) window.open(forceUpdateUrl, "_blank");
+const forceUpdating = ref(false);
+async function doForceUpdate() {
+    if (forceUpdating.value) return;
+    forceUpdating.value = true;
+    if (forceUpdateUrl) {
+        window.open(forceUpdateUrl, "_blank");
+        forceUpdating.value = false;
         return;
     }
-    forceRefresh();
+    await forceRefresh();
 }
 
 onMounted(() => {
