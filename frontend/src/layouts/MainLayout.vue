@@ -12,6 +12,16 @@
                 />
                 <q-toolbar-title>{{ pageTitle }}</q-toolbar-title>
                 <q-btn
+                    v-if="identity.hasCode"
+                    flat
+                    dense
+                    round
+                    icon="lock"
+                    @click="doLockNow"
+                >
+                    <q-tooltip>立即锁定</q-tooltip>
+                </q-btn>
+                <q-btn
                     v-if="!wsConnected"
                     flat
                     dense
@@ -229,7 +239,17 @@ onMounted(() => {
     on("friend_request", onFriendRequestGlobal);
     initNotifications();
     checkForceUpdate();
+    // 启动时若已是解锁态，补解密上次锁定期间暂存的密文
+    if (!identity.isLocked) chatStore.processPendingMessages();
 });
+
+// 解锁后（锁定 → 解锁）补解密锁定期间暂存的消息
+watch(
+    () => identity.isLocked,
+    (locked, wasLocked) => {
+        if (wasLocked && !locked) chatStore.processPendingMessages();
+    },
+);
 onUnmounted(() => {
     off("friend_request", onFriendRequestGlobal);
     stopListening && stopListening();
@@ -254,6 +274,11 @@ watch(wsConnected, (connected) => {
 });
 
 const canGoBack = computed(() => route.path.startsWith("/chat/"));
+
+function doLockNow() {
+    identity.lockNow();
+    Notify.create({ type: "info", message: "已锁定", timeout: 2000 });
+}
 
 const refreshing = ref(false);
 function doRefresh() {

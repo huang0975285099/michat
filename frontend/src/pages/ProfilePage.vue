@@ -160,14 +160,14 @@
             </q-item>
         </q-list>
 
-        <q-btn
+        <!-- <q-btn
             v-if="identity.hasCode"
             outline
             color="negative"
             label="立即锁定"
             class="full-width q-mt-lg"
             @click="doLockNow"
-        />
+        /> -->
 
         <!-- 版本号 + 更新检查 -->
         <div class="text-center text-caption text-grey-6 q-mt-xs">
@@ -748,11 +748,11 @@ async function doSetup() {
     }
 }
 
-function doLockNow() {
-    identity.lockNow();
-    showLockSettings.value = false;
-    $q.notify({ type: "info", message: "已锁定" });
-}
+// function doLockNow() {
+//     identity.lockNow();
+//     showLockSettings.value = false;
+//     $q.notify({ type: "info", message: "已锁定" });
+// }
 
 async function doDisable() {
     try {

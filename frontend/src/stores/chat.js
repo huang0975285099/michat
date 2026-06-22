@@ -3,13 +3,15 @@ import { ref, computed } from 'vue'
 import { encryptMessage, decryptMessage, encryptFile, decryptFile, bufToB64, b64ToBuf } from 'src/services/crypto'
 import { send, on, off } from 'src/services/websocket'
 import { notifyNewMessage } from 'src/services/notify'
+import { useIdentityStore } from 'src/stores/identity'
 
 // ── 安全常量 ──────────────────────────────────────────────
 
 const DB_NAME = 'e2eechat_messages'
-const DB_VERSION = 3  // 升级版本以支持加密存储
+const DB_VERSION = 4  // v4: 新增 pending_messages 暂存锁定期间无法解密的密文
 const STORE_NAME = 'messages'
 const KEY_STORE_NAME = 'message_key'  // 存储消息加密密钥
+const PENDING_STORE_NAME = 'pending_messages'  // 锁定期间收到、待解锁后解密的原始密文
 const BURN_AFTER_READ_DELAY = 2 * 60 * 60 * 1000  // 2小时
 
 // ── 文件传输常量 ──────────────────────────────────────────
@@ -160,6 +162,10 @@ function openMessagesDB() {
       if (!db.objectStoreNames.contains(KEY_STORE_NAME)) {
         db.createObjectStore(KEY_STORE_NAME, { keyPath: 'id' })
       }
+      // 暂存锁定期间无法解密的原始密文（解锁后补解密）
+      if (!db.objectStoreNames.contains(PENDING_STORE_NAME)) {
+        db.createObjectStore(PENDING_STORE_NAME, { keyPath: 'msg_id' })
+      }
     }
     req.onsuccess = (e) => resolve(e.target.result)
     req.onerror = (e) => reject(e.target.error)
@@ -280,6 +286,39 @@ export function clearAllMessagesDB() {
     req.onsuccess = () => resolve()
     req.onerror = () => resolve()
     req.onblocked = () => resolve()
+  })
+}
+
+// ── 待解密密文暂存（锁定期间） ──────────────────────────────────
+
+async function dbAddPending(payload) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PENDING_STORE_NAME, 'readwrite')
+    // put 而非 add：同一 msg_id 重复到达时覆盖，避免 ConstraintError
+    tx.objectStore(PENDING_STORE_NAME).put(payload)
+    tx.oncomplete = () => resolve()
+    tx.onerror = (e) => reject(e.target.error)
+  })
+}
+
+async function dbGetAllPending() {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PENDING_STORE_NAME, 'readonly')
+    const req = tx.objectStore(PENDING_STORE_NAME).getAll()
+    req.onsuccess = (e) => resolve(e.target.result || [])
+    req.onerror = (e) => reject(e.target.error)
+  })
+}
+
+async function dbDeletePending(msgId) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PENDING_STORE_NAME, 'readwrite')
+    tx.objectStore(PENDING_STORE_NAME).delete(msgId)
+    tx.oncomplete = () => resolve()
+    tx.onerror = (e) => reject(e.target.error)
   })
 }
 
@@ -844,13 +883,16 @@ function validateMsgId(msgId) {
         return
       }
 
+      // 提醒放在解密之前：锁定状态下私钥已清除、消息无法解密，
+      // 但仍应让用户知道「收到新消息」并触发闪烁（通知文案通用，不含内容）
+      notifyNewMessage()
+
       try {
         const text = await decryptMessage({
           ephemeralPubKey: payload.ephemeral_pub_key,
           iv: payload.iv,
           ciphertext: payload.ciphertext
         })
-        notifyNewMessage()
         await addMessage(payload.from, {
           id: payload.msg_id,
           from: payload.from,
@@ -862,7 +904,22 @@ function validateMsgId(msgId) {
           receivedAt: Date.now()  // 记录本地接收时间用于相对计时
         })
       } catch (e) {
-        console.error('[chat] decrypt failed', e)
+        // 锁定态下私钥已清除，必然解密失败：暂存原始密文，解锁后补解密。
+        // 非锁定态的解密失败属于真损坏，沿用原有「丢弃」行为。
+        if (useIdentityStore().isLocked) {
+          await dbAddPending({
+            msg_id: payload.msg_id,
+            from: payload.from,
+            ephemeral_pub_key: payload.ephemeral_pub_key,
+            iv: payload.iv,
+            ciphertext: payload.ciphertext,
+            ts: payload.ts,
+            burn_after_read: payload.burn_after_read || false,
+            receivedAt: Date.now()
+          }).catch(err => console.error('[chat] stash pending failed', err))
+        } else {
+          console.error('[chat] decrypt failed', e)
+        }
       }
     }
 
@@ -1231,6 +1288,53 @@ function validateMsgId(msgId) {
     }
   }
 
+  /**
+   * 解锁后调用：补解密锁定期间暂存的密文。
+   * 成功 → 入库并删暂存；解锁后仍失败 → 视为真损坏，删暂存（自清理）；
+   * 仍处于锁定（私钥未就绪）→ 保留，下次解锁再试。
+   */
+  async function processPendingMessages() {
+    let pending
+    try {
+      pending = await dbGetAllPending()
+    } catch (e) {
+      console.error('[chat] load pending failed', e)
+      return
+    }
+    if (!pending.length) return
+
+    // 按服务器时间排序，保证补显示顺序与发送顺序一致
+    pending.sort((a, b) => a.ts - b.ts)
+
+    for (const p of pending) {
+      try {
+        const text = await decryptMessage({
+          ephemeralPubKey: p.ephemeral_pub_key,
+          iv: p.iv,
+          ciphertext: p.ciphertext
+        })
+        await addMessage(p.from, {
+          id: p.msg_id,
+          from: p.from,
+          text,
+          ts: p.ts,
+          mine: false,
+          burnAfterRead: p.burn_after_read || false,
+          burnAt: null,
+          receivedAt: p.receivedAt || Date.now()
+        })
+        await dbDeletePending(p.msg_id).catch(() => {})
+      } catch (e) {
+        // 解锁后仍失败：若仍锁定则保留待下次，否则是真损坏，删除
+        if (useIdentityStore().isLocked) {
+          break  // 私钥仍不可用，无需继续尝试
+        }
+        console.error('[chat] pending decrypt failed, dropping', p.msg_id, e)
+        await dbDeletePending(p.msg_id).catch(() => {})
+      }
+    }
+  }
+
   return {
     messages,
     totalUnread,
@@ -1249,6 +1353,7 @@ function validateMsgId(msgId) {
     handleReadReceipt,
     startBurnTimer,
     stopBurnTimer,
-    checkExpiredMessages
+    checkExpiredMessages,
+    processPendingMessages
   }
 })
