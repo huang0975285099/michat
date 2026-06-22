@@ -3,8 +3,10 @@ package redis
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -15,6 +17,17 @@ const (
 	ReauthChallengeTTL = 5 * time.Minute     // 挑战码有效期 5分钟
 	InviteCodeTTL      = 7 * 24 * time.Hour  // 邀请码有效期 7天
 )
+
+// NewInMemory 启动一个进程内的内存 Redis（miniredis），返回连接它的 client。
+// 仅用于本地开发，免去安装 Redis。进程退出即数据全失，不要用于生产。
+func NewInMemory() (*redis.Client, error) {
+	srv, err := miniredis.Run()
+	if err != nil {
+		return nil, fmt.Errorf("start miniredis: %w", err)
+	}
+	log.Printf("[redis] 使用内存版 Redis (miniredis) @ %s — 仅限开发", srv.Addr())
+	return redis.NewClient(&redis.Options{Addr: srv.Addr()}), nil
+}
 
 func New(addr, password string, db int) (*redis.Client, error) {
 	rdb := redis.NewClient(&redis.Options{

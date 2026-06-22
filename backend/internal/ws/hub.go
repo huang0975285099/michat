@@ -288,6 +288,9 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 		h.handleCallOffer(c, msg.Payload)
 	case "call_answer", "call_ice", "call_hangup", "call_reject":
 		h.handleCallRelay(c, msg.Type, msg.Payload)
+	case "game_invite", "game_accept", "game_reject", "game_ready",
+		"game_move", "game_bomb", "game_powerup", "game_death", "game_resign":
+		h.handleGameRelay(c, msg.Type, msg.Payload)
 	default:
 		log.Printf("[ws] unknown message type %q from %s", msg.Type, c.ChatID)
 	}
@@ -812,6 +815,46 @@ func (h *Hub) handleCallRelay(from *Client, msgType string, payload json.RawMess
 
 	h.mu.RLock()
 	c, ok := h.clients[p.To]
+	h.mu.RUnlock()
+	if ok {
+		select {
+		case c.send <- fwd:
+		default:
+		}
+	}
+}
+
+// handleGameRelay relays game messages between two players.
+// Only game_invite validates friendship; subsequent in-game messages are relayed directly.
+func (h *Hub) handleGameRelay(from *Client, msgType string, payload json.RawMessage) {
+	var header struct {
+		To string `json:"to"`
+	}
+	if err := json.Unmarshal(payload, &header); err != nil || !chatIDRe.MatchString(header.To) {
+		log.Printf("[ws] invalid %s from %s", msgType, from.ChatID)
+		return
+	}
+
+	if msgType == "game_invite" {
+		ctx := context.Background()
+		ok, err := h.friendSvc.AreFriends(ctx, from.UserID, header.To)
+		if err != nil || !ok {
+			log.Printf("[ws] game_invite: %s not friends with %s", from.ChatID, header.To)
+			return
+		}
+	}
+
+	// Inject "from" field so the recipient knows who sent it
+	var m map[string]interface{}
+	if err := json.Unmarshal(payload, &m); err != nil {
+		return
+	}
+	m["from"] = from.ChatID
+
+	fwd, _ := json.Marshal(Message{Type: msgType, Payload: mustMarshal(m)})
+
+	h.mu.RLock()
+	c, ok := h.clients[header.To]
 	h.mu.RUnlock()
 	if ok {
 		select {

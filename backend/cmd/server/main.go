@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"gopkg.in/yaml.v3"
 
 	"e2eechat/internal/handler"
@@ -111,7 +112,13 @@ func main() {
 		log.Fatalf("auto migrate: %v", err)
 	}
 
-	rdb, err := pkgredis.New(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+	var rdb *redis.Client
+	if cfg.Redis.Addr == "" || cfg.Redis.Addr == "memory" {
+		// 本地开发：使用内存版 Redis，免安装
+		rdb, err = pkgredis.NewInMemory()
+	} else {
+		rdb, err = pkgredis.New(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+	}
 	if err != nil {
 		log.Fatalf("redis: %v", err)
 	}

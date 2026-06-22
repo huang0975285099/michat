@@ -10,8 +10,8 @@ services:
     environment:
       CONFIG: /app/config.yaml
       # 版本信息：每次发版时同步修改前端 package.json 的 version 与这里的 APP_LATEST_VERSION
-      APP_LATEST_VERSION: "1.0.2"   # 线上最新版本号
-      APP_MIN_VERSION: "1.0.2"      # 低于此版本强制更新（可留空）
+      APP_LATEST_VERSION: "1.0.3"   # 线上最新版本号
+      APP_MIN_VERSION: "1.0.0"      # 低于此版本强制更新（可留空）
       APP_UPDATE_URL: "https://yb.yzs88.com"  # 更新/下载地址
       APP_VERSION_NOTES: ""         # 更新说明（可留空）
     volumes:

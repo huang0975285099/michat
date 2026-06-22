@@ -108,6 +108,8 @@
         <call-bar />
         <video-call-view />
         <incoming-call-dialog />
+        <!-- 游戏邀请弹窗 -->
+        <incoming-game-dialog />
 
         <!-- 强制更新：当前版本低于 min_supported 时阻断使用 -->
         <q-dialog v-model="forceUpdate" persistent no-esc-dismiss no-backdrop-dismiss>
@@ -156,6 +158,8 @@ import LockScreen from "src/components/LockScreen.vue";
 import CallBar from "src/components/CallBar.vue";
 import VideoCallView from "src/components/VideoCallView.vue";
 import IncomingCallDialog from "src/components/IncomingCallDialog.vue";
+import IncomingGameDialog from "src/components/IncomingGameDialog.vue";
+import { useGameStore } from "src/stores/game";
 
 const route = useRoute();
 const router = useRouter();
@@ -169,15 +173,20 @@ function pathToTab(path) {
     return "chats";
 }
 
-// 首页不显示导航栏
+// 首页和游戏对战页不显示导航栏（对战页需全屏）
 const showNav = computed(() => {
-    return route.path !== "/" && identity.isReady;
+    if (route.path === "/") return false;
+    if (route.path.startsWith("/games/")) return false; // /games/bomberman 等对战页全屏
+    return identity.isReady;
 });
 
 const chatStore = useChatStore();
 const callStore = useCallStore();
+const gameStore = useGameStore();
+gameStore.setRouter(router);
 let stopListening = null;
 let stopCallListening = null;
+let stopGameListening = null;
 function onFriendRequestGlobal() {
     identity.incPendingRequestCount();
     notifyNewMessage();
@@ -236,6 +245,7 @@ async function doForceUpdate() {
 onMounted(() => {
     stopListening = chatStore.startListening();
     stopCallListening = callStore.startListening();
+    stopGameListening = gameStore.startListening();
     on("friend_request", onFriendRequestGlobal);
     initNotifications();
     checkForceUpdate();
@@ -252,8 +262,9 @@ watch(
 );
 onUnmounted(() => {
     off("friend_request", onFriendRequestGlobal);
-    stopListening && stopListening();
-    stopCallListening && stopCallListening();
+    stopListening?.();
+    stopCallListening?.();
+    stopGameListening?.();
 });
 
 const tab = ref(pathToTab(route.path));

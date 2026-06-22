@@ -8,7 +8,9 @@ mysql:
   dsn: "root:123@123qwe@tcp(127.0.0.1:3306)/e2eechat?charset=utf8mb4&parseTime=True&loc=Local"
 
 redis:
-  addr: "127.0.0.1:6379"
+  # 本地开发：设为 "memory" 使用内存版 Redis（miniredis），免安装
+  # 生产环境填实际地址，如 "127.0.0.1:6379"
+  addr: "memory"
   password: ""
   db: 0
 
