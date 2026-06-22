@@ -179,6 +179,7 @@ const forceUpdate = ref(false);
 const forceUpdateNotes = ref("");
 let forceUpdateUrl = "";
 
+const FORCE_UPDATE_TRIED_KEY = "force_update_tried";
 async function checkForceUpdate() {
     if (!APP_VERSION) return; // 版本未注入（异常）时不强制，避免误锁
     try {
@@ -186,6 +187,16 @@ async function checkForceUpdate() {
         forceUpdateUrl = info.url || "";
         forceUpdateNotes.value = info.notes || "";
         if (info.min_supported && cmpVersion(APP_VERSION, info.min_supported) < 0) {
+            // 防死循环：若本会话已强刷过、但版本仍未变（新版本未部署 / 配置错误），
+            // 则不再强制，避免把用户永久锁死
+            if (sessionStorage.getItem(FORCE_UPDATE_TRIED_KEY) === APP_VERSION) {
+                console.warn(
+                    "[version] 已尝试强制更新但版本仍为 " + APP_VERSION +
+                    "，低于 min_supported " + info.min_supported +
+                    "：新版本可能尚未部署，已跳过强制以防死循环",
+                );
+                return;
+            }
             forceUpdate.value = true;
         }
     } catch {
@@ -197,10 +208,17 @@ const forceUpdating = ref(false);
 async function doForceUpdate() {
     if (forceUpdating.value) return;
     forceUpdating.value = true;
-    if (isNativeClient() && forceUpdateUrl) {
-        window.open(forceUpdateUrl, "_blank");
+    if (isNativeClient()) {
+        // 原生端（桌面/安卓）只能下载新安装包更新，刷新打包进二进制的旧版本无意义
+        if (forceUpdateUrl) window.open(forceUpdateUrl, "_blank");
         forceUpdating.value = false;
         return;
+    }
+    // 记录本次强刷来源版本：刷新后若版本未变则不再强制（见 checkForceUpdate）
+    try {
+        sessionStorage.setItem(FORCE_UPDATE_TRIED_KEY, APP_VERSION);
+    } catch {
+        // sessionStorage 不可用时忽略
     }
     await forceRefresh();
 }
