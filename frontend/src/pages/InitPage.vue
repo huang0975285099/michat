@@ -2,9 +2,9 @@
     <div class="flex flex-center column q-pa-lg" style="min-height: 100vh">
         <img :src="logoUrl" alt="云密" width="80" style="border-radius: 16px" @click="goHome" />
         <div class="text-h5 text-weight-bold q-mb-sm q-mt-sm">云密</div>
-        <div class="text-body2 text-grey q-mb-xl text-center">
+        <!-- <div class="text-body2 text-grey q-mb-xl text-center">
             端到端加密聊天
-        </div>
+        </div> -->
 
         <!-- 无邀请码提示（native app 不显示） -->
         <q-card

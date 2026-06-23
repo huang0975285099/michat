@@ -10,11 +10,11 @@
                     style="border-radius: 20px"
                 />
                 <div class="hero-title">云密</div>
-                <div style="margin: 0 0 16px 0">只为隐私安全而生</div>
+                <!-- <div style="margin: 0 0 16px 0">只为隐私安全而生</div>
                 <p class="hero-subtitle">
                     基于私有化安全通信架构 + 端到端加密打造，严守最小数据原则，严控数据流转边界。
                     核心通信数据仅留存于用户本地设备，服务端仅负责安全转发，杜绝第三方窥探、数据泄露与非法抓取，私密信息仅由通信双方掌控。
-                </p>
+                </p> -->
                 <q-btn
                     unelevated
                     color="primary"
@@ -31,7 +31,7 @@
         </section>
 
         <!-- Core Capabilities Section -->
-        <section class="core-capabilities">
+        <!-- <section class="core-capabilities">
             <h2 class="section-title">核心能力</h2>
             <div class="capabilities-list">
                 <div class="capability-item">
@@ -121,9 +121,9 @@
                     </div>
                 </div>
             </div>
-        </section>
+        </section> -->
         <!-- Features Section -->
-        <section
+        <!-- <section
             class="features"
             style="background-color: #f5f7fa; overflow: hidden"
         >
@@ -174,10 +174,10 @@
                     </q-card-section>
                 </q-card>
             </div>
-        </section>
+        </section> -->
 
         <!-- How It Works Section -->
-        <section class="how-it-works">
+        <!-- <section class="how-it-works">
             <h2 class="section-title">如何使用</h2>
             <div class="steps">
                 <div class="step">
@@ -208,14 +208,13 @@
                     </div>
                 </div>
             </div>
-        </section>
+        </section> -->
 
         <!-- Download Section -->
-        <section class="download-section">
+        <!-- <section class="download-section">
             <h2 class="section-title">立即下载</h2>
             <p class="download-subtitle">多端同步，随时随地安全通信</p>
             <div class="download-grid">
-                <!-- Windows -->
                 <div class="download-card">
                     <div class="download-icon windows-icon">
                         <svg viewBox="0 0 24 24" width="36" height="36" fill="white"><path d="M3 12V6.75l6-1.32v6.57H3zm17-9v8.75h-7V3.69L20 3zM3 13h6v6.57l-6-1.32V13zm17 .25V22l-7-1.31V13.25H20z"/></svg>
@@ -225,7 +224,6 @@
                     <q-btn unelevated color="primary" class="download-btn" icon="download" label="下载 .exe" :disable="!downloadUrls.windows" @click="downloadFile(downloadUrls.windows)" />
                 </div>
 
-                <!-- Android -->
                 <div class="download-card">
                     <div class="download-icon android-icon">
                         <q-icon name="android" size="36px" color="white" />
@@ -235,7 +233,6 @@
                     <q-btn unelevated color="positive" class="download-btn" icon="download" label="下载 .apk" :disable="!downloadUrls.apk" @click="downloadFile(downloadUrls.apk)" />
                 </div>
 
-                <!-- iOS -->
                 <div class="download-card ios-unavailable">
                     <div class="download-icon ios-icon">
                         <svg viewBox="0 0 24 24" width="36" height="36" fill="white"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
@@ -248,7 +245,6 @@
                     <q-btn unelevated color="grey-5" class="download-btn" icon="info" label="使用说明" @click="showIosDialog = true" />
                 </div>
 
-                <!-- macOS -->
                 <div class="download-card ios-unavailable">
                     <div class="download-icon mac-icon">
                         <svg viewBox="0 0 24 24" width="36" height="36" fill="white"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
@@ -261,20 +257,20 @@
                     <q-btn unelevated color="grey-5" class="download-btn" icon="language" label="打开网页" @click="openWebVersion" />
                 </div>
             </div>
-        </section>
+        </section> -->
 
         <!-- Footer -->
-        <footer class="footer">
+        <!-- <footer class="footer">
             <div class="footer-content">
                 <div class="text-subtitle2">云密 - 只为安全而生</div>
                 <div class="text-caption text-grey q-mt-sm">
                     基于端到端加密与零信任架构设计，确保所有数据仅存在于用户设备中
                 </div>
             </div>
-        </footer>
+        </footer> -->
 
         <!-- iOS 使用说明弹窗 -->
-        <q-dialog v-model="showIosDialog">
+        <!-- <q-dialog v-model="showIosDialog">
             <q-card style="min-width: 320px; max-width: 420px">
                 <q-card-section class="row items-center q-pb-none">
                     <div class="text-h6">iOS 使用方式</div>
@@ -317,7 +313,7 @@
                     <q-btn flat label="知道了" color="primary" v-close-popup />
                 </q-card-actions>
             </q-card>
-        </q-dialog>
+        </q-dialog> -->
 
         <!-- 获取邀请码对话框 -->
         <q-dialog v-model="showInviteDialog">
