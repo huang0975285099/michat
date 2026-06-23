@@ -690,7 +690,7 @@ export const useChatStore = defineStore('chat', () => {
   async function addFileMessage(chatId, msg) {
     if (isMsgIdExists(msg.id)) return false
     ensureThread(chatId)
-    const fullMsg = { ...msg, type: 'file', read: false }
+    const fullMsg = { ...msg, type: 'file', read: false, burnAt: null }
     messages.value[chatId].push(fullMsg)
     try {
       if (!messageEncryptKey) messageEncryptKey = await getOrCreateMessageEncryptKey()
@@ -705,7 +705,9 @@ export const useChatStore = defineStore('chat', () => {
         ts: msg.ts,
         mine: msg.mine,
         read: false,
-        receiptSent: false
+        receiptSent: false,
+        burnAfterRead: msg.burnAfterRead || false,
+        burnAt: null  // 阅读后才设置删除时间
       })
     } catch (e) {
       console.error('[chat] persist file message failed:', e)
@@ -816,6 +818,7 @@ export const useChatStore = defineStore('chat', () => {
         filetype: transfer.filetype,
         objectUrl,
         mine: false,
+        burnAfterRead: transfer.burnAfterRead || false,
         ts: transfer.ts  // 服务器时间戳，与发送端一致
       })
       // 通知发送端：已收齐并解密成功，回带服务器时间戳供发送端统一显示
@@ -844,8 +847,9 @@ export const useChatStore = defineStore('chat', () => {
    * @param {string} toChatId
    * @param {string} recipientPubKey
    * @param {File} file
+   * @param {boolean} burnAfterRead - 阅后即焚（对方阅读后2小时自动删除）
    */
-  async function sendFile(toChatId, recipientPubKey, file) {
+  async function sendFile(toChatId, recipientPubKey, file, burnAfterRead = false) {
     validateFile(file)
 
     const transferId = crypto.randomUUID()
@@ -887,7 +891,8 @@ export const useChatStore = defineStore('chat', () => {
         filetype: file.type,
         total_chunks: totalChunks,
         ephemeral_pub_key: ephemeralPubKey,
-        iv
+        iv,
+        burn_after_read: burnAfterRead
       })
       if (!ok) throw new Error('发送失败，请检查网络连接')
 
@@ -932,6 +937,7 @@ export const useChatStore = defineStore('chat', () => {
         filetype: file.type,
         objectUrl,
         mine: true,
+        burnAfterRead,
         ts: (typeof doneTs === 'number' && doneTs > 0) ? doneTs : Date.now()  // 服务器时间戳，与接收端一致
       })
 
@@ -1030,8 +1036,7 @@ function validateMsgId(msgId) {
           ts: payload.ts,  // 使用服务器时间
           mine: false,
           burnAfterRead: payload.burn_after_read || false,
-          burnAt: null,
-          receivedAt: Date.now()  // 记录本地接收时间用于相对计时
+          burnAt: null
         })
       } catch (e) {
         // 锁定态下私钥已清除，必然解密失败：暂存原始密文，解锁后补解密。
@@ -1044,8 +1049,7 @@ function validateMsgId(msgId) {
             iv: payload.iv,
             ciphertext: payload.ciphertext,
             ts: payload.ts,
-            burn_after_read: payload.burn_after_read || false,
-            receivedAt: Date.now()
+            burn_after_read: payload.burn_after_read || false
           }).catch(err => console.error('[chat] stash pending failed', err))
         } else {
           console.error('[chat] decrypt failed', e)
@@ -1148,6 +1152,7 @@ function validateMsgId(msgId) {
         status: 'transferring',
         ephemeralPubKey: ephemeral_pub_key,
         iv,
+        burnAfterRead: payload.burn_after_read || false,
         ts: (typeof payload.ts === 'number' && payload.ts > 0) ? payload.ts : Date.now(),  // 服务器时间戳，两端统一
         timer: null
       }
@@ -1448,8 +1453,7 @@ function validateMsgId(msgId) {
           ts: p.ts,
           mine: false,
           burnAfterRead: p.burn_after_read || false,
-          burnAt: null,
-          receivedAt: p.receivedAt || Date.now()
+          burnAt: null
         })
         await dbDeletePending(p.msg_id).catch(() => {})
       } catch (e) {

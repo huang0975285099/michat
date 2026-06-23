@@ -541,6 +541,7 @@ type FileOfferPayload struct {
 	TotalChunks     int    `json:"total_chunks"`
 	EphemeralPubKey string `json:"ephemeral_pub_key"`
 	IV              string `json:"iv"`
+	BurnAfterRead   bool   `json:"burn_after_read"`
 }
 
 func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
@@ -622,6 +623,7 @@ func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
 		TotalChunks     int    `json:"total_chunks"`
 		EphemeralPubKey string `json:"ephemeral_pub_key"`
 		IV              string `json:"iv"`
+		BurnAfterRead   bool   `json:"burn_after_read"`
 		Timestamp       int64  `json:"ts"` // 服务器时间戳，两端据此统一文件消息时间
 	}
 	fwd, _ := json.Marshal(Message{
@@ -636,6 +638,7 @@ func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
 			TotalChunks:     p.TotalChunks,
 			EphemeralPubKey: p.EphemeralPubKey,
 			IV:              p.IV,
+			BurnAfterRead:   p.BurnAfterRead,
 			Timestamp:       time.Now().UnixMilli(),
 		}),
 	})

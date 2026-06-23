@@ -77,7 +77,8 @@
             <div class="text-caption q-mt-xs text-grey row items-center q-gutter-xs">
               <span>{{ formatTime(msg.ts) }}</span>
               <q-icon v-if="msg.burnAfterRead" name="local_fire_department" size="14px" color="orange">
-                <q-tooltip>阅读后2小时自动删除</q-tooltip>
+                <q-tooltip v-if="msg.burnAt">{{ formatBurnCountdown(msg.burnAt) }}</q-tooltip>
+                <q-tooltip v-else>阅读后2小时自动删除</q-tooltip>
               </q-icon>
             </div>
             <!-- <q-menu context-menu v-if="msg.type !== 'file'">
@@ -423,8 +424,8 @@ onMounted(async () => {
   // 每分钟刷新一次响应式时间，驱动倒计时显示递减
   nowTimer = setInterval(() => { now.value = Date.now() }, 60000)
 
-  // 虚拟滚动需待首屏项渲染、测量后再定位到底部
-  nextTick(scrollToBottom)
+  // 虚拟滚动需待首屏项渲染、测量后再定位到底部（逐帧重试修正估算高度偏差）
+  nextTick(() => scrollToBottomReliable())
 })
 
 onUnmounted(() => {
@@ -439,7 +440,7 @@ watch(() => messages.value.length, () => {
   const newMsgs = messages.value
   // 仅当用户本就在底部附近时才自动滚动，回看历史时不打断
   if (isNearBottom()) {
-    nextTick(scrollToBottom)
+    nextTick(() => scrollToBottomReliable())
   }
   // 有新消息时自动标记为已读
   const unread = newMsgs.filter(m => !m.mine && !m.read)
@@ -518,7 +519,7 @@ async function doSendFile(file) {
     return
   }
   try {
-    await chatStore.sendFile(friendChatId, friendPubKey.value, file)
+    await chatStore.sendFile(friendChatId, friendPubKey.value, file, burnMode.value)
   } catch (e) {
     $q.notify({ type: 'negative', message: '文件发送失败：' + e.message })
   }
@@ -586,6 +587,18 @@ function scrollToBottom() {
   if (vs && messages.value.length) {
     vs.scrollTo(messages.value.length - 1, 'end-force')
   }
+}
+
+// 虚拟滚动首屏按估算高度定位，跳到底后各项被实测修正会出现「没贴底」的偏差。
+// 逐帧重试定位，直到真正到底或重试用尽。
+function scrollToBottomReliable(tries = 10) {
+  scrollToBottom()
+  requestAnimationFrame(() => {
+    const el = virtualScrollEl.value?.$el
+    if (!el || tries <= 0) return
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (dist > 4) scrollToBottomReliable(tries - 1)
+  })
 }
 
 // 用户是否处于（接近）最底部：仅在此情况下新消息才自动滚动，避免回看历史时被强制拉回

@@ -6,12 +6,12 @@
         <!-- 锁定界面 -->
         <div class="lock-card">
             <!-- 头像 + 昵称 -->
-            <div style="display: flex; justify-content: space-evenly">
+            <div style="display: flex;justify-content: center;align-items: center;">
                 <deterministic-avatar
                     :seed="identity.chatId"
                     :size="40"
                 />
-                <div class="text-h6 text-weight-bold">
+                <div class="text-h6 text-weight-bold q-ml-sm">
                     {{ identity.nickname }}
                 </div>
             </div>

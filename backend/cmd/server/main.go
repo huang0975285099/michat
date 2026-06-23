@@ -199,6 +199,24 @@ func main() {
 		}
 	}()
 
+	// 启动定时任务：清理超过 7 天的已读回执，避免 message_reads 表无限增长
+	go func() {
+		cleanup := func() {
+			n, err := messageReadSvc.DeleteOldReadReceipts(context.Background(), 7)
+			if err != nil {
+				log.Printf("[cron] cleanup read receipts: %v", err)
+			} else if n > 0 {
+				log.Printf("[cron] cleaned up %d old read receipts", n)
+			}
+		}
+		cleanup()
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			cleanup()
+		}
+	}()
+
 	r.GET("/ws", wsHandler.Serve)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)

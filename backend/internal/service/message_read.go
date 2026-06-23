@@ -44,6 +44,21 @@ func (s *MessageReadService) GetReadMsgIDs(ctx context.Context, msgTo, readerCha
 	return ids, nil
 }
 
+// DeleteOldReadReceipts 清理过期的已读回执记录。
+// 已读回执只用于「发送方离线期间错过回执」的补偿查询；超过保留期后，
+// 相关消息早已超出阅后即焚（2 小时）与撤回（6 天）窗口，记录不再有用。
+// 定期清理避免 message_reads 表无限增长。返回删除行数。
+func (s *MessageReadService) DeleteOldReadReceipts(ctx context.Context, olderThanDays int) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM message_reads WHERE read_at < (NOW() - INTERVAL ? DAY)`,
+		olderThanDays,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // GetReadReceiptsByPeer 查询 msgFrom 发送给 readerChatID 的消息中已被阅读的 ID 列表
 // 用于发送方离线期间错过已读回执时的补偿查询
 func (s *MessageReadService) GetReadReceiptsByPeer(ctx context.Context, msgFrom, readerChatID string) ([]string, error) {
