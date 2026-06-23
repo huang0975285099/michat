@@ -1,6 +1,26 @@
 <template>
-  <canvas ref="canvasEl" :width="size" :height="size" :style="{ width: size + 'px', height: size + 'px' }" />
+  <img
+    v-if="src"
+    :src="src"
+    :width="size"
+    :height="size"
+    :style="{ width: size + 'px', height: size + 'px', display: 'block' }"
+    alt=""
+    draggable="false"
+  />
+  <span
+    v-else
+    :style="{ width: size + 'px', height: size + 'px', display: 'inline-block', flexShrink: 0 }"
+  />
 </template>
+
+<script>
+// 模块级缓存：跨所有组件实例共享（必须放在普通 <script> 块，<script setup> 的顶层
+// 代码会被编进 setup()，每个实例各执行一次，无法共享）。
+// 会话内 seed 通常只有 2 个（自己/对方），配合此缓存，SHA-256 + canvas 绘制
+// 对每个 (seed,size) 全程只执行一次。值为「生成中的 Promise」或「完成后的 dataURL」。
+const avatarCache = new Map()
+</script>
 
 <script setup>
 import { ref, onMounted, watch } from 'vue'
@@ -10,24 +30,47 @@ const props = defineProps({
   size: { type: Number, default: 80 }
 })
 
-const canvasEl = ref(null)
+const src = ref(null)
 
-onMounted(() => drawAvatar())
-watch(() => props.seed, drawAvatar)
+onMounted(load)
+watch(() => `${props.seed}@${props.size}`, load)
+
+async function load() {
+  const key = `${props.seed}@${props.size}`
+  let url
+  const cached = avatarCache.get(key)
+  if (cached) {
+    // 可能是已完成的 dataURL，也可能是仍在生成中的 Promise
+    url = await cached
+  } else {
+    const promise = generate(props.seed, props.size)
+    avatarCache.set(key, promise)
+    try {
+      url = await promise
+      avatarCache.set(key, url)
+    } catch (e) {
+      avatarCache.delete(key)
+      console.warn('[DeterministicAvatar] generate failed:', e)
+      return
+    }
+  }
+  // 竞态保护：await 期间 props.seed/size 可能已变，避免写入过期头像
+  if (`${props.seed}@${props.size}` === key) src.value = url
+}
 
 /**
- * 根据 seed 生成确定性头像
+ * 根据 seed 生成确定性头像，返回 dataURL（离屏绘制，不进 DOM）
  * 算法：
  * 1. 用 SHA-256 哈希将 seed 转为确定性字节
- * 2. 取前 7 字节作为主色（RGB）
- * 3. 取第 8-11 字节决定背景色方案
+ * 2. 取前 3 字节作为主色（RGB）
+ * 3. 取第 4 字节决定背景色方案
  * 4. 用剩余字节生成对称的几何图案（3×3 网格）
  */
-async function drawAvatar() {
-  const canvas = canvasEl.value
-  if (!canvas) return
+async function generate(seed, size) {
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
   const ctx = canvas.getContext('2d')
-  const { size, seed } = props
 
   // 1. 生成确定性哈希
   const encoder = new TextEncoder()
@@ -97,11 +140,12 @@ async function drawAvatar() {
           ctx.closePath()
           ctx.fill()
           break
-        case 4: // 十字
+        case 4: { // 十字
           const w = sz * 0.35
           ctx.fillRect(-w, -sz, w * 2, sz * 2)
           ctx.fillRect(-sz, -w, sz * 2, w * 2)
           break
+        }
         case 5: // 圆环
           ctx.beginPath()
           ctx.arc(0, 0, sz, 0, Math.PI * 2)
@@ -119,6 +163,8 @@ async function drawAvatar() {
 
   // 7. 圆角裁剪
   roundCanvas(ctx, size)
+
+  return canvas.toDataURL('image/png')
 }
 
 function roundCanvas(ctx, size) {

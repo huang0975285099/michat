@@ -36,14 +36,20 @@
       </q-btn> -->
     </div>
 
-    <!-- 消息列表 -->
-    <div ref="scrollEl" class="col q-pa-md overflow-auto">
+    <!-- 消息列表（虚拟滚动：仅渲染视口内的消息，长历史也保持流畅） -->
+    <q-virtual-scroll
+      ref="virtualScrollEl"
+      :items="messages"
+      :virtual-scroll-item-size="60"
+      class="col q-pa-md"
+      style="min-height: 0"
+      v-slot="{ item: msg, index: idx }"
+    >
       <div
-        v-for="(msg, idx) in messages"
         :key="msg.id"
-        class="row q-mb-sm items-end"
+        class="row items-end"
         :class="msg.mine ? 'justify-end' : 'justify-start'"
-        :style="{ marginTop: shouldCompact(messages, idx) ? '2px' : '' }"
+        :style="{ paddingTop: shouldCompact(messages, idx) ? '2px' : '8px' }"
       >
         <!-- 对方消息：头像在左 -->
         <template v-if="!msg.mine">
@@ -140,7 +146,7 @@
           <div v-else class="avatar-placeholder" />
         </template>
       </div>
-    </div>
+    </q-virtual-scroll>
 
     <!-- 文件传输进度条（有进行中的传输时显示） -->
     <div v-if="activeTransfer" class="q-px-md q-py-xs bg-blue-1 row items-center q-gutter-sm" style="border-top: 1px solid #bbdefb">
@@ -288,12 +294,15 @@ if (!CHAT_ID_PATTERN.test(friendChatId)) {
   $q.notify({ type: 'negative', message: '无效的聊天 ID' })
   throw new Error('Invalid chatId format')
 }
-const scrollEl = ref(null)
+const virtualScrollEl = ref(null)
 const inputEl = ref(null)
 const fileInputEl = ref(null)
 const inputText = ref('')
 const sending = ref(false)
 const burnMode = ref(false)  // 阅后即焚模式
+// 每分钟自增的响应式时间戳，驱动阅后即焚倒计时刷新（Date.now() 本身不是响应式的）
+const now = ref(Date.now())
+let nowTimer = null
 const imagePreview = ref({ show: false, url: '' })
 
 // 允许的文件类型（用于 input accept 属性）
@@ -411,22 +420,33 @@ onMounted(async () => {
   chatStore.startBurnTimer()
   chatStore.checkExpiredMessages()
 
-  scrollToBottom()
+  // 每分钟刷新一次响应式时间，驱动倒计时显示递减
+  nowTimer = setInterval(() => { now.value = Date.now() }, 60000)
+
+  // 虚拟滚动需待首屏项渲染、测量后再定位到底部
+  nextTick(scrollToBottom)
 })
 
 onUnmounted(() => {
   stopStatus && stopStatus()
   chatStore.stopBurnTimer()
+  if (nowTimer) { clearInterval(nowTimer); nowTimer = null }
 })
 
-watch(messages, (newMsgs) => {
-  nextTick(scrollToBottom)
+// 仅监听消息条数变化（新增/删除），避免对整个数组做 deep 遍历，
+// 也避免已读回执等字段变更触发不必要的强制滚动
+watch(() => messages.value.length, () => {
+  const newMsgs = messages.value
+  // 仅当用户本就在底部附近时才自动滚动，回看历史时不打断
+  if (isNearBottom()) {
+    nextTick(scrollToBottom)
+  }
   // 有新消息时自动标记为已读
   const unread = newMsgs.filter(m => !m.mine && !m.read)
   if (unread.length > 0) {
     chatStore.markAsRead(friendChatId)
   }
-}, { deep: true })
+})
 
 /**
  * 通过 API 获取好友公钥（fallback）
@@ -562,7 +582,17 @@ function clearHistory() {
 }
 
 function scrollToBottom() {
-  if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight
+  const vs = virtualScrollEl.value
+  if (vs && messages.value.length) {
+    vs.scrollTo(messages.value.length - 1, 'end-force')
+  }
+}
+
+// 用户是否处于（接近）最底部：仅在此情况下新消息才自动滚动，避免回看历史时被强制拉回
+function isNearBottom() {
+  const el = virtualScrollEl.value?.$el
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 200
 }
 
 function formatTime(ts) {
@@ -573,7 +603,8 @@ function formatTime(ts) {
  * 格式化阅后即焚倒计时
  */
 function formatBurnCountdown(burnAt) {
-  const remaining = burnAt - Date.now()
+  // 依赖响应式 now，使倒计时随定时器自动刷新（不要改成 Date.now()）
+  const remaining = burnAt - now.value
   if (remaining <= 0) return '即将删除'
   const hours = Math.floor(remaining / (60 * 60 * 1000))
   const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000))

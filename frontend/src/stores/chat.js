@@ -8,10 +8,11 @@ import { useIdentityStore } from 'src/stores/identity'
 // ── 安全常量 ──────────────────────────────────────────────
 
 const DB_NAME = 'e2eechat_messages'
-const DB_VERSION = 4  // v4: 新增 pending_messages 暂存锁定期间无法解密的密文
+const DB_VERSION = 5  // v5: 新增 message_files 持久化加密文件体（刷新后仍可下载/预览）
 const STORE_NAME = 'messages'
 const KEY_STORE_NAME = 'message_key'  // 存储消息加密密钥
 const PENDING_STORE_NAME = 'pending_messages'  // 锁定期间收到、待解锁后解密的原始密文
+const FILE_STORE_NAME = 'message_files'  // 加密后的文件二进制（与消息记录分离，懒加载）
 const BURN_AFTER_READ_DELAY = 2 * 60 * 60 * 1000  // 2小时
 
 // ── 文件传输常量 ──────────────────────────────────────────
@@ -138,6 +139,23 @@ async function decryptMessageText(encryptedData, key) {
   return new TextDecoder().decode(decrypted)
 }
 
+/**
+ * 加密文件二进制（用于 IndexedDB 持久化）。
+ * iv 与 ciphertext 都以 ArrayBuffer/TypedArray 形式存储（结构化克隆，避免 base64 膨胀）。
+ */
+async function encryptFileBytes(arrayBuffer, key) {
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, arrayBuffer)
+  return { iv, ciphertext }
+}
+
+/**
+ * 解密文件二进制（从 IndexedDB 加载时），返回明文 ArrayBuffer。
+ */
+async function decryptFileBytes(record, key) {
+  return crypto.subtle.decrypt({ name: 'AES-GCM', iv: record.iv }, key, record.ciphertext)
+}
+
 // ── IndexedDB 辅助 ──────────────────────────────────────────────
 
 function openMessagesDB() {
@@ -165,6 +183,11 @@ function openMessagesDB() {
       // 暂存锁定期间无法解密的原始密文（解锁后补解密）
       if (!db.objectStoreNames.contains(PENDING_STORE_NAME)) {
         db.createObjectStore(PENDING_STORE_NAME, { keyPath: 'msg_id' })
+      }
+      // 加密文件体：key = 消息 ID，附带 chatId 便于按会话清理
+      if (!db.objectStoreNames.contains(FILE_STORE_NAME)) {
+        const fileStore = db.createObjectStore(FILE_STORE_NAME, { keyPath: 'id' })
+        fileStore.createIndex('chatId', 'chatId', { unique: false })
       }
     }
     req.onsuccess = (e) => resolve(e.target.result)
@@ -208,6 +231,54 @@ async function dbDeleteMessage(msgId) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite')
     tx.objectStore(STORE_NAME).delete(msgId)
+    tx.oncomplete = () => resolve()
+    tx.onerror = (e) => reject(e.target.error)
+  })
+}
+
+// ── 文件体持久化 ──────────────────────────────────────────────
+
+async function dbPutFile(record) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FILE_STORE_NAME, 'readwrite')
+    tx.objectStore(FILE_STORE_NAME).put(record)
+    tx.oncomplete = () => resolve()
+    tx.onerror = (e) => reject(e.target.error)
+  })
+}
+
+async function dbGetFile(msgId) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FILE_STORE_NAME, 'readonly')
+    const req = tx.objectStore(FILE_STORE_NAME).get(msgId)
+    req.onsuccess = (e) => resolve(e.target.result || null)
+    req.onerror = (e) => reject(e.target.error)
+  })
+}
+
+async function dbDeleteFile(msgId) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FILE_STORE_NAME, 'readwrite')
+    tx.objectStore(FILE_STORE_NAME).delete(msgId)
+    tx.oncomplete = () => resolve()
+    tx.onerror = (e) => reject(e.target.error)
+  })
+}
+
+// 按会话清除文件体（配合 clearChatMessages）
+async function dbClearChatFiles(chatId) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FILE_STORE_NAME, 'readwrite')
+    const index = tx.objectStore(FILE_STORE_NAME).index('chatId')
+    const req = index.openCursor(IDBKeyRange.only(chatId))
+    req.onsuccess = (e) => {
+      const cursor = e.target.result
+      if (cursor) { cursor.delete(); cursor.continue() }
+    }
     tx.oncomplete = () => resolve()
     tx.onerror = (e) => reject(e.target.error)
   })
@@ -457,10 +528,26 @@ export const useChatStore = defineStore('chat', () => {
         }
       }))
 
+      // 懒加载文件体：仅为「内存中没有有效 blob URL」的文件消息从 IndexedDB 重建。
+      // 仅作用于当前打开的会话，避免一次性把所有文件读进内存。
+      await Promise.all(decryptedMsgs.map(async (m) => {
+        if (m.type !== 'file' || m.objectUrl) return
+        try {
+          const rec = await dbGetFile(m.id)
+          if (!rec) return  // 无持久化副本（旧数据/未存成功）→ 保持 null，显示「已过期」
+          const buf = await decryptFileBytes(rec, messageEncryptKey)
+          m.objectUrl = URL.createObjectURL(new Blob([buf], { type: m.filetype || rec.filetype }))
+        } catch (e) {
+          console.warn('[chat] rehydrate file blob failed:', m.id, e)
+        }
+      }))
+
       decryptedMsgs.sort((a, b) => a.ts - b.ts)
       messages.value[chatId] = decryptedMsgs
     } catch (e) {
       console.error('[chat] load messages failed:', e)
+      // 丢弃前先释放已有 blob URL，避免加载失败路径泄漏内存
+      for (const m of messages.value[chatId] || []) releaseFileObjectUrl(m)
       messages.value[chatId] = []
     }
   }
@@ -519,8 +606,11 @@ export const useChatStore = defineStore('chat', () => {
    * 清除指定 chatId 的消息（清空 IndexedDB 和内存）
    */
   async function clearChatMessages(chatId) {
+    // 先释放内存中该会话所有文件 blob URL，避免泄漏
+    for (const m of messages.value[chatId] || []) releaseFileObjectUrl(m)
     try {
       await dbClearMessages(chatId)
+      await dbClearChatFiles(chatId)
     } catch (e) {
       console.error('[chat] clear messages failed:', e)
     }
@@ -560,6 +650,39 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // ── 文件传输 ──────────────────────────────────────────────────
+
+  /**
+   * 将文件明文加密后持久化到 IndexedDB（与消息记录分离，懒加载）。
+   * 失败不影响消息收发，仅退化为「刷新后过期」。
+   */
+  async function persistFileBlob(chatId, msgId, arrayBuffer, filetype) {
+    try {
+      if (!messageEncryptKey) messageEncryptKey = await getOrCreateMessageEncryptKey()
+      const { iv, ciphertext } = await encryptFileBytes(arrayBuffer, messageEncryptKey)
+      await dbPutFile({ id: msgId, chatId, iv, ciphertext, filetype })
+    } catch (e) {
+      console.error('[chat] persist file blob failed:', msgId, e)
+    }
+  }
+
+  /**
+   * 释放消息持有的 blob URL（内存），避免泄漏。删除/过期消息时必须调用。
+   */
+  function releaseFileObjectUrl(msg) {
+    if (msg && msg.type === 'file' && msg.objectUrl) {
+      URL.revokeObjectURL(msg.objectUrl)
+      msg.objectUrl = null
+    }
+  }
+
+  /**
+   * 删除一条消息时一并清理其文件副本：释放内存 blob URL + 删除 IndexedDB 文件体。
+   * msg 可能为 undefined（内存中已不存在），此时仅清理持久化副本。
+   */
+  async function deleteFileArtifacts(msg, msgId) {
+    releaseFileObjectUrl(msg)
+    await dbDeleteFile(msgId).catch(() => {})
+  }
 
   /**
    * 添加文件消息到内存和 IndexedDB（仅存元数据）
@@ -682,6 +805,9 @@ export const useChatStore = defineStore('chat', () => {
       const objectUrl = URL.createObjectURL(blob)
       transfer.objectUrl = objectUrl
 
+      // 持久化加密文件体，刷新后仍可下载/预览
+      await persistFileBlob(transfer.fromChatId, transfer.msgId, plainBuf, transfer.filetype)
+
       await addFileMessage(transfer.fromChatId, {
         id: transfer.msgId,
         from: transfer.fromChatId,
@@ -796,6 +922,8 @@ export const useChatStore = defineStore('chat', () => {
       // 发送方本地展示
       const blob = new Blob([fileBuffer], { type: file.type })
       const objectUrl = URL.createObjectURL(blob)
+      // 持久化加密文件体，刷新后仍可下载/预览
+      await persistFileBlob(toChatId, msgId, fileBuffer, file.type)
       await addFileMessage(toChatId, {
         id: msgId,
         from: 'me',
@@ -822,11 +950,13 @@ export const useChatStore = defineStore('chat', () => {
   async function recallMessage(chatId, msgId, toChatId) {
     // 本地删除
     const msgs = messages.value[chatId]
+    let removed
     if (msgs) {
       const idx = msgs.findIndex(m => m.id === msgId)
-      if (idx !== -1) msgs.splice(idx, 1)
+      if (idx !== -1) removed = msgs.splice(idx, 1)[0]
     }
     await dbDeleteMessage(msgId)
+    await deleteFileArtifacts(removed, msgId)
     // 通知对方撤回
     if (toChatId) {
       send('recall', { to: toChatId, msg_id: msgId })
@@ -941,11 +1071,13 @@ function validateMsgId(msgId) {
       const chatId = payload.from
       const msgId = payload.msg_id
       const msgs = messages.value[chatId]
+      let removed
       if (msgs) {
         const idx = msgs.findIndex(m => m.id === msgId)
-        if (idx !== -1) msgs.splice(idx, 1)
+        if (idx !== -1) removed = msgs.splice(idx, 1)[0]
       }
       await dbDeleteMessage(msgId)
+      await deleteFileArtifacts(removed, msgId)
     }
 
     async function onAck(payload) {
@@ -1104,6 +1236,10 @@ function validateMsgId(msgId) {
   })
 
   async function clearAll() {
+    // 释放所有内存中的文件 blob URL（deleteDatabase 会清空文件体存储）
+    for (const cid in messages.value) {
+      for (const m of messages.value[cid]) releaseFileObjectUrl(m)
+    }
     await clearAllMessagesDB()
     messages.value = {}
   }
@@ -1229,19 +1365,20 @@ function validateMsgId(msgId) {
           if (m.burnAfterRead && m.readReceivedAt) {
             const elapsed = now - m.readReceivedAt
             if (elapsed >= BURN_AFTER_READ_DELAY) {
-              toDelete.push(m.id)
+              toDelete.push(m)
               msgs.splice(i, 1)
             }
           }
           // 兼容旧数据：使用 burnAt
           else if (m.burnAt && m.burnAt <= now) {
-            toDelete.push(m.id)
+            toDelete.push(m)
             msgs.splice(i, 1)
           }
         }
-        // 删除 IndexedDB 中的过期消息
-        for (const msgId of toDelete) {
-          await dbDeleteMessage(msgId).catch(() => {})
+        // 删除 IndexedDB 中的过期消息，并清理文件副本（内存 blob + 文件体）
+        for (const m of toDelete) {
+          await dbDeleteMessage(m.id).catch(() => {})
+          await deleteFileArtifacts(m, m.id)
         }
       }
     }, 60000)  // 每分钟检查一次
@@ -1272,18 +1409,19 @@ function validateMsgId(msgId) {
         if (m.burnAfterRead && m.readReceivedAt) {
           const elapsed = now - m.readReceivedAt
           if (elapsed >= BURN_AFTER_READ_DELAY) {
-            toDelete.push(m.id)
+            toDelete.push(m)
             msgs.splice(i, 1)
           }
         }
         // 兼容旧数据
         else if (m.burnAt && m.burnAt <= now) {
-          toDelete.push(m.id)
+          toDelete.push(m)
           msgs.splice(i, 1)
         }
       }
-      for (const msgId of toDelete) {
-        await dbDeleteMessage(msgId).catch(() => {})
+      for (const m of toDelete) {
+        await dbDeleteMessage(m.id).catch(() => {})
+        await deleteFileArtifacts(m, m.id)
       }
     }
   }
