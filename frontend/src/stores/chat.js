@@ -704,10 +704,13 @@ export const useChatStore = defineStore('chat', () => {
         text: encryptedText,
         ts: msg.ts,
         mine: msg.mine,
-        read: false,
-        receiptSent: false,
+        // 从 fullMsg（即推入内存的同一对象）读取读已读/倒计时状态：
+        // 收到文件后 markAsRead 可能在 dbAddMessage 之前就把它标记为已读并写入 burnAt，
+        // 这样持久化时能捕获到该状态，避免重载后倒计时丢失（与 addMessage 行为一致）
+        read: fullMsg.read || false,
+        receiptSent: fullMsg.receiptSent || false,
         burnAfterRead: msg.burnAfterRead || false,
-        burnAt: null  // 阅读后才设置删除时间
+        burnAt: fullMsg.burnAt || null
       })
     } catch (e) {
       console.error('[chat] persist file message failed:', e)
