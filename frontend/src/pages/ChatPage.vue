@@ -584,14 +584,18 @@ function clearHistory() {
 
 function scrollToBottom() {
   const vs = virtualScrollEl.value
-  if (vs && messages.value.length) {
-    vs.scrollTo(messages.value.length - 1, 'end-force')
-  }
+  if (!vs || !messages.value.length) return
+  // 1) 先让最后一项渲染进 DOM（虚拟滚动只渲染视口内项）
+  vs.scrollTo(messages.value.length - 1, 'end-force')
+  // 2) scrollTo 只能把最后一项末端对齐视口底，滚不进其后的容器 padding；
+  //    直接压到 scrollHeight 才能贴到真正底部
+  const el = vs.$el
+  if (el) el.scrollTop = el.scrollHeight
 }
 
 // 虚拟滚动首屏按估算高度定位，跳到底后各项被实测修正会出现「没贴底」的偏差。
 // 逐帧重试定位，直到真正到底或重试用尽。
-function scrollToBottomReliable(tries = 10) {
+function scrollToBottomReliable(tries = 15) {
   scrollToBottom()
   requestAnimationFrame(() => {
     const el = virtualScrollEl.value?.$el
