@@ -1313,31 +1313,21 @@ function validateMsgId(msgId) {
   async function handleReadReceipt(fromChatId, msgIds) {
     // 使用相对计时：记录收到回执的时间，而不是计算绝对删除时间
     const readReceivedAt = Date.now()
+    const idSet = new Set(msgIds)
     for (const chatId in messages.value) {
-      if (chatId === fromChatId) {
-        for (const m of messages.value[chatId]) {
-          if (m.mine && msgIds.includes(m.id)) {
-            m.read = true
-            // 阅后即焚消息：记录收到回执时间（相对计时）
-            if (m.burnAfterRead) {
-              m.readReceivedAt = readReceivedAt
-              m.burnAt = readReceivedAt + BURN_AFTER_READ_DELAY  // 仍保留用于显示倒计时
-              // 更新 IndexedDB
-              const record = {
-                id: m.id,
-                chatId: chatId,
-                from: m.from,
-                text: m.text,
-                ts: m.ts,
-                mine: m.mine,
-                read: true,
-                burnAfterRead: true,
-                readReceivedAt: readReceivedAt,
-                burnAt: m.burnAt
-              }
-              await dbPutMessage(record).catch(() => {})
-            }
-          }
+      if (chatId !== fromChatId) continue
+      for (const m of messages.value[chatId]) {
+        if (!(m.mine && idSet.has(m.id))) continue
+        m.read = true
+        // 阅后即焚消息：仅在「首次」收到回执时启动销毁倒计时。
+        // 服务器的 getReadReceipts 每次都会返回同一批已读 ID，若不加守卫，
+        // 每次重新进入聊天/重连都会把 readReceivedAt 重置为当前时间，
+        // 导致倒计时反复从 2 小时重新开始。
+        if (m.burnAfterRead && !m.readReceivedAt) {
+          m.readReceivedAt = readReceivedAt
+          m.burnAt = readReceivedAt + BURN_AFTER_READ_DELAY  // 仍保留用于显示倒计时
+          // 读取-修改-写回，保留密文 text 及其他字段（不要用内存中的明文覆盖）
+          await dbStartBurnCountdown(m.id, readReceivedAt, m.burnAt).catch(() => {})
         }
       }
     }

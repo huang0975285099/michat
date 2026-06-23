@@ -17,10 +17,10 @@
         </div>
 
         <q-card class="q-mb-md">
-            <q-card-section class="text-center">
+            <q-card-section style="display: flex;justify-content: space-evenly;">
                 <deterministic-avatar
                     :seed="identity.chatId"
-                    :size="80"
+                    :size="60"
                     class="q-mb-sm"
                 />
                 <div class="row items-center justify-center q-gutter-xs">

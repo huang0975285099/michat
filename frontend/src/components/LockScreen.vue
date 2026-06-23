@@ -6,13 +6,16 @@
         <!-- 锁定界面 -->
         <div class="lock-card">
             <!-- 头像 + 昵称 -->
-            <deterministic-avatar
-                :seed="identity.chatId"
-                :size="72"
-                class="q-mb-md"
-            />
-            <div class="text-h6 text-weight-bold">{{ identity.nickname }}</div>
-            <div class="text-caption text-grey-7 q-mb-lg">输入安全码解锁</div>
+            <div style="display: flex; justify-content: space-evenly">
+                <deterministic-avatar
+                    :seed="identity.chatId"
+                    :size="40"
+                />
+                <div class="text-h6 text-weight-bold">
+                    {{ identity.nickname }}
+                </div>
+            </div>
+            <div class="text-caption text-grey-7 q-mb-md q-mt-md">输入安全码解锁</div>
 
             <!-- 6 位 PIN 输入 -->
             <div class="pin-row q-mb-lg">
@@ -200,7 +203,8 @@ async function tryUnlock() {
 function confirmReset() {
     $q.dialog({
         title: "注销账号",
-        message: "这将永久删除您的账号、好友关系和所有数据，无法恢复！确定继续吗？",
+        message:
+            "这将永久删除您的账号、好友关系和所有数据，无法恢复！确定继续吗？",
         cancel: true,
         persistent: true,
         ok: "确定注销",
@@ -209,7 +213,8 @@ function confirmReset() {
         // 二次确认
         $q.dialog({
             title: "最后确认",
-            message: "此操作不可撤销！您的身份将永久丢失，即使有私钥备份也无法恢复！",
+            message:
+                "此操作不可撤销！您的身份将永久丢失，即使有私钥备份也无法恢复！",
             cancel: true,
             persistent: true,
             ok: "我确定要注销",
