@@ -289,7 +289,8 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 	case "call_answer", "call_ice", "call_hangup", "call_reject":
 		h.handleCallRelay(c, msg.Type, msg.Payload)
 	case "game_invite", "game_accept", "game_reject", "game_ready",
-		"game_move", "game_bomb", "game_powerup", "game_death", "game_resign":
+		"game_move", "game_bomb", "game_powerup", "game_death", "game_resign",
+		"ironfist_action", "ironfist_state_sync", "ironfist_reconnect":
 		h.handleGameRelay(c, msg.Type, msg.Payload)
 	default:
 		log.Printf("[ws] unknown message type %q from %s", msg.Type, c.ChatID)

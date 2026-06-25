@@ -19,8 +19,24 @@
                 </q-card>
             </div>
 
+            <!-- 铁拳 -->
+            <div class="col-6 col-sm-4 col-md-3">
+                <q-card class="game-card cursor-pointer" @click="router.push('/games/ironfist')">
+                    <q-card-section class="text-center q-pa-lg">
+                        <div style="font-size: 52px">🥊</div>
+                        <div class="text-subtitle1 text-bold q-mt-sm">铁拳</div>
+                        <div class="text-caption text-grey-6">回合制心理博弈</div>
+                    </q-card-section>
+                    <q-separator />
+                    <q-card-actions align="center" class="q-py-sm">
+                        <q-chip dense color="positive" text-color="white" icon="people" label="1v1" />
+                        <q-chip dense color="purple" text-color="white" icon="psychology" label="策略" />
+                    </q-card-actions>
+                </q-card>
+            </div>
+
             <!-- Placeholder cards -->
-            <div class="col-6 col-sm-4 col-md-3" v-for="n in 3" :key="n">
+            <div class="col-6 col-sm-4 col-md-3" v-for="n in 2" :key="n">
                 <q-card class="game-card game-card--soon">
                     <q-card-section class="text-center q-pa-lg">
                         <div style="font-size: 52px">🎮</div>

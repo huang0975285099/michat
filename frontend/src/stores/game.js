@@ -14,6 +14,7 @@ export const useGameStore = defineStore('game', () => {
   const roomId     = ref('')
   const seed       = ref(0)
   const isHost     = ref(false)
+  const game       = ref('bomberman')   // 当前对战的游戏类型
 
   let _router = null
   let _inviteTimer = null
@@ -23,15 +24,16 @@ export const useGameStore = defineStore('game', () => {
 
   // ── Outgoing invite ────────────────────────────────────────────────────
 
-  function invite(chatId, nickname) {
+  function invite(chatId, nickname, gameType = 'bomberman') {
     if (state.value !== 'idle') return
     isHost.value = true
     opponentId.value = chatId
     opponentNickname.value = nickname || chatId
     roomId.value = randomId()
+    game.value = gameType
     state.value = 'inviting'
 
-    send('game_invite', { to: chatId, game: 'bomberman', room_id: roomId.value })
+    send('game_invite', { to: chatId, game: gameType, room_id: roomId.value })
 
     _inviteTimer = setTimeout(() => {
       if (state.value === 'inviting') {
@@ -56,7 +58,7 @@ export const useGameStore = defineStore('game', () => {
     send('game_accept', { to: opponentId.value, room_id: roomId.value, seed: s })
     state.value = 'playing'
     _router?.push({
-      path: '/games/bomberman',
+      path: `/games/${game.value}`,
       query: { opponent: opponentId.value, room: roomId.value, seed: s, role: 'guest' },
     })
   }
@@ -78,6 +80,7 @@ export const useGameStore = defineStore('game', () => {
     opponentId.value = payload.from
     opponentNickname.value = payload.from   // resolved to nickname by UI if available
     roomId.value = payload.room_id
+    game.value = payload.game || 'bomberman'
     state.value = 'invited'
   }
 
@@ -87,7 +90,7 @@ export const useGameStore = defineStore('game', () => {
     seed.value = payload.seed
     state.value = 'playing'
     _router?.push({
-      path: '/games/bomberman',
+      path: `/games/${game.value}`,
       query: {
         opponent: opponentId.value,
         room: roomId.value,
@@ -113,6 +116,7 @@ export const useGameStore = defineStore('game', () => {
     roomId.value = ''
     seed.value = 0
     isHost.value = false
+    game.value = 'bomberman'
   }
 
   function startListening() {
@@ -127,7 +131,7 @@ export const useGameStore = defineStore('game', () => {
   }
 
   return {
-    state, opponentId, opponentNickname, roomId, seed, isHost,
+    state, opponentId, opponentNickname, roomId, seed, isHost, game,
     setRouter, invite, cancelInvite, acceptInvite, rejectInvite, reset, startListening,
   }
 })

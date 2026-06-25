@@ -112,7 +112,7 @@ round_start → deciding（30秒倒计时）→ locked → resolving → waiting
 
 ### 2. 数值平衡原则
 
-- 单次有效伤害 ≤ 25% HP（避免秒杀）
+- 满血不会被一击秒杀（常规蓄力攻击 24 ≈ 1/4 血）；残局互秒由残血护盾兜底（见第十节），不再用固定百分比上限描述
 - 防御减伤 60%，但不完全免伤（避免防御拖平局）
 - 蓄力成功 = 爆发，被抓 = 惩罚更重（高风险高收益）
 - 反击成功很赚，失败会亏血（不稳定但高收益）
@@ -146,8 +146,8 @@ round_start → deciding（30秒倒计时）→ locked → resolving → waiting
 |------|------|------|
 | 攻击 vs 防御 | 12 × 0.4 = **5** | 防御减伤 60% |
 | 攻击 vs 攻击 | 双方各受 **12** | 风险对拼 |
-| 攻击 vs 蓄力 | **12** | 打断蓄力 |
-| 攻击 vs 反击 | 攻击方受 **18** | 被反击克制 |
+| 攻击 vs 蓄力 | **18** | 打断蓄力（与"蓄力被打断惩罚 18"对称，见 §7） |
+| 攻击 vs 反击 | 攻击方受 **20** | 被反击克制（与"反击成功 20"对称） |
 
 特点：简单直接，容易被预测
 
@@ -171,9 +171,15 @@ round_start → deciding（30秒倒计时）→ locked → resolving → waiting
 | 蓄力 vs 蓄力 | 双方蓄力成功 | 下回合双方爆发 |
 | 蓄力 vs 反击 | 蓄力成功，对方反击失败受 **8** 伤害 | 对方猜错 |
 
-蓄力成功后下一回合攻击伤害 = 12 × 2 = **24**（单回合伤害上限）
+蓄力成功后攻击伤害 = 12 × 2 = **24**（常规单回合爆发值）
 
-**蓄力状态持续规则**：蓄力成功后，蓄力标记一直保留，直到玩家选择攻击时才消耗并清除。如果蓄力后选择防御/反击，蓄力标记不消失，继续保留到下一次攻击。
+**蓄力状态持续与失效规则**（统一原 174/176 行矛盾）：
+
+- 蓄力成功后设置蓄力标记，**最多保留 2 个"可用回合"**（常量 `CHARGE_HOLD_LIMIT = 2`）。
+- "可用回合"指标记被携带进入决策但**未通过攻击消耗**的回合：每经过一个这样的回合计时 +1，达到 2 即失效（标记清除）。
+- 即：第 N 回合蓄力成功 → 第 N+1、N+2 回合可用攻击 ×2；若到 N+2 仍未攻击，进入 N+3 前标记失效。
+- 蓄力后选择防御/反击/再蓄力都**不消耗**标记，但**仍计入老化**（防止"蓄力 + 永久防御"乌龟流）。
+- 选择攻击消耗标记、计时归零；机制 C 清除标记时计时也归零。
 
 **蓄力标记叠加与冲突规则**（明确边界情况）：
 
@@ -182,8 +188,8 @@ round_start → deciding（30秒倒计时）→ locked → resolving → waiting
 | 无标记 + 蓄力成功 | 设置标记 | 标准情况 |
 | 有标记 + 蓄力成功 | 标记保留（不叠加） | 蓄力倍率始终为 ×2，不累积为 ×4 |
 | 有标记 + 蓄力被打断 | **标记保留**（不丢失原有标记） | 仅本次蓄力失败，不影响已积累的标记 |
-| 有标记 + 攻击 | 消耗标记，伤害 ×2 | 标准消耗 |
-| 有标记 + 防御/反击 | 标记保留 | 不消耗 |
+| 有标记 + 攻击 | 消耗标记，伤害 ×2，计时归零 | 标准消耗 |
+| 有标记 + 防御/反击 | 标记保留但计时 +1 | 不消耗，但仍老化（最多 2 回合，见上文失效规则） |
 | 双方同时有标记超过 2 回合 | 第 3 回合开始清除双方标记 | 见第九节僵局检测机制 C |
 
 > 关键变更：原设计中"带着蓄力标记再蓄力被打断会清空原标记"不符合玩家直觉，已修正为"仅本次蓄力失败，原标记保留"。
@@ -209,8 +215,8 @@ round_start → deciding（30秒倒计时）→ locked → resolving → waiting
 |----------|----------|----------|----------|------|
 | 攻击 | 攻击 | 12 | 12 | 互伤 |
 | 攻击 | 防御 | 0 | 5 | 防御减伤 |
-| 攻击 | 蓄力 | 0 | 12 | 打断蓄力 |
-| 攻击 | 反击 | 18 | 0 | 被反击 |
+| 攻击 | 蓄力 | 0 | 18 | 打断蓄力 |
+| 攻击 | 反击 | 20 | 0 | 被反击 |
 | 防御 | 攻击 | 5 | 0 | 成功防御 |
 | 防御 | 防御 | 0 | 0 | 无事发生 |
 | 防御 | 蓄力 | 0 | 0 | 对方蓄力成功 |
@@ -231,7 +237,7 @@ round_start → deciding（30秒倒计时）→ locked → resolving → waiting
 ### Step 1：锁定动作
 
 - 双方在 30 秒内选择动作
-- 超时未选择 → 自动执行"攻击"
+- 超时未选择 → 自动执行"**防御**"（统一以第八节为准；旧版"自动攻击"已废弃，原因见第八节）
 - 双方动作同时确定，互不可见（自己只能看到自己的选择，对方的选择在结算时才揭示）
 
 ### Step 2：克制判定
@@ -348,6 +354,8 @@ round_start → deciding（30秒倒计时）→ locked → resolving → waiting
   consecutiveNoDamageRounds: 0,  // 连续无伤害回合数
   totalRounds: 0,                // 总回合数
   bothChargedStalemate: 0,       // 双方同时持有蓄力标记的回合数
+  playerChargeUnused: 0,         // 玩家蓄力标记已携带未消耗的回合数（达 2 失效）
+  opponentChargeUnused: 0,       // 对手同上
 }
 ```
 
@@ -1452,15 +1460,17 @@ function resolveRound(playerAction, opponentAction, gameState) {
   const { playerHP, opponentHP, playerCharged, opponentCharged } = gameState
   let result = { ...DAMAGE_TABLE[playerAction][opponentAction] }
 
-  // === 乘区 1：蓄力加成（攻击方有标记且选择攻击）===
-  // 关键：只有当攻击"本来就会造成伤害"时才放大（opponentDmg > 0）。
-  // 否则蓄力攻击撞上"反击"（attack/counter，opponentDmg 应为 0）会被错误地写成 24，
-  // 导致反击成功的一方凭空挨打。蓄力被克制时攻击方该吃的反击伤害（playerDmg）保持不变。
+  // === 乘区 1：蓄力加成（直接对表内伤害 ×2）===
+  // 关键 1：只有当攻击"本来就会造成伤害"时才放大（opponentDmg > 0）。
+  //         否则蓄力攻击撞上"反击"（opponentDmg 应为 0）会被错误放大，反击成功方凭空挨打。
+  // 关键 2：对**表内已减伤的值** ×2，而非从 BASE 重算。
+  //         attack/defend：5 × 2 = 10 = ceil(12×2×0.4)；attack/attack：12 × 2 = 24。
+  //         整数倍率下与严格乘区顺序结果一致；从 BASE 重算会丢掉防御减伤（把 10 错算成 24）。
   if (playerCharged && playerAction === 'attack' && result.opponentDmg > 0) {
-    result.opponentDmg = applyCharge(result.opponentDmg, playerAction)
+    result.opponentDmg *= CHARGE_MULTIPLIER
   }
   if (opponentCharged && opponentAction === 'attack' && result.playerDmg > 0) {
-    result.playerDmg = applyCharge(result.playerDmg, opponentAction)
+    result.playerDmg *= CHARGE_MULTIPLIER
   }
 
   // === 乘区 2：残血强化（攻击方 HP < 30）===
@@ -1504,7 +1514,7 @@ function resolveRound(playerAction, opponentAction, gameState) {
   const newConsecutiveNoDmg = noDamage ? gameState.consecutiveNoDamageRounds + 1 : 0
   const newTotalRounds = gameState.totalRounds + 1
   const bothCharged = newPlayerCharged && newOpponentCharged
-  const newBothChargedStalemate = bothCharged ? gameState.bothChargedStalemate + 1 : 0
+  let newBothChargedStalemate = bothCharged ? gameState.bothChargedStalemate + 1 : 0
 
   // === 僵局机制应用 ===
   // 机制 A：连续无伤害回合 → 本回合结算即扣环境伤害，逐回合递增
@@ -1512,10 +1522,12 @@ function resolveRound(playerAction, opponentAction, gameState) {
   if (newConsecutiveNoDmg >= STALE_NO_DMG_LIMIT) {
     envDmg = STALE_ENV_DMG * (newConsecutiveNoDmg - STALE_NO_DMG_LIMIT + 1)
   }
-  // 机制 C：双方蓄力标记僵局 → 清除双方标记
+  // 机制 C：双方蓄力标记僵局 → 清除双方标记，并重置计数器（periodic 清除）
+  // 不重置会导致计数器永不归零、此后每回合都清标记，永久剥夺双蓄力窗口
   if (newBothChargedStalemate > BOTH_CHARGED_LIMIT) {
     newPlayerCharged = false
     newOpponentCharged = false
+    newBothChargedStalemate = 0
   }
 
   // === HP 更新（clamp 到 0）===
@@ -1552,18 +1564,15 @@ function resolveRound(playerAction, opponentAction, gameState) {
   }
 }
 
-// 蓄力加成辅助函数
-function applyCharge(baseDmg, action) {
-  if (action !== 'attack') return baseDmg
-  // 蓄力攻击：基础 12 × 2 = 24，再按乘区顺序后续处理
-  // 注意：DAMAGE_TABLE 中 attack 的 opponentDmg 已经是基础值（12 或减伤后的 5）
-  // 蓄力加成应在防御减伤之前应用，所以这里需要还原
-  // 简化处理：蓄力攻击时，重新从 BASE_DAMAGE 计算
-  return BASE_DAMAGE * CHARGE_MULTIPLIER  // = 24，后续乘区会处理防御减伤
-}
+// 蓄力加成 = 直接对表内伤害 ×2（无需辅助函数）。详见上方乘区 1 注释。
 ```
 
-> **注意**：`applyCharge` 的实现修正了原代码"对已减伤值再 ×2"的问题。原代码 `result.opponentDmg *= 2` 会把 `attack vs defend` 的 5 变成 10，但按乘区顺序应为 `Math.ceil(12 × 2 × 0.4) = 10`，结果相同但语义不同。当后续加入暴击等多乘区时，必须严格按顺序计算，因此这里改为从 `BASE_DAMAGE` 重新计算，再让后续乘区（残血、护盾、防御减伤）处理。
+> **注意（已实现验证）**：蓄力加成对 **DAMAGE_TABLE 表内已减伤的值** 做 `× CHARGE_MULTIPLIER`，而不是从 `BASE_DAMAGE` 重算。
+> - `attack vs defend`：表值 5 × 2 = **10** = `Math.ceil(12 × 2 × 0.4)` ✓
+> - `attack vs attack`：表值 12 × 2 = **24** ✓
+> - 整数倍率下与"严格乘区顺序"结果完全一致，且自动正确处理防御减伤。
+>
+> ⚠️ 早期设计曾用 `return BASE_DAMAGE × 2`（恒为 24），这会**丢掉防御减伤**，把"蓄力攻击打防御者"错算成 24（应为 10）。单元测试已覆盖此用例，实现请勿回退到 BASE 重算方案。
 >
 > **修正（蓄力攻击被克制）**：蓄力加成必须加 `result.opponentDmg > 0` 守卫。否则带蓄力标记的攻击撞上"反击"时（`attack/counter` 的 `opponentDmg` 本应为 0、攻击方吃 18 反击伤），`applyCharge` 会无条件把对手伤害写成 24，让反击成功的一方反而挨打。加守卫后：蓄力攻击被反击 = 攻击方吃 18、对手 0 伤、蓄力标记消耗（committed 攻击的代价），符合直觉。
 >
@@ -1816,3 +1825,82 @@ case "ironfist_action", "ironfist_state_sync", "ironfist_reconnect":
 | `waiting_confirm` 一方挂机卡死全场 | 确认设 15s 超时 + 以 `round+1` 动作到齐为推进 barrier | 第十四节 |
 | PvP 超时两端各判分叉致 HP 不一致 | 超时动作以发送方本地判定为唯一真相，收方放宽到 33s | 第十四节 |
 | `game_resign`/退出战绩处理未定义 | 退出等同认输，各端本地结算后上报 | 第十四节 |
+| `applyCharge` 返回 `BASE×2` 丢失防御减伤 | 改为对表内值 `×2`（5→10 而非 24），单测锁死 | 第十五节 |
+
+### 代码 review 修正（一期实现后）
+
+| 漏洞 | 影响 | 修正 |
+|------|------|------|
+| 伤害表不对称：`attack/charge.od=12≠charge/attack.pd=18`、`attack/counter.pd=18≠counter/attack.od=20` | **PvP 两端结算同回合得出不同 HP（desync）**；PvE 因"谁是 player"数值不公 | 统一为 §7 权威值（打断 18、反击 20），表恢复对称，已用脚本校验全 16 格 |
+| 机制 C 计数器清标记后不归零 | 双蓄力一旦超 2 回合，此后**每回合都清标记**，永久剥夺双蓄力窗口 | 清标记时一并 `newBothChargedStalemate = 0`，改为每 3 回合周期性清除 |
+| 对方认输 `game_resign` 只 emit gameover 不置 `GAME_OVER` | 对局已结束但本地倒计时/`selectAction` 仍可运行 | handler 内先 `_setPhase(GAME_OVER)` 再 emit |
+| `lastResult` 跨回合不清除 | 新回合决策阶段信息栏显示上回合摘要，"选择你的动作"提示不出现 | round-start 时 `lastResult.value = null` |
+| 蓄力失效期：174 行"下回合" vs 176 行"永不失效"矛盾，代码按永不失效 | 允许"蓄力 + 永久防御/反击留大"乌龟流，违背"无单一最优策略" | 统一为**最多保留 2 个可用回合**（`CHARGE_HOLD_LIMIT=2`），新增 `chargeUnused` 计时；引擎 state、PvP 同步字段同步补齐 |
+| 平衡原则"单次有效伤害 ≤25% HP" | 实际最大单次 24~40，该表述与数值矛盾、误导 | 删除固定百分比表述，改为"满血不被秒杀 + 残血护盾兜底" |
+| 缺少出招记录 | 心理博弈缺少复盘信息，看不到对手历史出招 | 对战界面新增横向滚动「出招记录」条（上=对手/下=你，胜负描边，最新在右）|
+| 终局仍显示"下一回合"，点完才进结果页 | 对局已结束还要点"下一回合"，逻辑绕、易困惑 | 结算动画后若 `gameResult` 非空，跳过确认 barrier 直接进结果页（返回大厅）；中盘回合保留"下一回合" |
+
+> 原"已知遗留"三条已全部清理（见下表）。剩余真正留到二期的是**完整断线重连**（当前 33s 宽限只做到"判定中断、不记胜负"，不做状态恢复续局）。
+
+### 已知遗留清理（本轮）
+
+| 原遗留 | 处理 |
+|--------|------|
+| ①PvP 对方久不发动作卡 LOCKED | 本地出招后启动 `OPPONENT_GRACE_MS=33s` 宽限计时；超时 → `gameover: 'aborted'`（对局中断，不记胜负），结果页提示"对手可能掉线"。对方动作送达即清除计时 |
+| ②AI 持标记仍可能再蓄力 | `weights.charge += 10` 加 `!ai.charged` 守卫，已有标记时不再浪费回合蓄力（实测占比 0%）|
+| ③蓄力打断蓄力 = 36/40 超上限 | 蓄力 ×2 封顶 `MAX_CHARGED_HIT = 24`，阻止"×2"与"打断 1.5× 惩罚"叠加；残血强化在其后另算仍可达 27（设计内）|
+
+---
+
+## 二十二、分期实施计划与动画演进路线
+
+> 核心原则：**逻辑/网络/HUD 一次写好不再动，只有"战斗表现层"随期升级**。
+> 三层视觉共享同一组动作语义（lunge/hit/charge/stagger/dodge/guard），
+> 因此 2D → 2.5D → 3D 跨度平滑，玩家不会感到断层。
+
+### 1. 渲染替换点（架构保证）
+
+所有视觉表现集中在一个组件 `components/BattleArena.vue`，对外接口固定：
+
+```
+props: {
+  result,          // 最近一次结算结果（驱动对战动画）
+  playerCharged,   // 玩家蓄力光环
+  opponentCharged, // 对手蓄力光环
+  playerEmoji / opponentEmoji  // 角色外观（后期换成精灵/模型句柄）
+}
+```
+
+升级 = 新建 `BattleArena25D.vue` / `BattleArena3D.vue` 实现同一组 props，在 `IronFistPage.vue` 里按性能分级选择挂载哪个。`IronFistGame.js`、`GameNet.js`、HUD 组件、后端**全部零改动**。
+
+### 2. 三期演进
+
+| 阶段 | 视觉形态 | 人物表现 | 工作量 | 状态 |
+|------|----------|----------|--------|------|
+| **一期** | 2D-CSS | emoji 角色 + CSS 位移/受击闪白/蓄力光环/屏幕震动/伤害数字 | ~1 周 | ✅ 已完成 |
+| **二期** | 2.5D 精灵 | 序列帧立绘（每动作 4~8 帧），billboard 站位，受击/蓄力/反击各一套帧动画 | ~1.5 周 + 选素材 | 待开始 |
+| **三期** | 3D | Babylon.js Low Poly 角色 + 骨骼动画（见第十二节动作清单），镜头/粒子/后处理 | ~3~6 周（强依赖美术） | 待开始 |
+
+### 3. 人物动作的逐期对应（保证不断层）
+
+| 动作语义 | 一期 2D-CSS | 二期 2.5D 帧 | 三期 3D 骨骼 |
+|----------|------------|-------------|-------------|
+| 攻击 lunge | translateY 前冲 | 4 帧出拳序列 | Attack 动画 0.6s |
+| 受击 hit | 闪白 + 晃动 | 2 帧后仰 | Hit 动画 0.5s |
+| 蓄力 charge | 上下浮动 + 黄色光环 | 蓄力发光循环帧 | Charge 1.0s + 粒子 |
+| 蓄力被打断 stagger | 灰度 + wobble | 踉跄帧 | Stagger 0.6s |
+| 反击 dodge | 侧移 + 旋转 | 闪避残影帧 | Counter 0.8s + 慢动作 |
+| 防御 guard | 缩放 + 蓝光 | 举盾帧 | Defend 0.4s |
+
+### 4. 开源素材来源（全部允许商用，注意逐一核对授权）
+
+| 类型 | 推荐来源 | 授权 | 用于 |
+|------|----------|------|------|
+| 2.5D 像素格斗精灵 | itch.io（搜 "fighter sprite CC0"）、OpenGameArt、Kenney.nl | CC0 / CC-BY | 二期 |
+| 3D Low Poly 人物 | Quaternius、Kenney、Sketchfab（筛 CC 协议） | CC0 / CC-BY | 三期 |
+| 3D 骨骼动作动画 | Mixamo（免费，含格斗动作捕捉，可重定向） | Adobe 免费授权 | 三期 |
+| 粒子贴图 | OpenGameArt、Kenney Particle Pack | CC0 | 二/三期 |
+| 音效（打击/蓄力/胜负） | Freesound（筛 CC0）、Kenney Audio | CC0 / CC-BY | 二/三期 |
+| Skybox / 场景 | Poly Haven（HDRI/CC0）、OpenGameArt | CC0 | 三期 |
+
+> 授权合规：CC-BY 需在应用「关于/致谢」页署名作者；CC0 无需署名但建议记录来源。Mixamo 角色/动画用于 App 内是允许的，但不可单独再分发模型文件。
