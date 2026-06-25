@@ -24,7 +24,7 @@ export const ACTIONS = [ACTION.ATTACK, ACTION.DEFEND, ACTION.CHARGE, ACTION.COUN
 export const ACTION_META = {
   [ACTION.ATTACK]:  { icon: '⚔️', name: '攻击', hint: '12 伤害' },
   [ACTION.DEFEND]:  { icon: '🛡️', name: '防御', hint: '减伤 60%' },
-  [ACTION.CHARGE]:  { icon: '⚡', name: '蓄力', hint: '下回合 ×2' },
+  [ACTION.CHARGE]:  { icon: '⚡', name: '蓄力', hint: '攻击×2' },
   [ACTION.COUNTER]: { icon: '🔄', name: '反击', hint: '克制攻击' },
 }
 

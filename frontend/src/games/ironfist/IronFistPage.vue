@@ -65,7 +65,7 @@
           </div>
         </div>
         <div class="text-caption text-grey-6 q-mt-sm">
-          攻击克蓄力 · 防御克攻击 · 反击克攻击 · 蓄力下回合伤害翻倍
+          攻击克蓄力 · 防御克攻击 · 反击克攻击 · 蓄力后下次攻击伤害翻倍（命中才生效）
         </div>
       </div>
     </div>
@@ -89,59 +89,85 @@
         </span>
       </div>
 
-      <!-- 出招记录（上=对手，下=你；横向滚动，最新在右） -->
-      <div v-if="moveHistory.length" ref="moveLogRef" class="move-log">
-        <div v-for="m in moveHistory" :key="m.round" class="ml-item"
-          :class="{ 'ml-item--win': m.oDmg > m.pDmg, 'ml-item--lose': m.pDmg > m.oDmg }">
-          <span class="ml-icon" :title="actionMeta[m.opponent]?.name">{{ actionMeta[m.opponent]?.icon }}</span>
-          <span class="ml-icon" :title="actionMeta[m.player]?.name">{{ actionMeta[m.player]?.icon }}</span>
-          <span class="ml-round">R{{ m.round }}</span>
+      <!-- ===== 对战舞台（血条 + 各自出招记录 + 战斗区） ===== -->
+      <div class="stage">
+        <!-- 对手血条（名字与出招记录同行） -->
+        <div class="hud-bar">
+          <HealthBar :name="opponentName" :hp="oHP" :charged="oCharged">
+            <div v-if="moveHistory.length" ref="oppLogRef" class="move-log hb-log">
+              <div v-for="m in moveHistory" :key="m.round" class="ml-item" :class="oppItemClass(m)">
+                <span class="ml-icon" :title="actionMeta[m.opponent]?.name">{{ actionMeta[m.opponent]?.icon }}</span>
+                <span class="ml-round">R{{ m.round }}</span>
+              </div>
+            </div>
+          </HealthBar>
+        </div>
+
+        <!-- 3D/2D 战斗区（一期：BattleArena 2D-CSS） -->
+        <div class="arena-slot">
+          <BattleArena :result="lastResult" :player-charged="pCharged" :opponent-charged="oCharged"
+            :opponent-emoji="opponentEmoji" />
+        </div>
+
+        <!-- 玩家血条（左对齐，名字与出招记录同行） -->
+        <div class="hud-bar">
+          <HealthBar :name="myName" :hp="pHP" :charged="pCharged">
+            <div v-if="moveHistory.length" ref="playerLogRef" class="move-log hb-log">
+              <div v-for="m in moveHistory" :key="m.round" class="ml-item" :class="playerItemClass(m)">
+                <span class="ml-icon" :title="actionMeta[m.player]?.name">{{ actionMeta[m.player]?.icon }}</span>
+                <span class="ml-round">R{{ m.round }}</span>
+              </div>
+            </div>
+          </HealthBar>
         </div>
       </div>
 
-      <!-- 对手血条 -->
-      <div class="hud-bar">
-        <HealthBar :name="opponentName" :hp="oHP" :charged="oCharged" />
-      </div>
+      <!-- ===== 控制台（操作 / 等待 / 结算）—— 与舞台明确分区 ===== -->
+      <div class="control-deck">
+        <div class="hud-action">
+          <template v-if="phase === 'deciding' && !myAction">
+            <button v-for="a in actionList" :key="a.key" class="act-btn"
+              :class="'act-btn--' + a.key" @click="onAction(a.key)">
+              <span class="act-icon">{{ a.icon }}</span>
+              <span class="act-name">{{ a.name }}</span>
+              <span class="act-hint">{{ a.hint }}</span>
+            </button>
+          </template>
 
-      <!-- 3D/2D 战斗区（一期：BattleArena 2D-CSS） -->
-      <div class="arena-slot">
-        <BattleArena :result="lastResult" :player-charged="pCharged" :opponent-charged="oCharged"
-          :opponent-emoji="opponentEmoji" />
-      </div>
+          <div v-else-if="phase === 'locked' || (phase === 'deciding' && myAction)" class="wait-box">
+            <div>已选择：<b>{{ actionMeta[myAction]?.icon }} {{ actionMeta[myAction]?.name }}</b></div>
+            <div class="text-caption text-grey-5 q-mt-xs">等待对手决策…</div>
+          </div>
 
-      <!-- 玩家血条 -->
-      <div class="hud-bar">
-        <HealthBar name="你" :hp="pHP" :charged="pCharged" align="right" />
-      </div>
+          <div v-else-if="phase === 'resolving' || (phase === 'waiting_confirm' && !showPanel)" class="wait-box">
+            <q-spinner-puff color="purple" size="32px" />
+            <div class="text-caption text-grey-5 q-mt-xs">结算中…</div>
+          </div>
 
-      <!-- 战斗信息 -->
-      <div class="hud-info">{{ infoText }}</div>
-
-      <!-- 操作区 / 等待 / 结算 -->
-      <div class="hud-action">
-        <template v-if="phase === 'deciding' && !myAction">
-          <button v-for="a in actionList" :key="a.key" class="act-btn"
-            :class="'act-btn--' + a.key" @click="onAction(a.key)">
-            <span class="act-icon">{{ a.icon }}</span>
-            <span class="act-name">{{ a.name }}</span>
-            <span class="act-hint">{{ a.hint }}</span>
-          </button>
-        </template>
-
-        <div v-else-if="phase === 'locked' || (phase === 'deciding' && myAction)" class="wait-box">
-          <div>已选择：<b>{{ actionMeta[myAction]?.name }}</b></div>
-          <div class="text-caption text-grey-5 q-mt-xs">等待对手决策…</div>
-        </div>
-
-        <div v-else-if="phase === 'resolving' || (phase === 'waiting_confirm' && !showPanel)" class="wait-box">
-          <q-spinner-puff color="purple" size="32px" />
-          <div class="text-caption text-grey-5 q-mt-xs">结算中…</div>
-        </div>
-
-        <div v-else-if="phase === 'waiting_confirm' && showPanel" class="result-panel">
-          <div class="rp-line">{{ resolveSummary }}</div>
-          <q-btn flat color="purple" dense label="立即继续 ›" class="q-mt-xs" @click="nextRound" />
+          <!-- 回合结算卡：双方出招 → 各自受伤 → 胜负判语 -->
+          <div v-else-if="phase === 'waiting_confirm' && showPanel && lastResult" class="result-card">
+            <!-- <div class="rc-exchange">
+              <span class="rc-side rc-side--me">
+                你 <b>{{ actionMeta[lastResult.playerAction]?.icon }} {{ actionMeta[lastResult.playerAction]?.name }}</b>
+              </span>
+              <span class="rc-vs">VS</span>
+              <span class="rc-side rc-side--opp">
+                <b>{{ actionMeta[lastResult.opponentAction]?.icon }} {{ actionMeta[lastResult.opponentAction]?.name }}</b> 对手
+              </span>
+            </div> -->
+            <div class="rc-dmg">
+              <span class="rc-hp" :class="lastResult.playerDmg > 0 ? 'rc-hp--hurt' : 'rc-hp--safe'">
+                你 {{ lastResult.playerDmg > 0 ? '−' + lastResult.playerDmg : '未受伤' }}
+              </span>
+              <span>VS</span>
+              <span class="rc-hp" :class="lastResult.opponentDmg > 0 ? 'rc-hp--hurt' : 'rc-hp--safe'">
+                对手 {{ lastResult.opponentDmg > 0 ? '−' + lastResult.opponentDmg : '未受伤' }}
+              </span>
+            </div>
+            <div v-if="lastResult.envDmg > 0" class="rc-env">⚠ 环境伤害 双方各 −{{ lastResult.envDmg }}</div>
+            <div class="rc-verdict" :class="'rc-verdict--' + roundVerdict.tone">{{ roundVerdict.text }}</div>
+            <!-- <q-btn flat color="purple" dense label="立即继续 ›" class="q-mt-xs" @click="nextRound" /> -->
+          </div>
         </div>
       </div>
     </div>
@@ -160,6 +186,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useGameStore } from 'src/stores/game'
+import { useIdentityStore } from 'src/stores/identity'
 import { friendApi } from 'src/services/api'
 import HealthBar from './components/HealthBar.vue'
 import BattleArena from './components/BattleArena.vue'
@@ -177,6 +204,10 @@ const AUTO_NEXT_MS = 1500
 const route = useRoute()
 const router = useRouter()
 const gameStore = useGameStore()
+const identityStore = useIdentityStore()
+
+// 我方昵称（无昵称时回退到 chatId，再回退到「你」）
+const myName = computed(() => identityStore.nickname || identityStore.chatId || '你')
 
 const actionMeta = ACTION_META
 const actionList = ACTIONS.map((k) => ({ key: k, ...ACTION_META[k] }))
@@ -199,7 +230,8 @@ const myAction = ref(null)
 const lastResult = ref(null)
 const showPanel = ref(false)
 const moveHistory = ref([])   // 每回合出招记录 { round, player, opponent, pDmg, oDmg }
-const moveLogRef = ref(null)
+const oppLogRef = ref(null)
+const playerLogRef = ref(null)
 const opponentName = ref('对手')
 const opponentEmoji = ref('🤖')
 
@@ -212,23 +244,26 @@ let confirmTimer = null
 let panelTimer = null
 
 // ── 计算属性 ──────────────────────────────────────────────
-const infoText = computed(() => {
-  if (!lastResult.value) return phase.value === 'deciding' ? '选择你的动作' : ''
-  return resolveSummary.value
+// 回合胜负判语（从玩家视角给出明确结论 + 配色）
+const roundVerdict = computed(() => {
+  const r = lastResult.value
+  if (!r) return { text: '', tone: 'neutral' }
+  const { playerDmg: p, opponentDmg: o } = r
+  if (p === 0 && o === 0) return { text: '势均力敌 · 无人受伤', tone: 'neutral' }
+  if (o > 0 && p === 0) return { text: '✅ 你压制了对手', tone: 'good' }
+  if (p > 0 && o === 0) return { text: '⚠ 你被对手压制', tone: 'bad' }
+  if (o > p) return { text: '你略占上风', tone: 'good' }
+  if (p > o) return { text: '你处于下风', tone: 'bad' }
+  return { text: '两败俱伤', tone: 'neutral' }
 })
 
-const resolveSummary = computed(() => {
-  const r = lastResult.value
-  if (!r) return ''
-  const my = ACTION_META[r.playerAction]?.name
-  const opp = ACTION_META[r.opponentAction]?.name
-  const parts = [`你 ${my} / 对手 ${opp}`]
-  if (r.opponentDmg > 0) parts.push(`对手 -${r.opponentDmg}`)
-  if (r.playerDmg > 0) parts.push(`你 -${r.playerDmg}`)
-  if (r.envDmg > 0) parts.push(`环境 -${r.envDmg}`)
-  if (r.playerDmg === 0 && r.opponentDmg === 0 && r.envDmg === 0) parts.push('无人受伤')
-  return parts.join(' · ')
-})
+// 出招记录每格配色：从该侧视角判断这回合是否占优（受伤更少 = 占优）
+function playerItemClass(m) {
+  return { 'ml-item--win': m.oDmg > m.pDmg, 'ml-item--lose': m.pDmg > m.oDmg }
+}
+function oppItemClass(m) {
+  return { 'ml-item--win': m.pDmg > m.oDmg, 'ml-item--lose': m.oDmg > m.pDmg }
+}
 
 const RESULT_MAP = {
   win: ['🏆', '胜利！'],
@@ -334,8 +369,9 @@ function beginBattle() {
       pDmg: r.playerDmg, oDmg: r.opponentDmg,
     })
     nextTick(() => {
-      const el = moveLogRef.value
-      if (el) el.scrollLeft = el.scrollWidth
+      for (const el of [oppLogRef.value, playerLogRef.value]) {
+        if (el) el.scrollLeft = el.scrollWidth
+      }
     })
     // 血条/蓄力随动画落定
     pHP.value = r.playerHP
@@ -457,54 +493,72 @@ function goHome() { router.push('/games') }
 /* 对战布局 */
 .battle {
   display: flex; flex-direction: column;
-  height: 100dvh; padding: 8px 12px;
-  gap: 6px;
+  height: 100dvh; padding: 8px 10px 10px;
+  gap: 8px;
 }
 .hud-top {
   display: flex; align-items: center;
   font-weight: 700; font-size: 14px;
-  padding: 2px 4px;
+  padding: 0 4px;
 }
 .countdown { color: #b39ddb; }
 .countdown.urgent { color: #ff5252; animation: blink 0.6s infinite; }
-.hud-bar { padding: 0 4px; }
 
-/* 出招记录条 */
+/* ===== 舞台：血条 + 出招记录 + 战斗区，整体成卡，与控制台明确分区 ===== */
+.stage {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(40, 32, 78, 0.55), rgba(18, 14, 34, 0.55));
+  border: 1px solid rgba(150, 120, 255, 0.18);
+  box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.4);
+}
+.hud-bar { padding: 0 2px; }
+
+/* 出招记录条（每侧只显示本方动作；与名字同行，横向滚动，最新在右） */
 .move-log {
-  display: flex; gap: 6px; overflow-x: auto; padding: 2px 4px;
+  display: flex; gap: 5px; overflow-x: auto;
   scrollbar-width: none;
 }
 .move-log::-webkit-scrollbar { display: none; }
+/* 嵌在血条名字行内：占据名字右侧剩余空间 */
+.hb-log { flex: 1; min-width: 0; }
 .ml-item {
   flex: 0 0 auto;
-  display: flex; flex-direction: column; align-items: center;
-  padding: 3px 6px; border-radius: 8px;
-  background: rgba(255, 255, 255, 0.05);
+  display: flex; align-items: center; gap: 2px;
+  padding: 0 5px; border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
   border: 1px solid transparent;
 }
-.ml-item--win  { border-color: rgba(76, 175, 80, 0.5); }
-.ml-item--lose { border-color: rgba(255, 82, 82, 0.5); }
-.ml-icon { font-size: 16px; line-height: 1.15; }
-.ml-round { font-size: 9px; color: #8a82a6; margin-top: 1px; }
-.arena-slot { flex: 1; min-height: 200px; }
-.hud-info {
-  text-align: center; font-size: 13px; color: #cfc8e6;
-  min-height: 20px;
-}
-.hud-action { min-height: 140px; }
+.ml-item--win  { border-color: rgba(76, 175, 80, 0.55); background: rgba(76, 175, 80, 0.12); }
+.ml-item--lose { border-color: rgba(255, 82, 82, 0.55); background: rgba(255, 82, 82, 0.12); }
+.ml-icon { font-size: 14px; line-height: 1.6; }
+.ml-round { font-size: 9px; color: #8a82a6; }
+.arena-slot { flex: 1; min-height: 180px; }
 
-/* 动作按钮 2×2（template v-for 透明，按钮直接成为 grid 子项） */
+/* ===== 控制台：操作 / 等待 / 结算 ===== */
+.control-deck {
+  padding: 10px 12px 4px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* 动作按钮：一行 4 列（template v-for 透明，按钮直接成为 grid 子项） */
 .hud-action {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  min-height: 92px;
 }
 .hud-action > .wait-box,
-.hud-action > .result-panel { grid-column: 1 / -1; }
+.hud-action > .result-card { grid-column: 1 / -1; }
 
 .act-btn {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 2px; padding: 12px 4px; border: none; border-radius: 14px;
+  gap: 1px; padding: 10px 2px; border: none; border-radius: 13px;
   color: #fff; cursor: pointer;
   box-shadow: 0 3px 0 rgba(0, 0, 0, 0.3);
   transition: transform 0.1s, box-shadow 0.1s;
@@ -514,22 +568,41 @@ function goHome() { router.push('/games') }
 .act-btn--defend  { background: linear-gradient(135deg, #4da3ff, #2c6fb0); }
 .act-btn--charge  { background: linear-gradient(135deg, #ffb347, #e8890c); }
 .act-btn--counter { background: linear-gradient(135deg, #a78bfa, #7c3aed); }
-.act-icon { font-size: 26px; }
-.act-name { font-weight: 800; font-size: 15px; }
-.act-hint { font-size: 11px; opacity: 0.85; }
+.act-icon { font-size: 24px; }
+.act-name { font-weight: 800; font-size: 14px; }
+.act-hint { font-size: 10px; opacity: 0.85; line-height: 1.1; }
 
 .wait-box {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   text-align: center; padding: 20px;
   background: rgba(255, 255, 255, 0.04); border-radius: 14px;
 }
-.result-panel {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  text-align: center; padding: 16px;
+
+/* 回合结算卡 */
+.result-card {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  text-align: center; padding: 12px 14px;
   background: rgba(124, 58, 237, 0.12); border: 1px solid rgba(124, 58, 237, 0.4);
   border-radius: 14px;
 }
-.rp-line { font-size: 14px; font-weight: 600; }
+.rc-exchange {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-size: 14px; flex-wrap: wrap;
+}
+.rc-side--me  { color: #b9e0ff; }
+.rc-side--opp { color: #ffc9c9; }
+.rc-vs { font-size: 11px; font-weight: 800; color: #b39ddb; opacity: 0.8; }
+.rc-dmg { display: flex; gap: 14px; font-size: 14px; font-weight: 700; }
+.rc-hp--hurt { color: #ff6b6b; }
+.rc-hp--safe { color: #8ad6a0; }
+.rc-env { font-size: 12px; color: #ffb04d; }
+.rc-verdict {
+  font-size: 15px; font-weight: 800; margin-top: 2px;
+  padding: 2px 12px; border-radius: 10px;
+}
+.rc-verdict--good    { color: #6ee7a0; background: rgba(76, 175, 80, 0.15); }
+.rc-verdict--bad     { color: #ff7a7a; background: rgba(255, 82, 82, 0.15); }
+.rc-verdict--neutral { color: #cfc8e6; background: rgba(255, 255, 255, 0.07); }
 
 @keyframes blink { 50% { opacity: 0.3; } }
 </style>
