@@ -1,6 +1,6 @@
 {
   "name": "e2eechat-frontend",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "scripts": {
     "dev": "quasar dev",
