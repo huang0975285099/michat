@@ -78,95 +78,120 @@
       <q-btn flat color="negative" label="取消邀请" @click="gameStore.cancelInvite()" />
     </div>
 
+    <!-- ── 重连中（页面刷新后重入） ─────────────────────── -->
+    <div v-else-if="view === 'reconnecting'" class="flex flex-center column full-h q-gutter-md q-pa-xl">
+      <q-spinner-dots color="deep-orange" size="64px" />
+      <div class="text-h6">正在重连对局…</div>
+      <div class="text-caption text-grey-5">正在从服务器恢复对局进度</div>
+    </div>
+
     <!-- ── 对战 ─────────────────────────────────────────── -->
     <div v-else-if="view === 'playing'" class="battle">
-      <!-- 顶部信息栏 -->
-      <div class="hud-top">
-        <span>第 {{ round }} 回合</span>
-        <q-space />
-        <span class="countdown" :class="{ urgent: countdown <= 5 }" v-if="phase === 'deciding'">
-          ⏳ {{ countdown }}s
-        </span>
+      <!-- ===== 顶部对战 HUD：我方 | 回合+环形倒计时 | 对手 ===== -->
+      <div class="match-hud">
+        <!-- 我方 -->
+        <div class="mh-player mh-player--me">
+          <div class="mh-head">
+            <div class="mh-avatar mh-avatar--me" :class="{ charged: pCharged }">{{ myEmoji }}</div>
+            <div class="mh-id">
+              <div class="mh-name">{{ myName }}</div>
+              <div class="mh-score"><span class="mh-score-ic">⚔</span>{{ myDamage }}</div>
+            </div>
+          </div>
+          <HealthBar :hp="pHP" :charged="pCharged" bare />
+          <div class="mh-tally">
+            <span v-for="t in myTally" :key="t.key" class="tally">
+              <span class="tally-ic">{{ t.icon }}</span>{{ t.count }}
+            </span>
+          </div>
+        </div>
+
+        <!-- 中央：回合数 + 环形倒计时 -->
+        <div class="mh-center">
+          <div class="mh-round">第 {{ round }} 回合</div>
+          <div class="cd-ring" :class="{ urgent: phase === 'deciding' && countdown <= 5 }" :style="ringStyle">
+            <div class="cd-inner">
+              <template v-if="phase === 'deciding'">
+                <span class="cd-num">{{ countdown }}</span>
+                <!-- <span class="cd-unit">s</span> -->
+              </template>
+              <span v-else class="cd-glyph">⚔</span>
+            </div>
+          </div>
+          <div class="mh-status">{{ phaseLabel }}</div>
+        </div>
+
+        <!-- 对手 -->
+        <div class="mh-player mh-player--opp">
+          <div class="mh-head">
+            <div class="mh-avatar mh-avatar--opp" :class="{ charged: oCharged }">{{ opponentEmoji }}</div>
+            <div class="mh-id mh-id--right">
+              <div class="mh-name">{{ opponentName }}</div>
+              <div class="mh-score"><span class="mh-score-ic">⚔</span>{{ oppDamage }}</div>
+            </div>
+          </div>
+          <HealthBar :hp="oHP" :charged="oCharged" align="right" bare />
+          <div class="mh-tally mh-tally--right">
+            <span v-for="t in oppTally" :key="t.key" class="tally">
+              <span class="tally-ic">{{ t.icon }}</span>{{ t.count }}
+            </span>
+          </div>
+        </div>
       </div>
 
-      <!-- ===== 对战舞台（血条 + 各自出招记录 + 战斗区） ===== -->
-      <div class="stage">
-        <!-- 对手血条（名字与出招记录同行） -->
-        <div class="hud-bar">
-          <HealthBar :name="opponentName" :hp="oHP" :charged="oCharged">
-            <div v-if="moveHistory.length" ref="oppLogRef" class="move-log hb-log">
-              <div v-for="m in moveHistory" :key="m.round" class="ml-item" :class="oppItemClass(m)">
-                <span class="ml-icon" :title="actionMeta[m.opponent]?.name">{{ actionMeta[m.opponent]?.icon }}</span>
-                <span class="ml-round">R{{ m.round }}</span>
-              </div>
-            </div>
-          </HealthBar>
-        </div>
-
-        <!-- 3D/2D 战斗区（一期：BattleArena 2D-CSS） -->
-        <div class="arena-slot">
-          <BattleArena :result="lastResult" :player-charged="pCharged" :opponent-charged="oCharged"
-            :opponent-emoji="opponentEmoji" />
-        </div>
-
-        <!-- 玩家血条（左对齐，名字与出招记录同行） -->
-        <div class="hud-bar">
-          <HealthBar :name="myName" :hp="pHP" :charged="pCharged">
-            <div v-if="moveHistory.length" ref="playerLogRef" class="move-log hb-log">
-              <div v-for="m in moveHistory" :key="m.round" class="ml-item" :class="playerItemClass(m)">
-                <span class="ml-icon" :title="actionMeta[m.player]?.name">{{ actionMeta[m.player]?.icon }}</span>
-                <span class="ml-round">R{{ m.round }}</span>
-              </div>
-            </div>
-          </HealthBar>
-        </div>
+      <!-- 3D 战斗区（出招揭示行作为浮层叠在底部，不占布局、不抖动） -->
+      <div class="arena-slot">
+        <BattleArena :result="lastResult" :player-charged="pCharged" :opponent-charged="oCharged"
+          :opponent-emoji="opponentEmoji" />
       </div>
 
-      <!-- ===== 控制台（操作 / 等待 / 结算）—— 与舞台明确分区 ===== -->
+        <transition name="reveal-fade">
+          <div v-if="showReveal" class="reveal-wrap">
+            <div class="reveal">
+              <div class="rv-side rv-side--me">
+                <span class="rv-label">我方出招</span>
+                <span class="rv-move">
+                  <span class="rv-ic">{{ actionMeta[revealMy]?.icon }}</span>{{ actionMeta[revealMy]?.name }}
+                </span>
+              </div>
+              <div class="rv-vs">VS</div>
+              <div class="rv-side rv-side--opp">
+                <span class="rv-label">对手出招</span>
+                <span v-if="revealOpp" class="rv-move">
+                  <span class="rv-ic">{{ actionMeta[revealOpp]?.icon }}</span>{{ actionMeta[revealOpp]?.name }}
+                </span>
+                <span v-else class="rv-move rv-move--wait">？</span>
+              </div>
+            </div>
+            <div v-if="resultPhase" class="reveal-verdict" :class="'rvv--' + roundVerdict.tone">
+              {{ roundVerdict.text }}
+            </div>
+          </div>
+        </transition>
+
+      <!-- ===== 操作按钮（常驻；非决策态禁用） ===== -->
       <div class="control-deck">
         <div class="hud-action">
-          <template v-if="phase === 'deciding' && !myAction">
-            <button v-for="a in actionList" :key="a.key" class="act-btn"
-              :class="'act-btn--' + a.key" @click="onAction(a.key)">
-              <span class="act-icon">{{ a.icon }}</span>
-              <span class="act-name">{{ a.name }}</span>
-              <span class="act-hint">{{ a.hint }}</span>
-            </button>
-          </template>
+          <button v-for="a in actionList" :key="a.key" class="act-btn"
+            :class="['act-btn--' + a.key, { selected: myAction === a.key, dim: !canAct || (myAction && myAction !== a.key) }]"
+            :disabled="!canAct" @click="onAction(a.key)">
+            <span class="act-frame"><span class="act-icon">{{ a.icon }}</span></span>
+            <span class="act-name">{{ a.name }}</span>
+            <span class="act-hint">{{ a.hint }}</span>
+          </button>
+        </div>
+      </div>
 
-          <div v-else-if="phase === 'locked' || (phase === 'deciding' && myAction)" class="wait-box">
-            <div>已选择：<b>{{ actionMeta[myAction]?.icon }} {{ actionMeta[myAction]?.name }}</b></div>
-            <div class="text-caption text-grey-5 q-mt-xs">等待对手决策…</div>
+      <!-- ===== 对手掉线重连遮罩（60s 等待，不允许放弃） ===== -->
+      <div v-if="isWaitingReconnect" class="reconnect-overlay">
+        <div class="reconnect-card">
+          <q-spinner-dots color="deep-orange" size="56px" />
+          <div class="text-h6 q-mt-md">对手网络波动</div>
+          <div class="text-caption text-grey-5 q-mt-xs">
+            等待对手重连 · 剩余 {{ reconnectCountdown }}s
           </div>
-
-          <div v-else-if="phase === 'resolving' || (phase === 'waiting_confirm' && !showPanel)" class="wait-box">
-            <q-spinner-puff color="purple" size="32px" />
-            <div class="text-caption text-grey-5 q-mt-xs">结算中…</div>
-          </div>
-
-          <!-- 回合结算卡：双方出招 → 各自受伤 → 胜负判语 -->
-          <div v-else-if="phase === 'waiting_confirm' && showPanel && lastResult" class="result-card">
-            <!-- <div class="rc-exchange">
-              <span class="rc-side rc-side--me">
-                你 <b>{{ actionMeta[lastResult.playerAction]?.icon }} {{ actionMeta[lastResult.playerAction]?.name }}</b>
-              </span>
-              <span class="rc-vs">VS</span>
-              <span class="rc-side rc-side--opp">
-                <b>{{ actionMeta[lastResult.opponentAction]?.icon }} {{ actionMeta[lastResult.opponentAction]?.name }}</b> 对手
-              </span>
-            </div> -->
-            <div class="rc-dmg">
-              <span class="rc-hp" :class="lastResult.playerDmg > 0 ? 'rc-hp--hurt' : 'rc-hp--safe'">
-                你 {{ lastResult.playerDmg > 0 ? '−' + lastResult.playerDmg : '未受伤' }}
-              </span>
-              <span>VS</span>
-              <span class="rc-hp" :class="lastResult.opponentDmg > 0 ? 'rc-hp--hurt' : 'rc-hp--safe'">
-                对手 {{ lastResult.opponentDmg > 0 ? '−' + lastResult.opponentDmg : '未受伤' }}
-              </span>
-            </div>
-            <div v-if="lastResult.envDmg > 0" class="rc-env">⚠ 环境伤害 双方各 −{{ lastResult.envDmg }}</div>
-            <div class="rc-verdict" :class="'rc-verdict--' + roundVerdict.tone">{{ roundVerdict.text }}</div>
-            <!-- <q-btn flat color="purple" dense label="立即继续 ›" class="q-mt-xs" @click="nextRound" /> -->
+          <div class="text-caption text-grey-6 q-mt-md">
+            对局必须分出胜负，请耐心等待
           </div>
         </div>
       </div>
@@ -189,25 +214,31 @@ import { useGameStore } from 'src/stores/game'
 import { useIdentityStore } from 'src/stores/identity'
 import { friendApi } from 'src/services/api'
 import HealthBar from './components/HealthBar.vue'
-import BattleArena from './components/BattleArena.vue'
+// 三期：Babylon.js 3D 渲染层（方案B）。props 接口与一/二期一致，可一行回退。
+// 一期 BattleArena.vue(2D-CSS) / 二期 BattleArenaPhaser.vue 仍保留备用。
+import BattleArena from './components/BattleArena3D.vue'
 import { IronFistGame } from './game/IronFistGame.js'
 import { GameNet } from './game/GameNet.js'
 import {
   ACTION_META, ACTIONS, ROUND_SECONDS, INITIAL_HP,
+  LS_PENDING_KEY, RECONNECT_WINDOW_MS,
 } from './game/GameConstants.js'
 
 defineOptions({ name: 'IronFistPage' })
 
-// 结算面板自动进入下一回合的停留时长（ms）。展示摘要后即自动推进。
-const AUTO_NEXT_MS = 1500
+// 结算后停留时长（ms）：展示揭示行+伤害后自动进入下一回合 / 终局进结果页。
+const ROUND_HOLD_MS = 2200
+const END_HOLD_MS = 1900       // 平局等非倒地终局
+const END_HOLD_KO_MS = 3900    // 倒地终局：留足 ko 动画(接触点≈1.1s + ko≈2.6s)播完
 
 const route = useRoute()
 const router = useRouter()
 const gameStore = useGameStore()
 const identityStore = useIdentityStore()
 
-// 我方昵称（无昵称时回退到 chatId，再回退到「你」）
+// 我方昵称（无昵称时回退到 chatId，再回退到「你」）+ 头像
 const myName = computed(() => identityStore.nickname || identityStore.chatId || '你')
+const myEmoji = '🤖'
 
 const actionMeta = ACTION_META
 const actionList = ACTIONS.map((k) => ({ key: k, ...ACTION_META[k] }))
@@ -228,20 +259,20 @@ const pCharged = ref(false)
 const oCharged = ref(false)
 const myAction = ref(null)
 const lastResult = ref(null)
-const showPanel = ref(false)
 const moveHistory = ref([])   // 每回合出招记录 { round, player, opponent, pDmg, oDmg }
-const oppLogRef = ref(null)
-const playerLogRef = ref(null)
 const opponentName = ref('对手')
 const opponentEmoji = ref('🤖')
 
 const resultType = ref('')
 
+// PvP 重连相关
+const reconnectCountdown = ref(0)  // 剩余重连等待秒数
+let reconnectTicker = null
+
 let engine = null
 let net = null
 let countdownTimer = null
 let confirmTimer = null
-let panelTimer = null
 
 // ── 计算属性 ──────────────────────────────────────────────
 // 回合胜负判语（从玩家视角给出明确结论 + 配色）
@@ -257,13 +288,47 @@ const roundVerdict = computed(() => {
   return { text: '两败俱伤', tone: 'neutral' }
 })
 
-// 出招记录每格配色：从该侧视角判断这回合是否占优（受伤更少 = 占优）
-function playerItemClass(m) {
-  return { 'ml-item--win': m.oDmg > m.pDmg, 'ml-item--lose': m.pDmg > m.oDmg }
+// 出招统计（各动作累计使用次数，只显示用过的）
+function buildTally(sideKey) {
+  const c = { attack: 0, defend: 0, charge: 0, counter: 0 }
+  for (const m of moveHistory.value) { if (c[m[sideKey]] !== undefined) c[m[sideKey]] += 1 }
+  return ACTIONS.filter((a) => c[a] > 0).map((a) => ({ key: a, icon: ACTION_META[a].icon, count: c[a] }))
 }
-function oppItemClass(m) {
-  return { 'ml-item--win': m.pDmg > m.oDmg, 'ml-item--lose': m.oDmg > m.pDmg }
-}
+const myTally = computed(() => buildTally('player'))
+const oppTally = computed(() => buildTally('opponent'))
+
+// 累计输出（本局造成的总伤害，对应参考图头像旁的 ⚔ 数值）
+const myDamage = computed(() => moveHistory.value.reduce((s, m) => s + (m.oDmg || 0), 0))
+const oppDamage = computed(() => moveHistory.value.reduce((s, m) => s + (m.pDmg || 0), 0))
+
+// 环形倒计时（决策态按剩余比例上色，≤5s 转红；其余阶段为静态环）
+const ringStyle = computed(() => {
+  if (phase.value !== 'deciding') {
+    return { background: 'conic-gradient(rgba(150,120,255,0.45) 360deg, rgba(150,120,255,0.45) 360deg)' }
+  }
+  const deg = Math.max(0, Math.min(1, countdown.value / ROUND_SECONDS)) * 360
+  const col = countdown.value <= 5 ? '#ff5252' : '#5b8cff'
+  return { background: `conic-gradient(${col} ${deg}deg, rgba(255,255,255,0.08) ${deg}deg)` }
+})
+const phaseLabel = computed(() => {
+  switch (phase.value) {
+    case 'deciding': return myAction.value ? '已出招' : '出招准备中'
+    case 'locked': return '等待对手'
+    case 'resolving': return '结算中'
+    case 'waiting_confirm': return '回合结算'
+    case 'waiting_reconnect': return '对手重连中'
+    default: return ''
+  }
+})
+// 是否处于对手掉线等待重连遮罩态
+const isWaitingReconnect = computed(() => phase.value === 'waiting_reconnect')
+const canAct = computed(() => phase.value === 'deciding' && !myAction.value)
+
+// 出招揭示：决策/锁定阶段亮我方招 + 对手「？」；结算阶段双方亮明
+const resultPhase = computed(() => !!lastResult.value && (phase.value === 'resolving' || phase.value === 'waiting_confirm'))
+const revealMy = computed(() => (resultPhase.value ? lastResult.value.playerAction : myAction.value))
+const revealOpp = computed(() => (resultPhase.value ? lastResult.value.opponentAction : null))
+const showReveal = computed(() => !!revealMy.value)
 
 const RESULT_MAP = {
   win: ['🏆', '胜利！'],
@@ -278,6 +343,7 @@ const resultSub = computed(() => (resultType.value === 'aborted' ? '对手长时
 
 // ── 生命周期 ──────────────────────────────────────────────
 onMounted(() => {
+  window.addEventListener('beforeunload', handleBeforeUnload)
   const role = route.query.role
   if (role === 'host' || role === 'guest') {
     startPvp()
@@ -286,7 +352,10 @@ onMounted(() => {
   }
 })
 
-onUnmounted(() => teardown())
+onUnmounted(() => {
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+  teardown()
+})
 
 watch(() => gameStore.state, (s) => {
   if (s === 'idle' && view.value === 'inviting') view.value = 'lobby'
@@ -332,19 +401,33 @@ async function startPvp() {
   opponentName.value = gameStore.opponentNickname || '对手'
   opponentEmoji.value = '🥷'
   await nextTick()
-  net = new GameNet(route.query.opponent, route.query.room)
-  engine = new IronFistGame({ mode: 'pvp', net })
-  beginBattle()
+
+  const roomId = route.query.room
+  const myChatId = identityStore.chatId
+  net = new GameNet(route.query.opponent, roomId)
+  engine = new IronFistGame({ mode: 'pvp', net, roomId, myChatId })
+
+  // 检测是否存在未完成对局（页面刷新重连场景，详见 docs 第十四节方案 B）
+  const hasPending = (() => {
+    try { return !!localStorage.getItem(LS_PENDING_KEY(roomId)) } catch { return false }
+  })()
+
+  if (hasPending) {
+    // 刷新重连路径：先显示重连视图，等服务端返回 ironfist_replay 后再切到 playing
+    view.value = 'reconnecting'
+    pHP.value = INITIAL_HP
+    oHP.value = INITIAL_HP
+    pCharged.value = oCharged.value = false
+    lastResult.value = null
+    moveHistory.value = []
+    setupEngineListeners()
+    engine.requestReconnect()
+  } else {
+    beginBattle()
+  }
 }
 
-function beginBattle() {
-  view.value = 'playing'
-  pHP.value = INITIAL_HP
-  oHP.value = INITIAL_HP
-  pCharged.value = oCharged.value = false
-  lastResult.value = null
-  moveHistory.value = []
-
+function setupEngineListeners() {
   engine.on('round-start', ({ round: r, state }) => {
     round.value = r
     pHP.value = state.playerHP
@@ -352,8 +435,8 @@ function beginBattle() {
     pCharged.value = state.playerCharged
     oCharged.value = state.opponentCharged
     myAction.value = null
-    showPanel.value = false
-    lastResult.value = null // 清除上回合结算，避免新回合决策时信息栏显示旧摘要
+    lastResult.value = null // 清除上回合结算，避免新回合揭示行残留旧招
+    view.value = 'playing'
     startCountdown()
   })
   engine.on('phase', (p) => { phase.value = p })
@@ -363,51 +446,52 @@ function beginBattle() {
   engine.on('resolved', (r) => {
     stopCountdown()
     lastResult.value = r
-    // 记录本回合双方出招
     moveHistory.value.push({
       round: round.value, player: r.playerAction, opponent: r.opponentAction,
       pDmg: r.playerDmg, oDmg: r.opponentDmg,
     })
-    nextTick(() => {
-      for (const el of [oppLogRef.value, playerLogRef.value]) {
-        if (el) el.scrollLeft = el.scrollWidth
-      }
-    })
-    // 血条/蓄力随动画落定
     pHP.value = r.playerHP
     oHP.value = r.opponentHP
     pCharged.value = r.playerCharged
     oCharged.value = r.opponentCharged
-    // 等动画播完再处理：终局直接进结果页（不出现"下一回合"），否则显示结算面板
-    showPanel.value = false
-    clearTimeout(panelTimer)
-    panelTimer = setTimeout(() => {
-      if (r.gameResult) {
-        engine?.confirmNextRound() // 终局：跳过确认 barrier，直接 → result 视图（返回大厅）
-      } else {
-        showPanel.value = true
-        startConfirmTimer()
-      }
-    }, 1150)
+    clearTimeout(confirmTimer)
+    const koEnd = r.gameResult === 'win' || r.gameResult === 'lose' || r.gameResult === 'doubleLose'
+    const holdMs = r.gameResult ? (koEnd ? END_HOLD_KO_MS : END_HOLD_MS) : ROUND_HOLD_MS
+    confirmTimer = setTimeout(() => engine?.confirmNextRound(), holdMs)
   })
   engine.on('gameover', (res) => {
     resultType.value = res
     teardownTimers()
+    stopReconnectTicker()
     if (mode.value === 'pvp') gameStore.reset()
     view.value = 'result'
   })
+  // 对手掉线，进入 60s 重连等待遮罩
+  engine.on('opponent-disconnected', ({ timeoutMs }) => {
+    startReconnectTicker(timeoutMs)
+  })
+  // 对手重连后恢复到本回合决策（重启倒计时）
+  engine.on('round-resume', ({ round: r }) => {
+    stopReconnectTicker()
+    round.value = r
+    startCountdown()
+  })
+}
 
+function beginBattle() {
+  view.value = 'playing'
+  pHP.value = INITIAL_HP
+  oHP.value = INITIAL_HP
+  pCharged.value = oCharged.value = false
+  lastResult.value = null
+  moveHistory.value = []
+  setupEngineListeners()
   engine.start()
 }
 
 // ── 操作 ─────────────────────────────────────────────────
 function onAction(action) {
   engine?.selectAction(action)
-}
-
-function nextRound() {
-  clearTimeout(confirmTimer)
-  engine?.confirmNextRound()
 }
 
 // ── 计时器 ────────────────────────────────────────────────
@@ -424,17 +508,31 @@ function startCountdown() {
 }
 function stopCountdown() { clearInterval(countdownTimer); countdownTimer = null }
 
-// 结算后短暂展示本回合摘要，随即自动进入下一回合（无需手动点击）。
-// 玩家可点「立即继续」提前跳过这段等待。
-function startConfirmTimer() {
-  clearTimeout(confirmTimer)
-  confirmTimer = setTimeout(() => engine?.confirmNextRound(), AUTO_NEXT_MS)
+// 60s 重连等待倒计时 UI（不允许放弃，必须等满窗口或对方重连）
+function startReconnectTicker(timeoutMs = RECONNECT_WINDOW_MS) {
+  stopReconnectTicker()
+  reconnectCountdown.value = Math.ceil(timeoutMs / 1000)
+  reconnectTicker = setInterval(() => {
+    reconnectCountdown.value -= 1
+    if (reconnectCountdown.value <= 0) stopReconnectTicker()
+  }, 1000)
 }
+function stopReconnectTicker() { clearInterval(reconnectTicker); reconnectTicker = null }
 
 function teardownTimers() {
   stopCountdown()
   clearTimeout(confirmTimer)
-  clearTimeout(panelTimer)
+  stopReconnectTicker()
+}
+
+// ── beforeunload：刷新/关闭页面时不发 game_resign ───────────────────────
+// 方案 B 下刷新应走重连路径，而非直接认输：
+//  1) WS 断开 → 对方 grace 超时 → WAITING_RECONNECT（60s）
+//  2) 玩家重开页面 → 检测 localStorage pending → requestReconnect → loadReplay 恢复
+//  3) 60s 内未重连 → 判掉线方负（对局必有结果）
+// 若此处发 resign 会清理 Redis action 日志 + localStorage，导致无法重连，与设计冲突。
+function handleBeforeUnload() {
+  // 故意留空：不认输，交给 60s 重连窗口保证对局结果
 }
 
 function teardown() {
@@ -464,8 +562,29 @@ function goHome() { router.push('/games') }
   min-height: 100dvh;
   background: #0f0f1a;
   color: #fff;
+  overflow: hidden;
 }
 .full-h { min-height: 60vh; }
+
+/* 对手掉线重连遮罩 */
+.reconnect-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+.reconnect-card {
+  background: rgba(30, 22, 40, 0.95);
+  border: 1px solid rgba(255, 160, 80, 0.35);
+  border-radius: 16px;
+  padding: 32px 40px;
+  text-align: center;
+  max-width: 320px;
+}
 
 /* 大厅模式卡片 */
 .mode-card {
@@ -496,113 +615,194 @@ function goHome() { router.push('/games') }
   height: 100dvh; padding: 8px 10px 10px;
   gap: 8px;
 }
-.hud-top {
-  display: flex; align-items: center;
-  font-weight: 700; font-size: 14px;
-  padding: 0 4px;
-}
-.countdown { color: #b39ddb; }
-.countdown.urgent { color: #ff5252; animation: blink 0.6s infinite; }
 
-/* ===== 舞台：血条 + 出招记录 + 战斗区，整体成卡，与控制台明确分区 ===== */
-.stage {
-  flex: 1; min-height: 0;
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 10px;
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(40, 32, 78, 0.55), rgba(18, 14, 34, 0.55));
-  border: 1px solid rgba(150, 120, 255, 0.18);
-  box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.4);
+/* ===== 顶部对战 HUD ===== */
+.match-hud {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 10px 8px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(44, 34, 84, 0.6), rgba(18, 14, 34, 0.55));
+  border: 1px solid rgba(150, 120, 255, 0.22);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 4px 14px rgba(0, 0, 0, 0.35);
 }
-.hud-bar { padding: 0 2px; }
+/* 每侧：头像+名字一行 → 全宽血条 → 出招统计 */
+.mh-player { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.mh-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mh-player--opp .mh-head { flex-direction: row-reverse; }
+.mh-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.mh-id--right { align-items: flex-end; }
 
-/* 出招记录条（每侧只显示本方动作；与名字同行，横向滚动，最新在右） */
-.move-log {
-  display: flex; gap: 5px; overflow-x: auto;
-  scrollbar-width: none;
-}
-.move-log::-webkit-scrollbar { display: none; }
-/* 嵌在血条名字行内：占据名字右侧剩余空间 */
-.hb-log { flex: 1; min-width: 0; }
-.ml-item {
+/* 头像 */
+.mh-avatar {
   flex: 0 0 auto;
-  display: flex; align-items: center; gap: 2px;
-  padding: 0 5px; border-radius: 7px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid transparent;
+  width: 52px; height: 52px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 30px; line-height: 1;
+  background: radial-gradient(circle at 50% 32%, rgba(255, 255, 255, 0.16), rgba(0, 0, 0, 0.35));
 }
-.ml-item--win  { border-color: rgba(76, 175, 80, 0.55); background: rgba(76, 175, 80, 0.12); }
-.ml-item--lose { border-color: rgba(255, 82, 82, 0.55); background: rgba(255, 82, 82, 0.12); }
-.ml-icon { font-size: 14px; line-height: 1.6; }
-.ml-round { font-size: 9px; color: #8a82a6; }
-.arena-slot { flex: 1; min-height: 180px; }
+.mh-avatar--me  { border: 3px solid #5b8cff; box-shadow: 0 0 12px rgba(91, 140, 255, 0.7), inset 0 0 8px rgba(91, 140, 255, 0.35); }
+.mh-avatar--opp { border: 3px solid #ff5a5a; box-shadow: 0 0 12px rgba(255, 90, 90, 0.7), inset 0 0 8px rgba(255, 90, 90, 0.35); }
+.mh-avatar.charged { border-color: #ffca28; animation: avatarGlow 1.1s ease-in-out infinite; }
 
-/* ===== 控制台：操作 / 等待 / 结算 ===== */
+.mh-name {
+  font-size: 13px; font-weight: 800; line-height: 1.15;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+.mh-id--right .mh-name { text-align: right; width: 100%; }
+.mh-score { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 800; color: #ffd76a; }
+.mh-score-ic { font-size: 12px; }
+
+.mh-tally { display: flex; gap: 4px; flex-wrap: wrap; }
+.mh-tally--right { justify-content: flex-end; }
+.tally {
+  display: inline-flex; align-items: center; gap: 1px;
+  font-size: 10px; font-weight: 700; color: #cfc8e6;
+  background: rgba(255, 255, 255, 0.07); border-radius: 6px; padding: 0 4px;
+}
+.tally-ic { font-size: 11px; }
+
+/* 中央：回合 + 环形倒计时 */
+.mh-center {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 0 2px;
+}
+.mh-round { font-size: 12px; font-weight: 800; white-space: nowrap; color: #e7e0ff; }
+.cd-ring {
+  width: 64px; height: 64px; border-radius: 50%;
+  display: grid; place-items: center;
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.cd-ring.urgent { animation: blink 0.7s infinite; }
+.cd-inner {
+  width: 50px; height: 50px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, #1c1730, #100c1d);
+  display: flex; align-items: center; justify-content: center;
+}
+.cd-num { font-size: 23px; font-weight: 900; }
+.cd-unit { font-size: 11px; font-weight: 700; color: #b39ddb; margin-left: 1px; }
+.cd-glyph { font-size: 22px; align-self: center; }
+.mh-status { font-size: 10px; color: #9a92b8; white-space: nowrap; }
+
+.arena-slot { position: relative; flex: 1; min-height: 180px; }
+
+/* ===== 出招揭示行（浮层：绝对定位叠在战斗区底部，不占布局/不抖动） ===== */
+.reveal-wrap {
+  position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 5;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  pointer-events: none;
+}
+.reveal {
+  position: relative;
+  width: 100%;
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px;
+  padding: 9px 14px; border-radius: 16px;
+  background: linear-gradient(180deg, #1a1f3e, #0c1024);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+/* 蓝→红 发光渐变描边（贴合设计稿） */
+.reveal::before {
+  content: ''; position: absolute; inset: -2px; border-radius: 18px; z-index: -1;
+  background: linear-gradient(90deg, #4d8cff 0%, #8a5cff 50%, #ff5a5a 100%);
+  filter: blur(3px); opacity: 0.85;
+}
+.rv-side { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.rv-side--opp { align-items: flex-end; }
+.rv-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; }
+.rv-side--me .rv-label  { color: #8fb6ff; }
+.rv-side--opp .rv-label { color: #ff9a9a; }
+.rv-move {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 18px; font-weight: 900; color: #fff;
+  padding: 6px 16px; border-radius: 11px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), inset 0 -2px 5px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+.rv-side--me .rv-move  { background: linear-gradient(180deg, #4f8cff, #2a5bc0); }
+.rv-side--opp .rv-move { background: linear-gradient(180deg, #ff6b6b, #c0392b); }
+.rv-move--wait {
+  background: rgba(255, 255, 255, 0.08) !important; color: #9a93b8 !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1) !important; animation: blink 1s infinite;
+}
+.rv-ic { font-size: 20px; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)); }
+.rv-vs {
+  font-size: 28px; font-weight: 900; font-style: italic; color: #fff;
+  text-shadow: 0 0 8px rgba(90, 140, 255, 0.9), 0 0 16px rgba(255, 80, 80, 0.7), 0 2px 3px rgba(0, 0, 0, 0.6);
+}
+.reveal-verdict {
+  font-size: 13px; font-weight: 800; text-align: center;
+  padding: 3px 14px; border-radius: 10px;
+  background: rgba(12, 14, 30, 0.92);
+}
+.rvv--good    { color: #6ee7a0; box-shadow: 0 0 0 1px rgba(76, 175, 80, 0.45); }
+.rvv--bad     { color: #ff7a7a; box-shadow: 0 0 0 1px rgba(255, 82, 82, 0.45); }
+.rvv--neutral { color: #cfc8e6; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15); }
+
+/* 浮层淡入淡出（轻微上浮，避免突兀） */
+.reveal-fade-enter-active, .reveal-fade-leave-active { transition: opacity 0.25s ease, transform 0.25s ease; }
+.reveal-fade-enter-from, .reveal-fade-leave-to { opacity: 0; transform: translateY(12px); }
+
+/* ===== 操作按钮 ===== */
 .control-deck {
-  padding: 10px 12px 4px;
+  padding: 10px 12px;
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.045);
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.3);
 }
+.hud-action { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 
-/* 动作按钮：一行 4 列（template v-for 透明，按钮直接成为 grid 子项） */
-.hud-action {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  min-height: 92px;
-}
-.hud-action > .wait-box,
-.hud-action > .result-card { grid-column: 1 / -1; }
-
+/* 整张卡为彩色渐变 + 立体高光/底影（与设计稿一致） */
 .act-btn {
+  position: relative;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 1px; padding: 10px 2px; border: none; border-radius: 13px;
-  color: #fff; cursor: pointer;
-  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.3);
-  transition: transform 0.1s, box-shadow 0.1s;
+  gap: 5px; padding: 12px 4px 10px; border: none;
+  border-radius: 10px; color: #fff; cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.28),
+    0 4px 0 rgba(0, 0, 0, 0.35),
+    0 6px 12px rgba(0, 0, 0, 0.4);
+  transition: transform 0.1s, box-shadow 0.1s, filter 0.15s;
 }
-.act-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 rgba(0, 0, 0, 0.3); }
-.act-btn--attack  { background: linear-gradient(135deg, #ff6b6b, #c0392b); }
-.act-btn--defend  { background: linear-gradient(135deg, #4da3ff, #2c6fb0); }
-.act-btn--charge  { background: linear-gradient(135deg, #ffb347, #e8890c); }
-.act-btn--counter { background: linear-gradient(135deg, #a78bfa, #7c3aed); }
-.act-icon { font-size: 24px; }
-.act-name { font-weight: 800; font-size: 14px; }
-.act-hint { font-size: 10px; opacity: 0.85; line-height: 1.1; }
+.act-btn--attack  { background: linear-gradient(180deg, #ff7d6e 0%, #d2382a 100%); }
+.act-btn--defend  { background: linear-gradient(180deg, #5cb6ff 0%, #2867bd 100%); }
+.act-btn--charge  { background: linear-gradient(180deg, #ffcb52 0%, #e07c0a 100%); }
+.act-btn--counter { background: linear-gradient(180deg, #b692ff 0%, #7a32e0 100%); }
 
-.wait-box {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  text-align: center; padding: 20px;
-  background: rgba(255, 255, 255, 0.04); border-radius: 14px;
+.act-btn:not(:disabled):active {
+  transform: translateY(3px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.28),
+    0 1px 0 rgba(0, 0, 0, 0.35),
+    0 2px 6px rgba(0, 0, 0, 0.4);
+}
+.act-btn:disabled { cursor: default; }
+.act-btn.dim { filter: saturate(0.7) brightness(0.62); opacity: 0.85; }
+.act-btn.selected {
+  filter: none; opacity: 1;
+  box-shadow:
+    0 0 0 3px #ffd54f,
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 4px 0 rgba(0, 0, 0, 0.35),
+    0 6px 14px rgba(0, 0, 0, 0.55);
 }
 
-/* 回合结算卡 */
-.result-card {
-  display: flex; flex-direction: column; align-items: center; gap: 6px;
-  text-align: center; padding: 12px 14px;
-  background: rgba(124, 58, 237, 0.12); border: 1px solid rgba(124, 58, 237, 0.4);
-  border-radius: 14px;
+/* 图标置于半透明深色内嵌框 */
+.act-frame {
+  width: 52px; height: 52px;
+  display: flex; align-items: center; justify-content: center;
 }
-.rc-exchange {
-  display: flex; align-items: center; justify-content: center; gap: 10px;
-  font-size: 14px; flex-wrap: wrap;
-}
-.rc-side--me  { color: #b9e0ff; }
-.rc-side--opp { color: #ffc9c9; }
-.rc-vs { font-size: 11px; font-weight: 800; color: #b39ddb; opacity: 0.8; }
-.rc-dmg { display: flex; gap: 14px; font-size: 14px; font-weight: 700; }
-.rc-hp--hurt { color: #ff6b6b; }
-.rc-hp--safe { color: #8ad6a0; }
-.rc-env { font-size: 12px; color: #ffb04d; }
-.rc-verdict {
-  font-size: 15px; font-weight: 800; margin-top: 2px;
-  padding: 2px 12px; border-radius: 10px;
-}
-.rc-verdict--good    { color: #6ee7a0; background: rgba(76, 175, 80, 0.15); }
-.rc-verdict--bad     { color: #ff7a7a; background: rgba(255, 82, 82, 0.15); }
-.rc-verdict--neutral { color: #cfc8e6; background: rgba(255, 255, 255, 0.07); }
+.act-icon { font-size: 38px; line-height: 1; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4)); }
+.act-name { font-weight: 900; font-size: 15px; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45); }
+.act-hint { font-size: 10px; opacity: 0.92; line-height: 1.1; text-align: center; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.4); }
 
 @keyframes blink { 50% { opacity: 0.3; } }
+@keyframes avatarGlow {
+  0%, 100% { box-shadow: 0 0 10px rgba(255, 193, 7, 0.7); }
+  50% { box-shadow: 0 0 18px rgba(255, 193, 7, 1); }
+}
 </style>

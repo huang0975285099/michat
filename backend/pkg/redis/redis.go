@@ -16,6 +16,7 @@ const (
 	OfflineMsgTTL      = 7 * 24 * time.Hour  // 离线消息 7天
 	ReauthChallengeTTL = 5 * time.Minute     // 挑战码有效期 5分钟
 	InviteCodeTTL      = 7 * 24 * time.Hour  // 邀请码有效期 7天
+	IronFistActionsTTL = 30 * time.Minute    // 铁拳对局 action 日志保留窗口（覆盖 60s 重连 + 极端情况）
 )
 
 // NewInMemory 启动一个进程内的内存 Redis（miniredis），返回连接它的 client。
@@ -43,9 +44,10 @@ func New(addr, password string, db int) (*redis.Client, error) {
 	return rdb, nil
 }
 
-func SessionKey(token string) string         { return "session:" + token }
-func SessionGenKey(chatID string) string     { return "session_gen:" + chatID }
-func OnlineKey(chatID string) string         { return "online:" + chatID }
-func OfflineKey(chatID string) string        { return "offline:" + chatID }
-func ReauthChallengeKey(nonce string) string { return "reauth_challenge:" + nonce }
-func InviteCodeKey(code string) string       { return "invite:" + code }
+func SessionKey(token string) string          { return "session:" + token }
+func SessionGenKey(chatID string) string      { return "session_gen:" + chatID }
+func OnlineKey(chatID string) string          { return "online:" + chatID }
+func OfflineKey(chatID string) string         { return "offline:" + chatID }
+func ReauthChallengeKey(nonce string) string  { return "reauth_challenge:" + nonce }
+func InviteCodeKey(code string) string        { return "invite:" + code }
+func IronFistActionsKey(roomID string) string { return "ironfist:actions:" + roomID }

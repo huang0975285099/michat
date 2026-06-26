@@ -12,6 +12,8 @@
     "lint": "eslint --ext .js,.vue src/"
   },
   "dependencies": {
+    "@babylonjs/core": "^9.14.0",
+    "@babylonjs/loaders": "^9.14.0",
     "@capacitor/android": "^8.3.1",
     "@capacitor/cli": "^8.3.1",
     "@capacitor/core": "^8.3.1",

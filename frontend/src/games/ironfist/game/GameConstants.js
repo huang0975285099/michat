@@ -7,6 +7,7 @@ export const PHASE = {
   LOCKED: 'locked',
   RESOLVING: 'resolving',
   WAITING_CONFIRM: 'waiting_confirm',
+  WAITING_RECONNECT: 'waiting_reconnect', // PvP：对手掉线，等待重连
   GAME_OVER: 'game_over',
 }
 
@@ -47,8 +48,13 @@ export const BOTH_CHARGED_LIMIT = 2   // 双方同时蓄力标记僵局上限
 
 // 回合时间
 export const ROUND_SECONDS = 30       // 决策倒计时
-export const CONFIRM_SECONDS = 15     // waiting_confirm 自动推进上限（防挂机）
 export const OPPONENT_GRACE_MS = 33_000 // PvP 收方等待对方动作宽限（30s + 3s）
+
+// 断线重连（方案 B：服务端 action 流暂存 + 本地重放）
+export const RECONNECT_WINDOW_MS = 60_000 // 对手掉线后等待重连上限：60 秒
+export const IRONFIST_ACTIONS_TTL_MS = 30 * 60 * 1000 // 与后端 IronFistActionsTTL 对齐：30 分钟
+// localStorage 持久化 key 前缀（用于本回合已选动作的续传）
+export const LS_PENDING_KEY = (roomId) => `ironfist:pending:${roomId}`
 
 // 伤害表：[玩家动作][对手动作] = { playerDmg, opponentDmg }
 // 注意：蓄力 ×2、残血强化、残血护盾不在此表中，由 resolveRound() 按乘区顺序额外计算

@@ -289,9 +289,14 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 	case "call_answer", "call_ice", "call_hangup", "call_reject":
 		h.handleCallRelay(c, msg.Type, msg.Payload)
 	case "game_invite", "game_accept", "game_reject", "game_ready",
-		"game_move", "game_bomb", "game_powerup", "game_death", "game_resign",
-		"ironfist_action", "ironfist_state_sync", "ironfist_reconnect":
+		"game_move", "game_bomb", "game_powerup", "game_death", "game_resign":
 		h.handleGameRelay(c, msg.Type, msg.Payload)
+	case "ironfist_action":
+		// 暂存到 Redis（断线重连用）+ 中继给对方
+		h.handleIronFistAction(c, msg.Payload)
+	case "ironfist_reconnect":
+		// 返回该房间完整 action 历史（ironfist_replay）
+		h.handleIronFistReconnect(c, msg.Payload)
 	default:
 		log.Printf("[ws] unknown message type %q from %s", msg.Type, c.ChatID)
 	}
@@ -866,9 +871,118 @@ func (h *Hub) handleGameRelay(from *Client, msgType string, payload json.RawMess
 		default:
 		}
 	}
+
+	// game_resign 时清理铁拳房间的 action 日志（若 payload 含 room_id）。
+	// 非铁拳对局 payload 不会有 room_id，跳过即可。
+	if msgType == "game_resign" {
+		var room struct {
+			RoomID string `json:"room_id"`
+		}
+		if json.Unmarshal(payload, &room) == nil && room.RoomID != "" {
+			ctx := context.Background()
+			h.redis.Del(ctx, pkgredis.IronFistActionsKey(room.RoomID))
+		}
+	}
 }
 
 func mustMarshal(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
+}
+
+// handleIronFistAction 暂存铁拳 action 到 Redis（断线重连用）并中继给对方。
+// 服务端不做任何游戏逻辑，仅追加存储 + 转发。详见 docs/ironfist.md 第十四节方案 B。
+func (h *Hub) handleIronFistAction(from *Client, payload json.RawMessage) {
+	var p struct {
+		To      string `json:"to"`
+		RoomID  string `json:"room_id"`
+		Round   int    `json:"round"`
+		Action  string `json:"action"`
+		TS      int64  `json:"ts"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil || !chatIDRe.MatchString(p.To) || p.RoomID == "" {
+		log.Printf("[ws] invalid ironfist_action from %s", from.ChatID)
+		return
+	}
+
+	// 存储项含 from，便于客户端重放时区分双方动作
+	entry := map[string]interface{}{
+		"round":  p.Round,
+		"action": p.Action,
+		"from":   from.ChatID,
+		"ts":     p.TS,
+	}
+	entryJSON, _ := json.Marshal(entry)
+
+	ctx := context.Background()
+	key := pkgredis.IronFistActionsKey(p.RoomID)
+	// RPUSH + 刷新 TTL：30 分钟从最后一次活动起算
+	pipe := h.redis.Pipeline()
+	pipe.RPush(ctx, key, entryJSON)
+	pipe.Expire(ctx, key, pkgredis.IronFistActionsTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
+		// 存储失败仅记录日志，不阻塞中继（本回合仍可进行，重连时该动作会缺失）
+		log.Printf("[ws] ironfist_action store failed: %v", err)
+	}
+
+	// 中继给对方（注入 from 字段）
+	m := map[string]interface{}{
+		"to":      p.To,
+		"room_id":  p.RoomID,
+		"round":   p.Round,
+		"action":  p.Action,
+		"ts":      p.TS,
+		"from":    from.ChatID,
+	}
+	fwd, _ := json.Marshal(Message{Type: "ironfist_action", Payload: mustMarshal(m)})
+
+	h.mu.RLock()
+	c, ok := h.clients[p.To]
+	h.mu.RUnlock()
+	if ok {
+		select {
+		case c.send <- fwd:
+		default:
+		}
+	}
+}
+
+// handleIronFistReconnect 返回该房间的完整 action 历史（ironfist_replay）。
+// 客户端收到后用 replayGame() 重放出当前状态，无状态分叉风险。
+func (h *Hub) handleIronFistReconnect(from *Client, payload json.RawMessage) {
+	var p struct {
+		RoomID string `json:"room_id"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil || p.RoomID == "" {
+		log.Printf("[ws] invalid ironfist_reconnect from %s", from.ChatID)
+		return
+	}
+
+	ctx := context.Background()
+	key := pkgredis.IronFistActionsKey(p.RoomID)
+	actions, err := h.redis.LRange(ctx, key, 0, -1).Result()
+	if err != nil {
+		log.Printf("[ws] ironfist_reconnect LRange failed: %v", err)
+		actions = []string{}
+	}
+
+	parsed := make([]interface{}, 0, len(actions))
+	for _, raw := range actions {
+		var obj interface{}
+		if json.Unmarshal([]byte(raw), &obj) == nil {
+			parsed = append(parsed, obj)
+		}
+	}
+
+	m := map[string]interface{}{
+		"room_id": p.RoomID,
+		"actions": parsed,
+	}
+	fwd, _ := json.Marshal(Message{Type: "ironfist_replay", Payload: mustMarshal(m)})
+
+	// 直接回送给请求方（不走对方）
+	select {
+	case from.send <- fwd:
+	default:
+	}
 }

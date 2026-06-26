@@ -55,6 +55,17 @@
                                          ┌────────┐      │
                                          │ lobby  │ ◄────┘
                                          └────────┘  backToLobby
+
+  playing 中刷新页面 / 掉线 → 重新挂载检测到 localStorage pending
+                │
+                ▼
+         ┌───────────────┐  ironfist_reconnect   ┌────────────────┐
+         │ reconnecting  │ ────────────────────► │ 服务端 LRANGE   │
+         │ (重连中视图)  │ ◄─────────────────── │ │ 回送 replay    │
+         └───────┬───────┘    ironfist_replay    └────────────────┘
+                 │
+                 ▼
+           恢复到 playing（断线前的 round 继续）
 ```
 
 ### PvE 人机对战
@@ -85,7 +96,17 @@ PvE 模式跳过邀请流程，直接从 `idle` 进入 `playing`。
 **战斗子状态（playing 内部）：**
 
 ```
-round_start → deciding（30秒倒计时）→ locked → resolving → waiting_confirm → round_end → round_start / game_over
+round_start → deciding（30秒倒计时）→ locked → resolving → waiting_confirm → round_start / game_over
+                                            │
+                                            │ 对方 grace 超时未到动作（PvP 掉线）
+                                            ▼
+                                  waiting_reconnect（60s 重连窗口，不允许放弃）
+                                            │
+                                  ┌─────────┴─────────┐
+                                  │                   │
+                            对方重连            60s 超时
+                                  │                   │
+                            回到本回合         game_over(win)
 ```
 
 | 子状态 | 说明 |
@@ -95,7 +116,10 @@ round_start → deciding（30秒倒计时）→ locked → resolving → waiting
 | `locked` | 双方动作已锁定，不可更改（一方选完等另一方） |
 | `resolving` | 结算克制关系、计算伤害、播放动画 |
 | `waiting_confirm` | 结算动画播放完毕，等待玩家点击"下一回合"确认 |
-| `round_end` | 更新 HP，检查胜负条件 |
+| `waiting_reconnect` | **PvP 专用**：对手掉线，等待 60s 重连。不允许放弃等待认输，必须等满窗口或对方重连。60s 超时 → 判对方负（己方 win）。详见第十四节方案 B。 |
+| `game_over` | 对局结束（HP=0 / 20 回合上限 / 僵局环境伤害致负 / 对方掉线判负 / 认输） |
+
+> **已移除 `round_end`**：原状态机定义了 `round_end` 但实际流程未使用（HP/胜负检查在 `waiting_confirm` 后直接推进或进入 `game_over`），现已从常量中清理。
 
 ---
 
@@ -190,7 +214,7 @@ round_start → deciding（30秒倒计时）→ locked → resolving → waiting
 | 有标记 + 蓄力被打断 | **标记保留**（不丢失原有标记） | 仅本次蓄力失败，不影响已积累的标记 |
 | 有标记 + 攻击 | 消耗标记，伤害 ×2，计时归零 | 标准消耗 |
 | 有标记 + 防御/反击 | 标记保留但计时 +1 | 不消耗，但仍老化（最多 2 回合，见上文失效规则） |
-| 双方同时有标记超过 2 回合 | 第 3 回合开始清除双方标记 | 见第九节僵局检测机制 C |
+| 双方同时有标记超过 2 回合 | 第 3 回合**结算阶段**清除双方标记（玩家第 3 回合决策时仍可见标记，结算时清零） | 见第九节僵局检测机制 C |
 
 > 关键变更：原设计中"带着蓄力标记再蓄力被打断会清空原标记"不符合玩家直觉，已修正为"仅本次蓄力失败，原标记保留"。
 
@@ -343,7 +367,7 @@ round_start → deciding（30秒倒计时）→ locked → resolving → waiting
 
 **机制 C：蓄力威慑打破**
 
-- 若双方同时持有蓄力标记超过 **2 回合** 都未消耗 → 第 3 回合开始时清除双方蓄力标记（避免"核威慑"永久僵局）
+- 若双方同时持有蓄力标记超过 **2 回合** 都未消耗 → 第 3 回合**结算阶段**清除双方蓄力标记（玩家第 3 回合决策时仍可见标记、可基于标记出招，结算时清零；避免"核威慑"永久僵局）
 
 ### 3. 状态追踪
 
@@ -992,10 +1016,12 @@ frontend/src/games/ironfist/
 │   ├── ResultPanel.vue           # 结算信息面板
 │   └── Lobby.vue                 # 大厅视图
 ├── game/
-│   ├── IronFistGame.js           # 游戏核心逻辑（状态机、结算）
-│   ├── GameConstants.js          # 常量定义（HP、伤害、时间等）
-│   ├── GameNet.js                # 网络通信（PvP 模式）
+│   ├── IronFistGame.js           # 游戏核心逻辑（状态机、结算、WAITING_RECONNECT、loadReplay）
+│   ├── GameConstants.js          # 常量定义（HP、伤害、时间、RECONNECT_WINDOW_MS、LS_PENDING_KEY 等）
+│   ├── GameNet.js                # 网络通信（PvP 模式，房间作用域过滤）
 │   ├── GameAI.js                 # AI 决策模块（PvE 模式）
+│   ├── resolve.js                # 结算核心（伤害表 + 乘区顺序 + 蓄力/残血/护盾）
+│   ├── replay.js                 # 方案 B 重放工具：从 action 历史重放出当前游戏状态
 │   └── three/                    # 3D 渲染模块
 │       ├── Renderer.js           # Babylon.js 引擎封装
 │       ├── SceneManager.js       # 场景管理（擂台、灯光、镜头）
@@ -1282,12 +1308,14 @@ if (tier.tier === 'unsupported') {
 
 | 方向 | 类型 | Payload | 说明 |
 |------|------|---------|------|
-| 双方 → 对方 | `ironfist_action` | `{ room_id, round, action, ts }` | 提交本回合动作 |
-| 双方 → 对方 | `ironfist_state_sync` | `{ room_id, round, hp, charged, ... }` | 状态同步（用于回合校验和断线恢复） |
-| 任意方 → 对方 | `ironfist_reconnect` | `{ room_id, last_round }` | 请求断线重连，附带自己最后确认的回合 |
-| 任意方 → 对方 | `game_resign` | `{ room_id }` | 认输 |
+| 双方 → 服务端 | `ironfist_action` | `{ to, room_id, round, action, ts }` | 提交本回合动作；服务端 RPUSH 落 Redis + 中继给对方 |
+| 双方 → 服务端 | `ironfist_reconnect` | `{ room_id }` | 请求重连：拉取本房间完整 action 历史 |
+| 服务端 → 请求方 | `ironfist_replay` | `{ room_id, actions: [...] }` | 返回该房间至今的全部动作日志（按时间顺序） |
+| 任意方 → 对方 | `game_resign` | `{ room_id }` | 认输（同时清理 Redis 中该房间的 action 日志） |
 
-> **已删除 `ironfist_ready`**：原协议中标注为"可选"且语义不明，实际结算只需 `ironfist_action` 即可推进。若需要"双方都准备好才开始下一回合"的语义，由 `ironfist_action` 的 round 字段对齐即可，无需额外消息。
+> **方案 B（事件溯源）核心：** 服务端只做"动作追加存储 + 中继转发"，不做任何游戏逻辑（HP/蓄力/胜负计算全在客户端）。断线重连时，断线方拉取完整 action 历史，本地用 `replayGame()` 重放出当前状态，无状态分叉风险。
+
+> **已删除 `ironfist_state_sync` / `ironfist_ready`**：方案 B 不再需要客户端互相同步状态。所有"事实"以服务端 Redis 中的 action 流为准，任意一方只要拿到同一份 action 列表重放，必然得到相同状态。
 
 **`ironfist_action` 详细定义：**
 
@@ -1295,47 +1323,35 @@ if (tier.tier === 'unsupported') {
 {
   type: 'ironfist_action',
   payload: {
-    room_id: 'abc123',        // 房间 ID
-    round: 3,                 // 回合数（从 1 开始，用于校验）
-    action: 'attack',         // 动作：attack / defend / charge / counter
-    ts: 1719123456789,        // 时间戳
+    to: 'chat_xxx',            // 对手的 chat_id（GameNet.send 自动注入）
+    room_id: 'abc123',         // 房间 ID（GameNet.send 自动注入）
+    round: 3,                  // 回合数（从 1 开始，用于校验）
+    action: 'attack',          // 动作：attack / defend / charge / counter
+    ts: 1719123456789,         // 时间戳
   }
 }
 ```
+
+服务端 `Hub.handleIronFistAction` 行为：
+1. 解析 payload，校验 `to` 是合法 chat_id 且 `room_id` 非空
+2. 追加存储项（含 `from` 字段，便于客户端重放时区分双方动作）到 Redis `ironfist:actions:{room_id}` 列表，使用 `RPUSH`
+3. 刷新该 key 的 TTL 为 `IronFistActionsTTL = 30 分钟`（从最后一次活动起算，足够覆盖 60s 重连窗口 + 极端情况）
+4. 中继给对方，注入 `from` 字段
 
 **结算流程：**
 
-1. 双方各自选择动作后发送 `ironfist_action`
-2. 收到对方动作后，**先校验 round 字段**（见下方回合校验）
-3. 校验通过后本地执行结算（无需等服务端）
-4. 播放动画，更新 HP
-5. 检查胜负，若继续则进入下一回合
+1. 双方各自选择动作后发送 `ironfist_action`（同时落本地 + 落服务端 Redis）
+2. 收到对方动作后，本地执行结算（无需等服务端）
+3. 播放动画，更新 HP
+4. 检查胜负，若继续则进入下一回合
 
 **回合校验（防状态错位）：**
 
-```js
-function onReceiveOpponentAction(msg) {
-  if (msg.round !== currentRound) {
-    // 回合不一致，发起状态同步
-    send('ironfist_state_sync', {
-      room_id,
-      round: currentRound,
-      hp: playerHP,
-      charged: playerCharged,
-      last_action: lastPlayerAction,
-    })
-    // 暂存对方动作，等状态对齐后再结算
-    pendingOpponentAction = msg
-    return
-  }
-  // round 一致，正常结算
-  resolveRound(msg.action)
-}
-```
-
-- 收到 round 不匹配的动作时，**不直接结算**，而是发起状态同步
-- 双方交换 `ironfist_state_sync` 后，以 round 较大的一方为准对齐
-- 若连续 3 次同步仍无法对齐 → 判定为不可恢复错误，提示玩家"网络异常，对战结束"
+客户端收到 `ironfist_action` 时按 round 分发：
+- `round === currentRound` → 直接结算（若双方动作齐）
+- `round === currentRound + 1` → 暂存到 `_pendingOppByRound`，下一回合取出
+- `round < currentRound` → 丢弃（过期，避免内存泄漏）
+- `round > currentRound + 1` → 丢弃（异常未来，避免内存泄漏）
 
 **超时处理：**
 
@@ -1343,13 +1359,32 @@ function onReceiveOpponentAction(msg) {
 - 对方 30 秒内未收到动作 → 视为对方选择"防御"
 - 超时方若持有蓄力标记，自动防御不会消耗标记
 
-**断线重连：**
+**断线重连（方案 B 事件溯源）：**
 
-- 玩家断线后，前端检测到 WebSocket 重连成功 → 发送 `ironfist_reconnect`，附带自己最后确认的回合号
-- 对方收到后回复 `ironfist_state_sync`，包含完整游戏状态（HP、蓄力标记、回合数、僵局计数器）
-- 断线方根据同步状态恢复本地状态机，从断线回合继续
-- **断线超时**：断线后 30 秒内未重连 → 判断断线方负
-- 重连后双方都需重新发送当前回合的 `ironfist_action`（避免动作丢失）
+- **重连窗口：60 秒**。对手掉线后，等待方进入 `WAITING_RECONNECT` 阶段，最多等待 60 秒。
+- **不允许放弃等待认输**：等待方在 60 秒内只能等待，不能主动结束对局。**PvP 一旦开始，就一定要有一个比赛的结果。**
+- 60 秒内未重连 → 判断掉线方负（等待方 `gameover: 'win'`）。
+- **断线方恢复流程**（页面刷新后）：
+  1. 前端挂载时检测 `localStorage[ironfist:pending:{room_id}]` 是否存在未完成对局
+  2. 若存在 → 显示「正在重连对局…」视图，发送 `ironfist_reconnect`
+  3. 服务端 `Hub.handleIronFistReconnect` 用 `LRANGE 0 -1` 拉取完整 action 列表，回送 `ironfist_replay`
+  4. 客户端 `IronFistGame.loadReplay()` 用 `replayGame()` 重放出当前状态：
+     - 已完成回合数（结算过的双方动作）
+     - 本回合进行中状态（双方动作未齐 → 取出我方/对方已选动作）
+  5. localStorage 兜底：若断线前 `ironfist_action` 未送达服务端，从 `localStorage[ironfist:pending:{room_id}]` 恢复我方动作并补发
+  6. 恢复到断线时的 round，继续对局
+- **存储 TTL**：Redis 中 `ironfist:actions:{room_id}` 保留 30 分钟（`IronFistActionsTTL`），覆盖 60s 重连窗口 + 极端情况。
+- **清理**：`game_resign` 或正常 gameover 时清理 Redis 该房间 action 日志 + localStorage pending action。
+
+**方案 B 与状态同步方案的对比（为何选 B）：**
+
+| 维度 | 状态同步（已废弃） | 方案 B：事件溯源（已采用） |
+|------|-------------------|---------------------------|
+| 服务端逻辑 | 仅转发 | 追加存储 + 转发 |
+| 断线恢复 | 依赖对方主动回送状态（对方若也掉线则卡死） | 主动从服务端拉取 action 历史，自洽恢复 |
+| 状态分叉风险 | 双方状态可能不一致 | 同一份 action 流重放必然一致 |
+| 持久化 | 无 | Redis（30 分钟 TTL） |
+| 客户端复杂度 | 状态同步协议 + 校验 | 重放函数 + localStorage 兜底 |
 
 ### PvP 一致性补强（确定性同步的两个关键约束）
 
@@ -1361,7 +1396,7 @@ function onReceiveOpponentAction(msg) {
 
 - 玩家点"下一回合"后，本地从 `waiting_confirm` → `round_start(round+1)`，并把下一回合的动作锁定流程激活。
 - **不需要为"确认"单独发消息**：对方进入下一回合的标志，就是收到对方 `ironfist_action` 且其 `round === 本地round + 1`。
-- `waiting_confirm` 自身也设 **超时上限（建议 15 秒）**：超时未点自动进入下一回合，避免单方挂机。
+- `waiting_confirm` 自身也设 **自动推进**：结算展示 `ROUND_HOLD_MS`（1.9s）/ `END_HOLD_MS`（1.7s，终局）后自动 `confirmNextRound()`，无需玩家手动点击，也避免单方挂机卡死。原 `CONFIRM_SECONDS = 15` 死代码常量已移除（自动推进已覆盖防挂机语义）。
 - 因此回合推进的真正 barrier 是"双方的 `round+1` 动作都到齐才结算"，由 `ironfist_action.round` 字段对齐（见第十四节回合校验），与是否手动点确认解耦。
 
 **2. 超时动作以"发送方本地判定"为唯一真相（解决两端分叉）**
@@ -1392,7 +1427,7 @@ const PHASE = {
   LOCKED: 'locked',                 // 动作锁定（一方选完等另一方）
   RESOLVING: 'resolving',           // 结算动画
   WAITING_CONFIRM: 'waiting_confirm', // 等待玩家确认结算结果
-  ROUND_END: 'round_end',           // 回合结束
+  WAITING_RECONNECT: 'waiting_reconnect', // PvP：对手掉线，等待 60s 重连（方案 B）
   GAME_OVER: 'game_over',           // 游戏结束
 }
 
@@ -1415,7 +1450,7 @@ const DAMAGE_TABLE = {
     attack:   { playerDmg: 12, opponentDmg: 12 },
     defend:   { playerDmg: 0,  opponentDmg: 5  },   // 防御减伤 60%（Math.ceil(12×0.4)=5）
     charge:   { playerDmg: 0,  opponentDmg: 12 },    // 打断蓄力
-    counter:  { playerDmg: 18, opponentDmg: 0  },     // 被反击
+    counter:  { playerDmg: 20, opponentDmg: 0  },     // 被反击（反击成功方造成 20 伤害，见第五节/第六节）
   },
   defend: {
     attack:   { playerDmg: 5,  opponentDmg: 0  },    // 成功防御
@@ -1574,7 +1609,7 @@ function resolveRound(playerAction, opponentAction, gameState) {
 >
 > ⚠️ 早期设计曾用 `return BASE_DAMAGE × 2`（恒为 24），这会**丢掉防御减伤**，把"蓄力攻击打防御者"错算成 24（应为 10）。单元测试已覆盖此用例，实现请勿回退到 BASE 重算方案。
 >
-> **修正（蓄力攻击被克制）**：蓄力加成必须加 `result.opponentDmg > 0` 守卫。否则带蓄力标记的攻击撞上"反击"时（`attack/counter` 的 `opponentDmg` 本应为 0、攻击方吃 18 反击伤），`applyCharge` 会无条件把对手伤害写成 24，让反击成功的一方反而挨打。加守卫后：蓄力攻击被反击 = 攻击方吃 18、对手 0 伤、蓄力标记消耗（committed 攻击的代价），符合直觉。
+> **修正（蓄力攻击被克制）**：蓄力加成必须加 `result.opponentDmg > 0` 守卫。否则带蓄力标记的攻击撞上"反击"时（`attack/counter` 的 `opponentDmg` 本应为 0、攻击方吃 20 反击伤），`applyCharge` 会无条件把对手伤害写成 24，让反击成功的一方反而挨打。加守卫后：蓄力攻击被反击 = 攻击方吃 20、对手 0 伤、蓄力标记消耗（committed 攻击的代价），符合直觉。
 >
 > 但由于 `DAMAGE_TABLE` 中已包含防御减伤结果，为避免重复减伤，`resolveRound` 需要区分"基础伤害"和"已减伤伤害"。完整实现建议将 `DAMAGE_TABLE` 拆分为"基础伤害表"和"减伤判定"，由 `resolveRound` 统一按乘区顺序计算。MVP 阶段可保持现有 `DAMAGE_TABLE` + `applyCharge` 的简化方案，因为数值结果一致。
 
@@ -1636,16 +1671,25 @@ IronFistPage.vue 包含 4 个视图：
 
 ## 十七、后端改动
 
-### 1. Hub 消息中继
+### 1. Hub 消息中继（方案 B）
 
-在 `backend/internal/ws/hub.go` 的 `dispatch` 方法中，`game_*` 类型已统一走 `handleGameRelay`，铁拳的消息需要新增处理：
+在 `backend/internal/ws/hub.go` 的 `dispatch` 方法中，`game_*` 类型（含 `game_resign`）走 `handleGameRelay`，铁拳专用消息走独立 handler：
 
 ```go
-case "ironfist_action", "ironfist_state_sync", "ironfist_reconnect":
+case "game_invite", "game_accept", "game_reject", "game_ready",
+    "game_move", "game_bomb", "game_powerup", "game_death", "game_resign":
     h.handleGameRelay(c, msg.Type, msg.Payload)
+case "ironfist_action":
+    // 暂存到 Redis（断线重连用）+ 中继给对方
+    h.handleIronFistAction(c, msg.Payload)
+case "ironfist_reconnect":
+    // 返回该房间完整 action 历史（ironfist_replay）
+    h.handleIronFistReconnect(c, msg.Payload)
 ```
 
-> 注意：`ironfist_ready` 已从协议中删除，无需处理。
+**`handleGameRelay` 中的铁拳清理钩子**：当 `msg.Type == "game_resign"` 且 payload 含 `room_id` 时，`Del` 掉 Redis 中 `ironfist:actions:{room_id}`，避免废弃对局的 action 日志残留。
+
+> 方案 B 已删除 `ironfist_state_sync` / `ironfist_ready`：服务端不做游戏逻辑，仅追加存储 + 转发；状态恢复由客户端 `replayGame()` 重放完成。
 
 ### 2. 胜场记录接口（MVP）
 
@@ -1822,7 +1866,7 @@ case "ironfist_action", "ironfist_state_sync", "ironfist_reconnect":
 | 蓄力攻击被反击时算出 24 伤（应 0） | 蓄力加成加 `opponentDmg > 0` 守卫 | 第十五节 |
 | 决胜回合文字"每回合+5"与代码"每5回合+5"不符 | 统一为逐回合递增 `5×(连续无伤回合−4)`，当回合结算即扣 | 第九节、第十五节 |
 | 机制 B"双方≤5HP双败"未实现 | `resolveRound` 补 `doubleLose` 分支 | 第九节、第十五节 |
-| `waiting_confirm` 一方挂机卡死全场 | 确认设 15s 超时 + 以 `round+1` 动作到齐为推进 barrier | 第十四节 |
+| `waiting_confirm` 一方挂机卡死全场 | 自动推进（`ROUND_HOLD_MS`/`END_HOLD_MS`）+ 以 `round+1` 动作到齐为推进 barrier | 第十四节 |
 | PvP 超时两端各判分叉致 HP 不一致 | 超时动作以发送方本地判定为唯一真相，收方放宽到 33s | 第十四节 |
 | `game_resign`/退出战绩处理未定义 | 退出等同认输，各端本地结算后上报 | 第十四节 |
 | `applyCharge` 返回 `BASE×2` 丢失防御减伤 | 改为对表内值 `×2`（5→10 而非 24），单测锁死 | 第十五节 |
@@ -1878,8 +1922,20 @@ props: {
 | 阶段 | 视觉形态 | 人物表现 | 工作量 | 状态 |
 |------|----------|----------|--------|------|
 | **一期** | 2D-CSS | emoji 角色 + CSS 位移/受击闪白/蓄力光环/屏幕震动/伤害数字 | ~1 周 | ✅ 已完成 |
-| **二期** | 2.5D 精灵 | 序列帧立绘（每动作 4~8 帧），billboard 站位，受击/蓄力/反击各一套帧动画 | ~1.5 周 + 选素材 | 待开始 |
-| **三期** | 3D | Babylon.js Low Poly 角色 + 骨骼动画（见第十二节动作清单），镜头/粒子/后处理 | ~3~6 周（强依赖美术） | 待开始 |
+| **二期** | Phaser 单 canvas（程序化矢量斗士） | Graphics 拼装 Q 版拳手 + tween 骨骼动画（前冲/格挡/蓄力/受击/闪避/踉跄）+ 粒子打击火花 + 镜头震动 + 暴击伤害数字 | ~1 周 | ✅ 已完成 |
+| **二期+** | 2.5D 精灵帧（可选增强） | 用 CC0 序列帧立绘替换矢量斗士；仅需替换 `Fighter.js`，BattleScene/HUD 不变 | + 选素材 | 待素材就位 |
+| **三期** | 3D（Babylon.js，方案B） | Mixamo 角色 + 骨骼动画(glb)；glb 缺省时自动回退**占位低多边形机甲拳手**(几何体+transform 补间)。镜头震动/伤害飘字/蓄力光环/蓝红边缘光已就位 | 引擎已搭，待 glb 美术 | 🟡 进行中（管线已通，等 Mixamo glb） |
+
+> **三期实现说明（方案B）**：新增依赖 `@babylonjs/core` + `@babylonjs/loaders`（懒加载进 ironfist 路由 chunk，不影响主包）。
+> 角色来源选定 **Mixamo 自带角色**先跑通：用户在 Mixamo 选角色+下动作 → Blender 合并导出 `fighter.glb` → 丢到 `public/games/ironfist/fighter.glb`，游戏自动加载并按 clip 名播放；**文件不存在则自动用占位斗士**，先跑通再补皮。
+> glb 契约（clip 名 `idle/attack/defend/charge/hit/dodge/ko`、朝向 +Z）见 `frontend/public/games/ironfist/README.md`。
+> 关键文件：`game/babylon/Fighter3D.js`（占位+glb 双路径，自包含可替换）、`game/babylon/BattleRenderer3D.js`（场景/相机/灯光/回合编排/伤害飘字）、`components/BattleArena3D.vue`（Vue 包装，桥接 props→控制器）。
+> 渲染层可一行回退：`IronFistPage.vue` 改 import 即可切回二期 Phaser 或一期 CSS。
+
+> **二期实现说明**：复用项目已有的 `phaser@3` 依赖（与炸弹人同款 `createXxxGame(container, opts)` 工厂 + Scene 模式）。
+> 渲染无关引擎 `IronFistGame` 与 HUD 完全未改——新增 `BattleArenaPhaser.vue` 仍消费一期同一组 props（`result` / 蓄力态），与 `BattleArena.vue` 可一行互换。
+> 角色采用**程序化矢量**而非下载精灵图：当前环境无法可靠获取二进制图集，且矢量斗士可立即交付/验证、零素材依赖；待 CC0 素材就位后只改 `Fighter.js` 即升级为精灵帧（见"二期+"行）。
+> 关键文件：`game/Fighter.js`（矢量斗士，自包含可替换）、`game/scenes/BattleScene.js`（舞台+回合编排）、`game/BattleRenderer.js`（工厂）、`components/BattleArenaPhaser.vue`（Vue 包装，桥接 props→scene）。
 
 ### 3. 人物动作的逐期对应（保证不断层）
 
