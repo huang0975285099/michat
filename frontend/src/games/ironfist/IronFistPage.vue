@@ -167,7 +167,7 @@
       <!-- 3D 战斗区（出招揭示行作为浮层叠在底部，不占布局、不抖动） -->
       <div class="arena-slot">
         <BattleArena :result="lastResult" :player-charged="pCharged" :opponent-charged="oCharged"
-          :opponent-emoji="opponentEmoji" />
+          :opponent-emoji="opponentEmoji" @impact="onArenaImpact" />
       </div>
 
         <transition name="reveal-fade">
@@ -508,12 +508,11 @@ function setupEngineListeners() {
       round: round.value, player: r.playerAction, opponent: r.opponentAction,
       pDmg: r.playerDmg, oDmg: r.opponentDmg,
     })
-    pHP.value = r.playerHP
-    oHP.value = r.opponentHP
     pCharged.value = r.playerCharged
     oCharged.value = r.opponentCharged
-    // 受击 HUD 反馈：本回合谁掉血谁抖动+红闪
-    triggerHitFeedback(r.playerDmg > 0, r.opponentDmg > 0)
+    // 扣血 + 头像抖动延到「3D 拳头打实那一刻」由战斗区 @impact 回调触发（onArenaImpact），
+    // 与命中特效/飘字同帧呈现；无人掉血的回合不会有 impact，HP 无变化直接同步即可。
+    if (r.playerDmg <= 0 && r.opponentDmg <= 0) { pHP.value = r.playerHP; oHP.value = r.opponentHP }
     clearTimeout(confirmTimer)
     const koEnd = r.gameResult === 'win' || r.gameResult === 'lose' || r.gameResult === 'doubleLose'
     const holdMs = r.gameResult ? (koEnd ? END_HOLD_KO_MS : END_HOLD_MS) : ROUND_HOLD_MS
@@ -625,6 +624,15 @@ function triggerHitFeedback(meHurt, oppHurt) {
     clearTimeout(oppHitTimer)
     oppHitTimer = setTimeout(() => { oppHit.value = false }, 460)
   }
+}
+
+// 3D 拳头打实那一刻由战斗区 @impact 回调：此刻才扣血 + 头像抖动，
+// 让 HUD 反馈与 3D 命中特效/飘字同帧，不再抢在出拳之前。
+function onArenaImpact(r) {
+  if (!r) return
+  pHP.value = r.playerHP
+  oHP.value = r.opponentHP
+  triggerHitFeedback(r.playerDmg > 0, r.opponentDmg > 0)
 }
 
 // ── beforeunload：刷新/关闭页面时不发 game_resign ───────────────────────
@@ -845,7 +853,6 @@ function goHome() { router.push('/games') }
 }
 .mh-avatar--me  { border: 3px solid #5b8cff; box-shadow: 0 0 12px rgba(91, 140, 255, 0.7), inset 0 0 8px rgba(91, 140, 255, 0.35); }
 .mh-avatar--opp { border: 3px solid #ff5a5a; box-shadow: 0 0 12px rgba(255, 90, 90, 0.7), inset 0 0 8px rgba(255, 90, 90, 0.35); }
-.mh-avatar.charged { border-color: #ffca28; animation: avatarGlow 1.1s ease-in-out infinite; }
 
 .mh-name {
   font-size: 13px; font-weight: 800; line-height: 1.15;
@@ -1053,8 +1060,4 @@ function goHome() { router.push('/games') }
 .act-hint { font-size: 10px; opacity: 0.92; line-height: 1.1; text-align: center; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.4); }
 
 @keyframes blink { 50% { opacity: 0.3; } }
-@keyframes avatarGlow {
-  0%, 100% { box-shadow: 0 0 10px rgba(255, 193, 7, 0.7); }
-  50% { box-shadow: 0 0 18px rgba(255, 193, 7, 1); }
-}
 </style>

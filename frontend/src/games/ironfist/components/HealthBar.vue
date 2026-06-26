@@ -62,18 +62,26 @@
           class="hb-shine-rect"
           :style="{ 'clip-path': fillClip }"
         />
+
+        <!-- 受击白闪：命中瞬间血量区域闪一下再淡出（key 变化强制重放动画） -->
+        <rect
+          v-if="flash" :key="flashKey"
+          x="0" y="0" width="100" height="18" rx="9"
+          fill="#fff" class="hb-flash-rect"
+          :style="{ 'clip-path': fillClip }"
+        />
         <linearGradient id="shineGrad" x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" stop-color="rgba(255,255,255,0.45)" />
           <stop offset="100%" stop-color="rgba(255,255,255,0)" />
         </linearGradient>
       </svg>
-      <span class="hb-num">{{ Math.max(0, hp) }}</span>
+      <span class="hb-num" :class="{ 'hb-num--hit': hit }">{{ Math.max(0, Math.round(displayHp)) }}</span>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, watch, useId } from 'vue'
+import { computed, ref, watch, useId, onUnmounted } from 'vue'
 
 const props = defineProps({
   name: { type: String, default: '' },
@@ -125,14 +133,33 @@ const ghostClip = computed(() =>
     : `inset(0 ${rightCut.value}% 0 0)`
 )
 
-// 受击瞬间抖动一下血条
+// 受击反馈：抖动 + 白闪 + 数字滚动扣减
 const hit = ref(false)
+const flash = ref(false)
+const flashKey = ref(0)
+const displayHp = ref(props.hp)
+let hitTimer = null, flashTimer = null, rafId = null
+
 watch(() => props.hp, (now, prev) => {
   if (now < prev) {
     hit.value = true
-    setTimeout(() => { hit.value = false }, 360)
+    clearTimeout(hitTimer); hitTimer = setTimeout(() => { hit.value = false }, 360)
+    flash.value = true; flashKey.value++
+    clearTimeout(flashTimer); flashTimer = setTimeout(() => { flash.value = false }, 300)
   }
+  // 数字从旧值 ease-out 滚到新值，与血条收缩同步（而非瞬间跳变）
+  cancelAnimationFrame(rafId)
+  const from = displayHp.value, to = now, t0 = performance.now(), dur = 420
+  const step = () => {
+    const k = Math.min(1, (performance.now() - t0) / dur)
+    displayHp.value = from + (to - from) * (1 - Math.pow(1 - k, 3))
+    if (k < 1) rafId = requestAnimationFrame(step)
+    else displayHp.value = to
+  }
+  rafId = requestAnimationFrame(step)
 })
+
+onUnmounted(() => { cancelAnimationFrame(rafId); clearTimeout(hitTimer); clearTimeout(flashTimer) })
 </script>
 
 <style scoped>
@@ -182,6 +209,13 @@ watch(() => props.hp, (now, prev) => {
   pointer-events: none;
 }
 
+/* 受击白闪层：盖在主血条上，0.3s 提亮后淡出（screen 混合让它读作"高光"而非纯白块） */
+.hb-flash-rect {
+  pointer-events: none;
+  mix-blend-mode: screen;
+  animation: hbFlash 0.3s ease-out forwards;
+}
+
 .hb-num {
   position: absolute; top: 50%; left: 8px; transform: translateY(-50%);
   font-size: 11px; font-weight: 800; color: #fff;
@@ -189,6 +223,7 @@ watch(() => props.hp, (now, prev) => {
   z-index: 1; pointer-events: none;
 }
 .hb-row--right .hb-num { left: auto; right: 8px; }
+.hb-num--hit { animation: numPunch 0.3s ease-out; }
 
 .charge-pop-enter-active { transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); }
 .charge-pop-enter-from { opacity: 0; transform: scale(0.4); }
@@ -200,6 +235,11 @@ watch(() => props.hp, (now, prev) => {
   50% { opacity: 1; filter: drop-shadow(0 0 10px rgba(255, 193, 7, 1)); }
 }
 @keyframes critPulse { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.4); } }
+@keyframes hbFlash { 0% { opacity: 0.75; } 100% { opacity: 0; } }
+@keyframes numPunch {
+  0% { transform: translateY(-50%) scale(1.5); color: #fff5b0; }
+  100% { transform: translateY(-50%) scale(1); color: #fff; }
+}
 @keyframes hbShake {
   0%, 100% { transform: translateX(0); }
   25% { transform: translateX(-3px); } 75% { transform: translateX(3px); }

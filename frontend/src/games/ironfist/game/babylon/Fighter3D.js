@@ -121,8 +121,8 @@ export class Fighter3D {
     const tex = new BABYLON.DynamicTexture('auraTex_' + this.side, 64, s, false)
     const ctx = tex.getContext()
     const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32)
-    g.addColorStop(0, 'rgba(255,255,255,1)')
-    g.addColorStop(0.5, 'rgba(255,255,255,0.5)')
+    g.addColorStop(0, 'rgba(255,255,255,0.95)')
+    g.addColorStop(0.35, 'rgba(255,255,255,0.35)')
     g.addColorStop(1, 'rgba(255,255,255,0)')
     ctx.fillStyle = g; ctx.fillRect(0, 0, 64, 64)
     tex.hasAlpha = true; tex.update()
@@ -133,21 +133,25 @@ export class Fighter3D {
     emitNode.position.y = 0.9
 
     // 火焰气场（超级赛亚人式）：圆柱定向发射 + 拉伸 billboard → 沿速度拉成上窜火舌，包裹全身
-    const ps = new BABYLON.ParticleSystem('auraPs_' + this.side, 360, s)
+    const ps = new BABYLON.ParticleSystem('auraPs_' + this.side, 640, s)
     ps.particleTexture = tex
     ps.emitter = emitNode
-    ps.createDirectedCylinderEmitter(0.45, 1.7, 0.5,
+    ps.createDirectedCylinderEmitter(0.42, 1.7, 0.5,
       new BABYLON.Vector3(-0.06, 1, -0.06),        // 方向：基本朝上，带极小散开
       new BABYLON.Vector3(0.06, 1, 0.06))
-    ps.color1 = new BABYLON.Color4(c.r, c.g, c.b, 1)
-    ps.color2 = new BABYLON.Color4(Math.min(c.r * 1.4, 1), Math.min(c.g * 1.3, 1), Math.min(c.b * 1.2, 1), 1)
-    ps.colorDead = new BABYLON.Color4(c.r, c.g, c.b, 0)
-    ps.minSize = 0.10; ps.maxSize = 0.26
-    ps.minLifeTime = 0.35; ps.maxLifeTime = 0.7
-    ps.emitRate = 200
+    // 颜色随寿命：基部亮、尖端淡出（饱和阵营色，密集叠加也不发白）
+    ps.addColorGradient(0.0, new BABYLON.Color4(c.r * 0.95, c.g * 0.95, c.b * 0.95, 0.9))
+    ps.addColorGradient(0.5, new BABYLON.Color4(c.r, c.g, c.b, 0.65))
+    ps.addColorGradient(1.0, new BABYLON.Color4(c.r * 0.5, c.g * 0.5, c.b * 0.5, 0.0))
+    // 尺寸随寿命：基部小 → 中段鼓起 → 尖端收（火舌形）
+    ps.addSizeGradient(0.0, 0.10)
+    ps.addSizeGradient(0.55, 0.34)
+    ps.addSizeGradient(1.0, 0.04)
+    ps.minLifeTime = 0.45; ps.maxLifeTime = 0.95   // 寿命更长 = 火舌更高
+    ps.emitRate = 420                              // 更密
     ps.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD
-    ps.gravity = new BABYLON.Vector3(0, 3.0, 0)    // 持续上窜
-    ps.minEmitPower = 2.2; ps.maxEmitPower = 4.2
+    ps.gravity = new BABYLON.Vector3(0, 3.4, 0)    // 持续上窜
+    ps.minEmitPower = 2.2; ps.maxEmitPower = 4.4
     ps.updateSpeed = 0.02
     ps.billboardMode = BABYLON.ParticleSystem.BILLBOARDMODE_STRETCHED  // 沿速度拉伸 = 火舌
     this.auraPs = ps
@@ -155,6 +159,7 @@ export class Fighter3D {
   }
 
   placeAt(pos, rotY) {
+    this._down = false                      // 新对局(重新摆位)清除倒地态
     this.home = pos.clone()
     this.baseRotY = rotY
     this.root.position.copyFrom(pos)
@@ -167,17 +172,28 @@ export class Fighter3D {
     this._charged = on
     // 全身火焰气场
     if (on) this.auraPs?.start(); else this.auraPs?.stop()
-    // 身上的光辉：蓄力时给身体材质叠一层 aura emissive（GlowLayer 让轮廓发光）。
-    // 记录"静息 emissive"，供受击闪白后正确还原（蓄力中还原到 aura 色，否则还原到原色）。
-    if (this._flashMats?.length) {
-      const c = this.pal.aura
-      this._restEmis = this._flashMats.map((_m, i) =>
-        on ? new BABYLON.Color3(c.r * 0.5, c.g * 0.5, c.b * 0.5) : this._flashBase[i])
-      this._flashMats.forEach((m, i) => { m.emissiveColor = this._restEmis[i] })
+
+    // 身上的光辉：蓄力时身体 emissive 一呼一吸地脉动（GlowLayer 让轮廓发光，像"充能"）
+    if (this._glowObs) { this.scene.onBeforeRenderObservable.remove(this._glowObs); this._glowObs = null }
+    if (!this._flashMats?.length) return
+    const c = this.pal.aura
+    if (on) {
+      this._restEmis = this._flashMats.map(() => new BABYLON.Color3(c.r * 0.8, c.g * 0.8, c.b * 0.8))
+      const t0 = performance.now()
+      this._glowObs = this.scene.onBeforeRenderObservable.add(() => {
+        if (this._hitFlashing) return  // 受击闪白时让出，不被脉动覆盖
+        const p = 0.55 + 0.45 * Math.sin((performance.now() - t0) * 0.006)  // 0.1‥1
+        const k = 0.45 + 0.55 * p
+        this._flashMats.forEach((m) => { m.emissiveColor = new BABYLON.Color3(c.r * 0.85 * k, c.g * 0.85 * k, c.b * 0.85 * k) })
+      })
+    } else {
+      this._restEmis = this._flashMats.map((_m, i) => this._flashBase[i])
+      this._flashMats.forEach((m, i) => { m.emissiveColor = this._flashBase[i].clone() })
     }
   }
 
   resetToIdle() {
+    if (this._down) return                  // 已倒地，保持不起身
     if (this.hasModel) {
       this._playClip('idle', true)
       return
@@ -192,9 +208,10 @@ export class Fighter3D {
 
   // ── 动作 ───────────────────────────────────────────────
   playAction(name) {
+    if (this._down) return                  // 已倒地，不再出招
     if (this.hasModel) {
       const clip = CLIP[name] || 'idle'
-      this._playClip(clip, false, () => this._playClip('idle', true), CLIP_SPEED[clip] || 1)
+      this._playClip(clip, false, () => { if (!this._down) this._playClip('idle', true) }, CLIP_SPEED[clip] || 1)
       return
     }
     const s = this.scene, h = this.home, f = this.faceSign
@@ -223,8 +240,9 @@ export class Fighter3D {
   }
 
   reactHit() {
+    if (this._down) return                  // 已倒地，不再播受击
     if (this.hasModel) {
-      this._playClip('hit', false, () => this._playClip('idle', true), CLIP_SPEED.hit)
+      this._playClip('hit', false, () => { if (!this._down) this._playClip('idle', true) }, CLIP_SPEED.hit)
     } else {
       const h = this.home, f = this.faceSign
       tween(this.scene, this.root, 'position.x', [{ frame: 0, value: h.x }, { frame: 4, value: h.x - f * 0.32 }, { frame: 14, value: h.x }])
@@ -233,9 +251,13 @@ export class Fighter3D {
   }
 
   knockout() {
+    this._down = true                       // 已倒地：此后一切"回到 idle"都让路，保持倒地
+    this.scene.stopAnimation(this.root)     // 取消前冲/退回补间，原地倒下不滑步
     if (this.hasModel) {
-      this.scene.stopAnimation(this.root)  // 取消前冲/退回补间，原地倒下不滑步
-      this._playClip('ko', false)
+      // 清掉上一动作组的结束回调，避免它触发循环 idle 把人"拉起来"
+      if (this._current) { this._current.onAnimationGroupEndObservable.clear(); this._current.stop() }
+      this._current = null
+      this._playClip('ko', false)           // 播一次，停在倒地末帧
       return
     }
     tween(this.scene, this.root, 'rotation.z', [{ frame: 0, value: 0 }, { frame: 22, value: this.faceSign * 1.45 }])
@@ -263,9 +285,11 @@ export class Fighter3D {
 
   _flash() {
     if (!this._flashMats?.length) return
+    this._hitFlashing = true   // 暂停蓄力脉动，让受击红闪显示出来
     this._flashMats.forEach((m) => { m.emissiveColor = new BABYLON.Color3(1, 0.55, 0.5) })
     setTimeout(() => {
-      this._flashMats.forEach((m, i) => { m.emissiveColor = (this._restEmis && this._restEmis[i]) || this._flashBase[i] })
+      this._hitFlashing = false
+      this._flashMats.forEach((m, i) => { m.emissiveColor = ((this._restEmis && this._restEmis[i]) || this._flashBase[i]).clone() })
     }, 130)
   }
 

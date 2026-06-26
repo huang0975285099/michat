@@ -21,6 +21,9 @@ const props = defineProps({
   opponentEmoji: { type: String, default: '🤖' },
 })
 
+// 拳头打实那一刻由渲染器回调上来，转成事件让父级（IronFistPage）同步扣血/头像抖动
+const emit = defineEmits(['impact'])
+
 const wrapRef = ref(null)
 const canvasRef = ref(null)
 let ctrl = null
@@ -36,6 +39,7 @@ onMounted(async () => {
       c.setCharge(props.playerCharged, props.opponentCharged)
       if (pendingResult) { c.playRound(pendingResult); pendingResult = null }
     },
+    onImpact: (r) => emit('impact', r),
   })
   // 容器尺寸变化时重置引擎视口
   ro = new ResizeObserver(() => ctrl?.resize())
