@@ -113,14 +113,45 @@ export class Fighter3D {
   }
 
   _buildAura() {
+    try {
     const s = this.scene
-    const aura = BABYLON.MeshBuilder.CreateTorus('aura_' + this.side, { diameter: 1.7, thickness: 0.09, tessellation: 36 }, s)
-    const am = new BABYLON.StandardMaterial('am_' + this.side, s)
-    am.emissiveColor = this.pal.aura; am.disableLighting = true; am.alpha = 0.85
-    aura.material = am; aura.parent = this.root
-    aura.position.y = 0.06; aura.rotation.x = Math.PI / 2
-    aura.setEnabled(false)
-    this.aura = aura
+    const c = this.pal.aura
+
+    // 柔光点贴图（程序化，无需素材）
+    const tex = new BABYLON.DynamicTexture('auraTex_' + this.side, 64, s, false)
+    const ctx = tex.getContext()
+    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32)
+    g.addColorStop(0, 'rgba(255,255,255,1)')
+    g.addColorStop(0.5, 'rgba(255,255,255,0.5)')
+    g.addColorStop(1, 'rgba(255,255,255,0)')
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 64, 64)
+    tex.hasAlpha = true; tex.update()
+
+    // 发射点：身体中段（让气场从脚到头顶都包住，而非只在脚下）
+    const emitNode = new BABYLON.TransformNode('auraEmit_' + this.side, s)
+    emitNode.parent = this.root
+    emitNode.position.y = 0.9
+
+    // 火焰气场（超级赛亚人式）：圆柱定向发射 + 拉伸 billboard → 沿速度拉成上窜火舌，包裹全身
+    const ps = new BABYLON.ParticleSystem('auraPs_' + this.side, 360, s)
+    ps.particleTexture = tex
+    ps.emitter = emitNode
+    ps.createDirectedCylinderEmitter(0.45, 1.7, 0.5,
+      new BABYLON.Vector3(-0.06, 1, -0.06),        // 方向：基本朝上，带极小散开
+      new BABYLON.Vector3(0.06, 1, 0.06))
+    ps.color1 = new BABYLON.Color4(c.r, c.g, c.b, 1)
+    ps.color2 = new BABYLON.Color4(Math.min(c.r * 1.4, 1), Math.min(c.g * 1.3, 1), Math.min(c.b * 1.2, 1), 1)
+    ps.colorDead = new BABYLON.Color4(c.r, c.g, c.b, 0)
+    ps.minSize = 0.10; ps.maxSize = 0.26
+    ps.minLifeTime = 0.35; ps.maxLifeTime = 0.7
+    ps.emitRate = 200
+    ps.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD
+    ps.gravity = new BABYLON.Vector3(0, 3.0, 0)    // 持续上窜
+    ps.minEmitPower = 2.2; ps.maxEmitPower = 4.2
+    ps.updateSpeed = 0.02
+    ps.billboardMode = BABYLON.ParticleSystem.BILLBOARDMODE_STRETCHED  // 沿速度拉伸 = 火舌
+    this.auraPs = ps
+    } catch (e) { console.warn('[ironfist] aura build failed (non-fatal):', e) }
   }
 
   placeAt(pos, rotY) {
@@ -132,17 +163,17 @@ export class Fighter3D {
 
   // ── 状态 ───────────────────────────────────────────────
   setCharged(on) {
-    if (!this.aura) return
-    if (on === this.aura.isEnabled()) return
-    this.aura.setEnabled(on)
-    this._auraAnims.forEach((a) => a.stop()); this._auraAnims = []
-    if (on) {
-      for (const ax of ['scaling.x', 'scaling.y', 'scaling.z']) {
-        this._auraAnims.push(tween(this.scene, this.aura, ax,
-          [{ frame: 0, value: 0.92 }, { frame: 30, value: 1.18 }, { frame: 60, value: 0.92 }], { loop: true }))
-      }
-    } else {
-      this.aura.scaling.setAll(1)
+    if (this._charged === on) return
+    this._charged = on
+    // 全身火焰气场
+    if (on) this.auraPs?.start(); else this.auraPs?.stop()
+    // 身上的光辉：蓄力时给身体材质叠一层 aura emissive（GlowLayer 让轮廓发光）。
+    // 记录"静息 emissive"，供受击闪白后正确还原（蓄力中还原到 aura 色，否则还原到原色）。
+    if (this._flashMats?.length) {
+      const c = this.pal.aura
+      this._restEmis = this._flashMats.map((_m, i) =>
+        on ? new BABYLON.Color3(c.r * 0.5, c.g * 0.5, c.b * 0.5) : this._flashBase[i])
+      this._flashMats.forEach((m, i) => { m.emissiveColor = this._restEmis[i] })
     }
   }
 
@@ -179,6 +210,18 @@ export class Fighter3D {
     }
   }
 
+  // 前冲（仅模型路径）：攻击方冲到 targetX，接触前到位，随后退回 home。占位斗士保留内置小位移。
+  lunge(targetX) {
+    if (!this.hasModel || !this.root) return
+    const x0 = this.home.x
+    tween(this.scene, this.root, 'position.x', [
+      { frame: 0, value: x0 },
+      { frame: 56, value: targetX },  // ≈0.93s 冲到位，略早于接触(≈1.1s)，拳到人到
+      { frame: 82, value: targetX },  // 接触瞬间稳住
+      { frame: 116, value: x0 },      // 退回（≈1.93s，回合窗口内）
+    ])
+  }
+
   reactHit() {
     if (this.hasModel) {
       this._playClip('hit', false, () => this._playClip('idle', true), CLIP_SPEED.hit)
@@ -190,7 +233,11 @@ export class Fighter3D {
   }
 
   knockout() {
-    if (this.hasModel) { this._playClip('ko', false); return }
+    if (this.hasModel) {
+      this.scene.stopAnimation(this.root)  // 取消前冲/退回补间，原地倒下不滑步
+      this._playClip('ko', false)
+      return
+    }
     tween(this.scene, this.root, 'rotation.z', [{ frame: 0, value: 0 }, { frame: 22, value: this.faceSign * 1.45 }])
   }
 
@@ -218,7 +265,7 @@ export class Fighter3D {
     if (!this._flashMats?.length) return
     this._flashMats.forEach((m) => { m.emissiveColor = new BABYLON.Color3(1, 0.55, 0.5) })
     setTimeout(() => {
-      this._flashMats.forEach((m, i) => { m.emissiveColor = this._flashBase[i] })
+      this._flashMats.forEach((m, i) => { m.emissiveColor = (this._restEmis && this._restEmis[i]) || this._flashBase[i] })
     }, 130)
   }
 

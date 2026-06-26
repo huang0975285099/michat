@@ -90,7 +90,7 @@
       <!-- ===== 顶部对战 HUD：我方 | 回合+环形倒计时 | 对手 ===== -->
       <div class="match-hud">
         <!-- 我方 -->
-        <div class="mh-player mh-player--me">
+        <div class="mh-player mh-player--me" :class="{ 'mh-player--hit': meHit }">
           <div class="mh-head">
             <div class="mh-avatar mh-avatar--me" :class="{ charged: pCharged }">{{ myEmoji }}</div>
             <div class="mh-id">
@@ -106,14 +106,39 @@
           </div>
         </div>
 
-        <!-- 中央：回合数 + 环形倒计时 -->
+        <!-- 中央：回合数 + 环形倒计时（SVG 描边动画） -->
         <div class="mh-center">
-          <div class="mh-round">第 {{ round }} 回合</div>
-          <div class="cd-ring" :class="{ urgent: phase === 'deciding' && countdown <= 5 }" :style="ringStyle">
+          <div class="mh-round">ROUND {{ round }}</div>
+          <div class="cd-ring" :class="{ urgent: phase === 'deciding' && countdown <= 5 }">
+            <!--
+              SVG 圆环：viewBox 64x64，r=28，周长 ≈ 175.93。
+              stroke-dashoffset 按剩余比例从 0 → 周长 平滑收缩。
+              优势：可做平滑描边过渡、内发光 filter，比 conic-gradient 更精致。
+            -->
+            <svg class="cd-svg" viewBox="0 0 64 64" aria-hidden="true">
+              <defs>
+                <filter id="cdGlow" x="-30%" y="-30%" width="160%" height="160%">
+                  <feGaussianBlur stdDeviation="1.4" result="b" />
+                  <feMerge>
+                    <feMergeNode in="b" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+              </defs>
+              <!-- 背景圈（淡） -->
+              <circle cx="32" cy="32" r="28" class="cd-track-circle" />
+              <!-- 进度圈 -->
+              <circle
+                cx="32" cy="32" r="28"
+                class="cd-progress-circle"
+                :class="{ 'cd-progress-circle--urgent': phase === 'deciding' && countdown <= 5 }"
+                :style="ringStrokeStyle"
+                filter="url(#cdGlow)"
+              />
+            </svg>
             <div class="cd-inner">
               <template v-if="phase === 'deciding'">
                 <span class="cd-num">{{ countdown }}</span>
-                <!-- <span class="cd-unit">s</span> -->
               </template>
               <span v-else class="cd-glyph">⚔</span>
             </div>
@@ -122,7 +147,7 @@
         </div>
 
         <!-- 对手 -->
-        <div class="mh-player mh-player--opp">
+        <div class="mh-player mh-player--opp" :class="{ 'mh-player--hit': oppHit }">
           <div class="mh-head">
             <div class="mh-avatar mh-avatar--opp" :class="{ charged: oCharged }">{{ opponentEmoji }}</div>
             <div class="mh-id mh-id--right">
@@ -174,7 +199,7 @@
         <div class="hud-action">
           <button v-for="a in actionList" :key="a.key" class="act-btn"
             :class="['act-btn--' + a.key, { selected: myAction === a.key, dim: !canAct || (myAction && myAction !== a.key) }]"
-            :disabled="!canAct" @click="onAction(a.key)">
+            :disabled="!canAct" @click="onActionBtn($event, a.key)">
             <span class="act-frame"><span class="act-icon">{{ a.icon }}</span></span>
             <span class="act-name">{{ a.name }}</span>
             <span class="act-hint">{{ a.hint }}</span>
@@ -195,14 +220,18 @@
           </div>
         </div>
       </div>
-    </div>
 
-    <!-- ── 结果 ─────────────────────────────────────────── -->
-    <div v-else-if="view === 'result'" class="flex flex-center column full-h q-gutter-lg q-pa-xl">
-      <div style="font-size: 72px">{{ resultEmoji }}</div>
-      <div class="text-h4 text-bold">{{ resultText }}</div>
-      <div v-if="resultSub" class="text-caption text-grey-5">{{ resultSub }}</div>
-      <q-btn color="purple" label="返回大厅" unelevated @click="backToLobby" />
+      <!-- ===== 结果遮罩：透明叠加在游戏界面上，背景仍是战斗画面 ===== -->
+      <transition name="result-fade">
+        <div v-if="resultType" class="result-overlay" :class="`result-overlay--${resultType}`">
+          <div class="result-card">
+            <div class="result-emoji">{{ resultEmoji }}</div>
+            <div class="result-title">{{ resultText }}</div>
+            <div v-if="resultSub" class="result-sub">{{ resultSub }}</div>
+            <q-btn color="purple" label="返回大厅" unelevated class="result-btn" @click="backToLobby" />
+          </div>
+        </div>
+      </transition>
     </div>
   </q-page>
 </template>
@@ -260,6 +289,11 @@ const oCharged = ref(false)
 const myAction = ref(null)
 const lastResult = ref(null)
 const moveHistory = ref([])   // 每回合出招记录 { round, player, opponent, pDmg, oDmg }
+// 受击瞬间红闪+抖动（受击后短时高亮对应 HUD 列）
+const meHit = ref(false)
+const oppHit = ref(false)
+let meHitTimer = null
+let oppHitTimer = null
 const opponentName = ref('对手')
 const opponentEmoji = ref('🤖')
 
@@ -301,14 +335,25 @@ const oppTally = computed(() => buildTally('opponent'))
 const myDamage = computed(() => moveHistory.value.reduce((s, m) => s + (m.oDmg || 0), 0))
 const oppDamage = computed(() => moveHistory.value.reduce((s, m) => s + (m.pDmg || 0), 0))
 
-// 环形倒计时（决策态按剩余比例上色，≤5s 转红；其余阶段为静态环）
-const ringStyle = computed(() => {
+// 环形倒计时（SVG stroke-dashoffset）
+//   周长 = 2πr ≈ 175.93（r=28）
+//   决策态：按剩余比例从满圈收缩到 0
+//   非决策态：保持完整一圈静态显示
+const CD_CIRCUMFERENCE = 2 * Math.PI * 28
+const ringStrokeStyle = computed(() => {
   if (phase.value !== 'deciding') {
-    return { background: 'conic-gradient(rgba(150,120,255,0.45) 360deg, rgba(150,120,255,0.45) 360deg)' }
+    return {
+      strokeDasharray: CD_CIRCUMFERENCE,
+      strokeDashoffset: 0,
+    }
   }
-  const deg = Math.max(0, Math.min(1, countdown.value / ROUND_SECONDS)) * 360
-  const col = countdown.value <= 5 ? '#ff5252' : '#5b8cff'
-  return { background: `conic-gradient(${col} ${deg}deg, rgba(255,255,255,0.08) ${deg}deg)` }
+  const ratio = Math.max(0, Math.min(1, countdown.value / ROUND_SECONDS))
+  return {
+    strokeDasharray: CD_CIRCUMFERENCE,
+    // ratio=1（满时）offset=0；ratio=0（耗尽）offset=周长 → 圆环消失
+    strokeDashoffset: CD_CIRCUMFERENCE * (1 - ratio),
+    // 颜色由 .cd-progress-circle--urgent class 控制，这里只控几何
+  }
 })
 const phaseLabel = computed(() => {
   switch (phase.value) {
@@ -392,6 +437,7 @@ function startPve() {
   mode.value = 'pve'
   opponentName.value = '电脑'
   opponentEmoji.value = '🤖'
+  resultType.value = ''     // 清理上一局结果状态
   engine = new IronFistGame({ mode: 'pve' })
   beginBattle()
 }
@@ -400,6 +446,7 @@ async function startPvp() {
   mode.value = 'pvp'
   opponentName.value = gameStore.opponentNickname || '对手'
   opponentEmoji.value = '🥷'
+  resultType.value = ''     // 清理上一局结果状态
   await nextTick()
 
   const roomId = route.query.room
@@ -441,10 +488,21 @@ function setupEngineListeners() {
   })
   engine.on('phase', (p) => { phase.value = p })
   engine.on('locked', ({ side, action }) => {
-    if (side === 'player') { myAction.value = action; stopCountdown() }
+    if (side === 'player') {
+      myAction.value = action
+      stopCountdown()
+      // 重连恢复后可能落在 locked 分支（本回合已出招等对方），
+      // 需切到 playing 并停掉重连倒计时，否则视图卡在 reconnecting。
+      if (view.value === 'reconnecting') view.value = 'playing'
+      stopReconnectTicker()
+    }
   })
   engine.on('resolved', (r) => {
     stopCountdown()
+    // 对方重连后若直接结算（_myAction 存在），需停掉重连倒计时；
+    // 重连恢复后落在 resolved 分支也需切到 playing。
+    stopReconnectTicker()
+    if (view.value === 'reconnecting') view.value = 'playing'
     lastResult.value = r
     moveHistory.value.push({
       round: round.value, player: r.playerAction, opponent: r.opponentAction,
@@ -454,6 +512,8 @@ function setupEngineListeners() {
     oHP.value = r.opponentHP
     pCharged.value = r.playerCharged
     oCharged.value = r.opponentCharged
+    // 受击 HUD 反馈：本回合谁掉血谁抖动+红闪
+    triggerHitFeedback(r.playerDmg > 0, r.opponentDmg > 0)
     clearTimeout(confirmTimer)
     const koEnd = r.gameResult === 'win' || r.gameResult === 'lose' || r.gameResult === 'doubleLose'
     const holdMs = r.gameResult ? (koEnd ? END_HOLD_KO_MS : END_HOLD_MS) : ROUND_HOLD_MS
@@ -464,7 +524,7 @@ function setupEngineListeners() {
     teardownTimers()
     stopReconnectTicker()
     if (mode.value === 'pvp') gameStore.reset()
-    view.value = 'result'
+    // 不切换 view：保留 playing 视图作为结果遮罩背景，玩家可看到战斗末态
   })
   // 对手掉线，进入 60s 重连等待遮罩
   engine.on('opponent-disconnected', ({ timeoutMs }) => {
@@ -492,6 +552,30 @@ function beginBattle() {
 // ── 操作 ─────────────────────────────────────────────────
 function onAction(action) {
   engine?.selectAction(action)
+}
+
+// 出招按钮：在按下位置生成涟漪后触发动作
+//   仅在能出招时生成涟漪（disabled 状态不响应）
+function onActionBtn(e, action) {
+  const btn = e.currentTarget
+  if (btn && !btn.disabled) spawnRipple(btn, e)
+  onAction(action)
+}
+
+// 涟漪：通过 CSS 自定义属性把点击坐标传给 ::after 伪元素，触发动画。
+//   不动态插入 DOM，避免 <button> form-control 的内部布局 quirk 把按钮撑高。
+function spawnRipple(btn, e) {
+  const rect = btn.getBoundingClientRect()
+  const x = (e.clientX ?? rect.left + rect.width / 2) - rect.left
+  const y = (e.clientY ?? rect.top + rect.height / 2) - rect.top
+  btn.style.setProperty('--ripple-x', x + 'px')
+  btn.style.setProperty('--ripple-y', y + 'px')
+  // 重置动画：移除 class → 强制 reflow → 重新加上，让连续点击也能重新触发
+  btn.classList.remove('rippling')
+  void btn.offsetWidth
+  btn.classList.add('rippling')
+  // 动画结束后清理 class（仅挂一次，避免累积监听器）
+  btn.addEventListener('animationend', () => btn.classList.remove('rippling'), { once: true })
 }
 
 // ── 计时器 ────────────────────────────────────────────────
@@ -523,6 +607,24 @@ function teardownTimers() {
   stopCountdown()
   clearTimeout(confirmTimer)
   stopReconnectTicker()
+  clearTimeout(meHitTimer)
+  clearTimeout(oppHitTimer)
+}
+
+// 受击 HUD 反馈：玩家/对手任一方本回合掉血则触发短时抖动+红闪
+//   meHit: 我方受击（playerDmg > 0）
+//   oppHit: 对手受击（opponentDmg > 0）
+function triggerHitFeedback(meHurt, oppHurt) {
+  if (meHurt) {
+    meHit.value = true
+    clearTimeout(meHitTimer)
+    meHitTimer = setTimeout(() => { meHit.value = false }, 460)
+  }
+  if (oppHurt) {
+    oppHit.value = true
+    clearTimeout(oppHitTimer)
+    oppHitTimer = setTimeout(() => { oppHit.value = false }, 460)
+  }
 }
 
 // ── beforeunload：刷新/关闭页面时不发 game_resign ───────────────────────
@@ -547,6 +649,7 @@ function teardown() {
 function backToLobby() {
   teardown()
   router.replace('/games/ironfist')
+  resultType.value = ''     // 清除结果遮罩状态，避免下次进入时残留
   view.value = 'lobby'
   showFriends.value = false
   loadFriends()
@@ -586,6 +689,81 @@ function goHome() { router.push('/games') }
   max-width: 320px;
 }
 
+/* 结果遮罩：半透明叠加，模糊背景但保留战斗画面可见 */
+.result-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1500;          /* 高于 HUD 与操作栏，但低于重连遮罩 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 关键：背景半透明 + 模糊，玩家依然能透过看到战斗末态 */
+  background: radial-gradient(circle at 50% 45%,
+    rgba(20, 14, 32, 0.55) 0%,
+    rgba(8, 6, 16, 0.78) 70%,
+    rgba(0, 0, 0, 0.88) 100%);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+/* 按胜负给遮罩叠一层色调（胜利偏金、失败偏红、平局偏紫） */
+.result-overlay--win        { background: radial-gradient(circle at 50% 45%, rgba(255, 200, 60, 0.18), rgba(0,0,0,0.85)); }
+.result-overlay--lose       { background: radial-gradient(circle at 50% 45%, rgba(255, 60, 60, 0.22), rgba(0,0,0,0.88)); }
+.result-overlay--draw       { background: radial-gradient(circle at 50% 45%, rgba(150, 120, 255, 0.18), rgba(0,0,0,0.85)); }
+.result-overlay--doubleLose { background: radial-gradient(circle at 50% 45%, rgba(255, 120, 60, 0.22), rgba(0,0,0,0.88)); }
+.result-overlay--aborted    { background: radial-gradient(circle at 50% 45%, rgba(120, 120, 120, 0.18), rgba(0,0,0,0.85)); }
+
+/* 居中卡片：无强背景，靠 emoji + 大字 + 按钮，让背景画面透出 */
+.result-card {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 14px;
+  padding: 28px 36px;
+  text-align: center;
+  /* 卡片自身轻透 + 描边，避免与背景糊成一片 */
+  background: rgba(20, 16, 32, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(2px);
+  max-width: 90vw;
+}
+.result-emoji {
+  font-size: 88px; line-height: 1;
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.6));
+  animation: resultEmojiPop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.result-title {
+  font-size: 34px; font-weight: 900; letter-spacing: 2px;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+  animation: resultTitleIn 0.5s 0.1s both cubic-bezier(0.4, 0, 0.2, 1);
+}
+.result-overlay--win .result-title        { color: #ffd76a; }
+.result-overlay--lose .result-title       { color: #ff7a7a; }
+.result-overlay--draw .result-title        { color: #c5b3ff; }
+.result-overlay--doubleLose .result-title  { color: #ff9a52; }
+.result-overlay--aborted .result-title     { color: #b6b6b6; }
+.result-sub {
+  font-size: 13px; color: #9e9aae;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  animation: resultTitleIn 0.5s 0.18s both;
+}
+.result-btn { animation: resultTitleIn 0.5s 0.26s both; }
+
+/* 入场：淡入 + 轻微上浮 */
+.result-fade-enter-active { transition: opacity 0.45s ease, backdrop-filter 0.45s ease; }
+.result-fade-leave-active { transition: opacity 0.25s ease; }
+.result-fade-enter-from { opacity: 0; }
+.result-fade-leave-to   { opacity: 0; }
+
+@keyframes resultEmojiPop {
+  0%   { transform: scale(0.2) rotate(-12deg); opacity: 0; }
+  60%  { transform: scale(1.15) rotate(4deg); }
+  100% { transform: scale(1) rotate(0); opacity: 1; }
+}
+@keyframes resultTitleIn {
+  0%   { transform: translateY(14px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
 /* 大厅模式卡片 */
 .mode-card {
   display: flex; align-items: center; gap: 14px;
@@ -611,6 +789,7 @@ function goHome() { router.push('/games') }
 
 /* 对战布局 */
 .battle {
+  position: relative;        /* 结果遮罩 / 重连遮罩的定位基准 */
   display: flex; flex-direction: column;
   height: 100dvh; padding: 8px 10px 10px;
   gap: 8px;
@@ -629,7 +808,28 @@ function goHome() { router.push('/games') }
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 4px 14px rgba(0, 0, 0, 0.35);
 }
 /* 每侧：头像+名字一行 → 全宽血条 → 出招统计 */
-.mh-player { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.mh-player {
+  display: flex; flex-direction: column; gap: 5px; min-width: 0;
+  position: relative; border-radius: 12px; padding: 2px;
+  transition: box-shadow 0.18s;
+}
+/* 受击反馈：抖动 + 红色描边光晕（不改变布局尺寸，避免抖动其他列） */
+.mh-player--hit {
+  animation: mhHitShake 0.44s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+  box-shadow:
+    0 0 0 1.5px rgba(255, 82, 82, 0.9),
+    0 0 18px rgba(255, 60, 60, 0.55),
+    inset 0 0 24px rgba(255, 40, 40, 0.35);
+}
+@keyframes mhHitShake {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  15% { transform: translate3d(-5px, 1px, 0); }
+  30% { transform: translate3d(5px, -1px, 0); }
+  45% { transform: translate3d(-4px, 0, 0); }
+  60% { transform: translate3d(3px, 1px, 0); }
+  75% { transform: translate3d(-2px, 0, 0); }
+  90% { transform: translate3d(1px, 0, 0); }
+}
 .mh-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .mh-player--opp .mh-head { flex-direction: row-reverse; }
 .mh-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
@@ -672,15 +872,39 @@ function goHome() { router.push('/games') }
 }
 .mh-round { font-size: 12px; font-weight: 800; white-space: nowrap; color: #e7e0ff; }
 .cd-ring {
-  width: 64px; height: 64px; border-radius: 50%;
+  position: relative;
+  width: 64px; height: 64px;
   display: grid; place-items: center;
   box-shadow: 0 0 12px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  border-radius: 50%;
 }
 .cd-ring.urgent { animation: blink 0.7s infinite; }
+.cd-svg {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  /* 旋转 -90deg 让 stroke 起点位于顶部 12 点钟方向 */
+  transform: rotate(-90deg);
+}
+.cd-track-circle {
+  fill: none;
+  stroke: rgba(150, 120, 255, 0.18);
+  stroke-width: 4;
+}
+.cd-progress-circle {
+  fill: none;
+  stroke: #5b8cff;
+  stroke-width: 4;
+  stroke-linecap: round;
+  /* 描边过渡平滑 */
+  transition: stroke-dashoffset 0.95s linear, stroke 0.2s;
+}
+.cd-progress-circle--urgent { stroke: #ff5252; }
 .cd-inner {
+  position: relative;
   width: 50px; height: 50px; border-radius: 50%;
   background: radial-gradient(circle at 50% 35%, #1c1730, #100c1d);
   display: flex; align-items: center; justify-content: center;
+  z-index: 1;
 }
 .cd-num { font-size: 23px; font-weight: 900; }
 .cd-unit { font-size: 11px; font-weight: 700; color: #b39ddb; margin-left: 1px; }
@@ -760,12 +984,40 @@ function goHome() { router.push('/games') }
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 5px; padding: 12px 4px 10px; border: none;
   border-radius: 10px; color: #fff; cursor: pointer;
+  /* 注意：不给 button 加 overflow:hidden，会触发 form-control 内部布局 quirk 把按钮撑高。
+     涟漪改用 ::after 伪元素 + clip-path 限制范围。 */
+  --ripple-x: 50%;
+  --ripple-y: 50%;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.4),
     inset 0 -3px 6px rgba(0, 0, 0, 0.28),
     0 4px 0 rgba(0, 0, 0, 0.35),
     0 6px 12px rgba(0, 0, 0, 0.4);
   transition: transform 0.1s, box-shadow 0.1s, filter 0.15s;
+}
+/* 涟漪：用伪元素绘制白色半透明圆，从点击点扩散后淡出。
+   通过 clip-path 限制在按钮圆角矩形内（替代 overflow:hidden）。 */
+.act-btn::after {
+  content: '';
+  position: absolute;
+  left: var(--ripple-x); top: var(--ripple-y);
+  width: 12px; height: 12px;
+  margin: -6px 0 0 -6px;       /* 让 left/top 表示涟漪圆心 */
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0.15) 50%, rgba(255, 255, 255, 0) 70%);
+  transform: scale(0);
+  opacity: 0;
+  pointer-events: none;
+  clip-path: inset(0 round 10px);
+  z-index: 0;
+}
+.act-btn.rippling::after {
+  animation: actRipple 0.55s cubic-bezier(0.2, 0.6, 0.4, 1);
+}
+@keyframes actRipple {
+  0%   { transform: scale(0); opacity: 1; }
+  60%  { opacity: 0.55; }
+  100% { transform: scale(40); opacity: 0; }
 }
 .act-btn--attack  { background: linear-gradient(180deg, #ff7d6e 0%, #d2382a 100%); }
 .act-btn--defend  { background: linear-gradient(180deg, #5cb6ff 0%, #2867bd 100%); }

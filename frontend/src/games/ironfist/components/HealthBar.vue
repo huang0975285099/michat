@@ -9,16 +9,71 @@
       <slot />
     </div>
     <div class="hb-track" :class="{ 'hb-track--shake': hit }">
-      <!-- 残血拖影：受击后缓慢追上主血条，露出红色损失段 -->
-      <div class="hb-ghost" :style="{ width: pct + '%' }" />
-      <div class="hb-fill" :class="hpClass" :style="{ width: pct + '%' }" />
+      <!--
+        SVG 血条：viewBox 锁定 100x18，rect 永远画满宽度，
+        通过 clip-path 裁剪右/左侧露出 pct% 区域。
+        好处：渐变/高光保持稳定不变形，宽度变化只擦除不重绘。
+      -->
+      <svg class="hb-svg" viewBox="0 0 100 18" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <linearGradient :id="gradId" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" :stop-color="gradStart" />
+            <stop offset="100%" :stop-color="gradEnd" />
+          </linearGradient>
+          <linearGradient :id="ghostId" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#ff7043" />
+            <stop offset="100%" stop-color="#d84315" />
+          </linearGradient>
+          <!-- 内发光：血条边缘柔光 -->
+          <filter :id="glowId" x="-10%" y="-30%" width="120%" height="160%">
+            <feGaussianBlur stdDeviation="0.5" result="b" />
+            <feMerge>
+              <feMergeNode in="b" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        <!-- 轨道 -->
+        <rect x="0" y="0" width="100" height="18" rx="9" class="hb-track-rect" />
+
+        <!-- 残血拖影（红，慢速延迟收缩） -->
+        <rect
+          x="0" y="0" width="100" height="18" rx="9"
+          :fill="`url(#${ghostId})`"
+          class="hb-ghost-rect"
+          :style="{ 'clip-path': ghostClip }"
+        />
+
+        <!-- 主血条（快速收缩，盖在拖影上） -->
+        <rect
+          x="0" y="0" width="100" height="18" rx="9"
+          :fill="`url(#${gradId})`"
+          class="hb-fill-rect"
+          :class="hpClass"
+          :filter="`url(#${glowId})`"
+          :style="{ 'clip-path': fillClip }"
+        />
+
+        <!-- 顶部高光条 -->
+        <rect
+          x="0" y="0" width="100" height="9" rx="9"
+          fill="url(#shineGrad)"
+          class="hb-shine-rect"
+          :style="{ 'clip-path': fillClip }"
+        />
+        <linearGradient id="shineGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="rgba(255,255,255,0.45)" />
+          <stop offset="100%" stop-color="rgba(255,255,255,0)" />
+        </linearGradient>
+      </svg>
       <span class="hb-num">{{ Math.max(0, hp) }}</span>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, useId } from 'vue'
 
 const props = defineProps({
   name: { type: String, default: '' },
@@ -29,6 +84,12 @@ const props = defineProps({
   bare: { type: Boolean, default: false },  // 只渲染血条本体（名字行交由外部排布）
 })
 
+// 每实例唯一 id，避免同页面多 HealthBar 渐变冲突
+const uid = useId()
+const gradId = `hb-grad-${uid}`
+const ghostId = `hb-ghost-${uid}`
+const glowId = `hb-glow-${uid}`
+
 const pct = computed(() => Math.max(0, Math.min(100, (props.hp / props.maxHp) * 100)))
 // 三阶段血色：健康(绿) > 60，警告(橙黄) 30~60，危险(红) ≤ 30
 const hpClass = computed(() => {
@@ -36,6 +97,33 @@ const hpClass = computed(() => {
   if (props.hp <= 60) return 'hb-fill--low'
   return ''
 })
+// 三阶段渐变 stop 色（覆盖默认绿色）
+const gradStart = computed(() => {
+  if (props.hp <= 30) return '#ff5b5b'
+  if (props.hp <= 60) return '#ffce4d'
+  return '#43e97b'
+})
+const gradEnd = computed(() => {
+  if (props.hp <= 30) return '#d72638'
+  if (props.hp <= 60) return '#ff9f43'
+  return '#38f9d7'
+})
+
+// clip-path inset 裁剪：
+//   我方（left）: 裁右侧 → inset(0 (100-pct)% 0 0)
+//   对手（right）: 裁左侧 → inset(0 0 0 (100-pct)%)
+// 主血条快速收缩，拖影慢速延迟追上
+const rightCut = computed(() => Math.max(0, 100 - pct.value))
+const fillClip = computed(() =>
+  props.align === 'right'
+    ? `inset(0 0 0 ${rightCut.value}%)`
+    : `inset(0 ${rightCut.value}% 0 0)`
+)
+const ghostClip = computed(() =>
+  props.align === 'right'
+    ? `inset(0 0 0 ${rightCut.value}%)`
+    : `inset(0 ${rightCut.value}% 0 0)`
+)
 
 // 受击瞬间抖动一下血条
 const hit = ref(false)
@@ -69,39 +157,36 @@ watch(() => props.hp, (now, prev) => {
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
 }
 .hb-track--shake { animation: hbShake 0.34s; }
-/* 镜像布局：我方填充锚定左（右侧收缩），对手填充锚定右（左侧收缩） */
-.hb-row--right .hb-ghost,
-.hb-row--right .hb-fill { left: auto; right: 0; }
 
-/* 拖影层（红，慢速延迟收缩） */
-.hb-ghost {
-  position: absolute; top: 0; left: 0; height: 100%; border-radius: 9px;
-  background: linear-gradient(90deg, #ff7043, #d84315);
-  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1) 0.22s;
+.hb-svg {
+  display: block; width: 100%; height: 100%;
+  /* 防止 SVG 子像素描边抖动 */
+  shape-rendering: geometricPrecision;
 }
-/* 主血条（快速收缩，盖在拖影上） */
-.hb-fill {
-  position: absolute; top: 0; left: 0; height: 100%; border-radius: 9px;
-  background: linear-gradient(90deg, #43e97b, #38f9d7);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.4);
-  transition: width 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+.hb-track-rect { fill: rgba(0, 0, 0, 0); }
+
+/* 拖影层：clip-path 慢速延迟过渡（受击时先停在原位，再慢慢追上） */
+.hb-ghost-rect {
+  transition: clip-path 0.6s cubic-bezier(0.4, 0, 0.2, 1) 0.22s;
 }
-.hb-fill::after { /* 高光条 */
-  content: ''; position: absolute; inset: 0 0 50% 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.35), transparent);
-  border-radius: 9px 9px 0 0;
+/* 主血条：clip-path 快速过渡 */
+.hb-fill-rect {
+  transition: clip-path 0.32s cubic-bezier(0.4, 0, 0.2, 1);
 }
-/* 健康（默认绿）见 .hb-fill；以下为警告 / 危险两阶段 */
-.hb-fill--low { background: linear-gradient(90deg, #ffce4d, #ff9f43); }   /* 警告：橙黄 */
-.hb-fill--critical {
-  background: linear-gradient(90deg, #ff5b5b, #d72638);                    /* 危险：红 */
+.hb-fill-rect.hb-fill--critical {
   animation: critPulse 0.7s ease-in-out infinite;
 }
+/* 高光条与主血条同步收缩 */
+.hb-shine-rect {
+  transition: clip-path 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+
 .hb-num {
   position: absolute; top: 50%; left: 8px; transform: translateY(-50%);
   font-size: 11px; font-weight: 800; color: #fff;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
-  z-index: 1;
+  z-index: 1; pointer-events: none;
 }
 .hb-row--right .hb-num { left: auto; right: 8px; }
 
