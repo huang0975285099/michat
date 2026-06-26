@@ -109,7 +109,7 @@
         <!-- 中央：回合数 + 环形倒计时（SVG 描边动画） -->
         <div class="mh-center">
           <div class="mh-round">ROUND {{ round }}</div>
-          <div class="cd-ring" :class="{ urgent: phase === 'deciding' && countdown <= 5 }">
+          <div class="cd-ring" :class="cdStage ? `cd-ring--${cdStage}` : ''">
             <!--
               SVG 圆环：viewBox 64x64，r=28，周长 ≈ 175.93。
               stroke-dashoffset 按剩余比例从 0 → 周长 平滑收缩。
@@ -131,7 +131,7 @@
               <circle
                 cx="32" cy="32" r="28"
                 class="cd-progress-circle"
-                :class="{ 'cd-progress-circle--urgent': phase === 'deciding' && countdown <= 5 }"
+                :class="cdStage ? `cd-progress-circle--${cdStage}` : ''"
                 :style="ringStrokeStyle"
                 filter="url(#cdGlow)"
               />
@@ -352,8 +352,20 @@ const ringStrokeStyle = computed(() => {
     strokeDasharray: CD_CIRCUMFERENCE,
     // ratio=1（满时）offset=0；ratio=0（耗尽）offset=周长 → 圆环消失
     strokeDashoffset: CD_CIRCUMFERENCE * (1 - ratio),
-    // 颜色由 .cd-progress-circle--urgent class 控制，这里只控几何
+    // 颜色由 cdStage class 控制，这里只控几何
   }
+})
+// 倒计时颜色阶段：与 HealthBar 三段血色严格对齐（按剩余比例划分）
+//   safe(绿)  ratio > 0.6   对应血量 > 60
+//   warn(橙)  0.3 < ratio ≤ 0.6  对应血量 30~60
+//   danger(红) ratio ≤ 0.3   对应血量 ≤ 30
+// 仅决策态生效；非决策态返回空串（无 class，使用默认描边色）
+const cdStage = computed(() => {
+  if (phase.value !== 'deciding') return ''
+  const ratio = countdown.value / ROUND_SECONDS
+  if (ratio <= 0.3) return 'danger'
+  if (ratio <= 0.6) return 'warn'
+  return 'safe'
 })
 const phaseLabel = computed(() => {
   switch (phase.value) {
@@ -885,7 +897,7 @@ function goHome() { router.push('/games') }
   box-shadow: 0 0 12px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
   border-radius: 50%;
 }
-.cd-ring.urgent { animation: blink 0.7s infinite; }
+.cd-ring--danger { animation: blink 0.7s infinite; }
 .cd-svg {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
@@ -899,13 +911,16 @@ function goHome() { router.push('/games') }
 }
 .cd-progress-circle {
   fill: none;
-  stroke: #5b8cff;
+  stroke: #e7e0ff;
   stroke-width: 4;
   stroke-linecap: round;
   /* 描边过渡平滑 */
   transition: stroke-dashoffset 0.95s linear, stroke 0.2s;
 }
-.cd-progress-circle--urgent { stroke: #ff5252; }
+/* 倒计时三阶段描边色：与 HealthBar 三段血色严格对齐（取血条渐变起点色） */
+.cd-progress-circle--safe   { stroke: #43e97b; }   /* 健康(绿) > 60% */
+.cd-progress-circle--warn   { stroke: #ffce4d; }   /* 警告(橙黄) 30~60% */
+.cd-progress-circle--danger { stroke: #ff5b5b; }   /* 危险(红) ≤ 30% */
 .cd-inner {
   position: relative;
   width: 50px; height: 50px; border-radius: 50%;
