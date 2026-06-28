@@ -62,7 +62,9 @@ type Hub struct {
 	friendSvc      *service.FriendService
 	identitySvc    *service.IdentityService
 	messageReadSvc *service.MessageReadService
-	pushSvc        *service.PushService // 可为 nil（未配置时禁用推送）
+	pushSvc        *service.PushService             // 可为 nil（未配置时禁用推送）
+	ironFistSvc    *service.IronFistService         // 可为 nil（PVP 大厅禁用）
+	pvpLobby       map[string]*service.LobbyUserProfile // chatID → 大厅用户档案（PVP 大厅在线列表）
 }
 
 func NewHub(redis *rdb.Client, friendSvc *service.FriendService, identitySvc *service.IdentityService, messageReadSvc *service.MessageReadService) *Hub {
@@ -72,12 +74,18 @@ func NewHub(redis *rdb.Client, friendSvc *service.FriendService, identitySvc *se
 		friendSvc:      friendSvc,
 		identitySvc:    identitySvc,
 		messageReadSvc: messageReadSvc,
+		pvpLobby:       make(map[string]*service.LobbyUserProfile),
 	}
 }
 
 // SetPushService 注入推送服务（在 main.go 中 hub 创建后调用）
 func (h *Hub) SetPushService(svc *service.PushService) {
 	h.pushSvc = svc
+}
+
+// SetIronFistService 注入铁拳服务，启用 PVP 大厅在线列表功能
+func (h *Hub) SetIronFistService(svc *service.IronFistService) {
+	h.ironFistSvc = svc
 }
 
 // Register 注册客户端，标记在线，通知好友
@@ -104,6 +112,11 @@ func (h *Hub) Unregister(c *Client) {
 	if isCurrent {
 		delete(h.clients, c.ChatID)
 	}
+	// 若该用户在 PVP 大厅，一并移除（断线即离开大厅）
+	_, inLobby := h.pvpLobby[c.ChatID]
+	if inLobby {
+		delete(h.pvpLobby, c.ChatID)
+	}
 	h.mu.Unlock()
 
 	// 仅当该客户端仍是当前活跃连接时才清理在线状态
@@ -117,6 +130,11 @@ func (h *Hub) Unregister(c *Client) {
 
 	// 通知好友：下线
 	h.notifyFriendsStatus(c.UserID, c.ChatID, false)
+
+	// 离开 PVP 大厅：广播更新给仍在场的大厅用户
+	if inLobby {
+		h.broadcastLobbyUpdate()
+	}
 }
 
 // notifyFriendsStatus 向好友广播在线状态变更
@@ -297,6 +315,12 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 	case "ironfist_reconnect":
 		// 返回该房间完整 action 历史（ironfist_replay）
 		h.handleIronFistReconnect(c, msg.Payload)
+	case "ironfist_lobby_join":
+		// 加入 PVP 大厅在线列表，广播更新
+		h.handleIronFistLobbyJoin(c)
+	case "ironfist_lobby_leave":
+		// 主动离开 PVP 大厅
+		h.handleIronFistLobbyLeave(c)
 	default:
 		log.Printf("[ws] unknown message type %q from %s", msg.Type, c.ChatID)
 	}
@@ -984,5 +1008,103 @@ func (h *Hub) handleIronFistReconnect(from *Client, payload json.RawMessage) {
 	select {
 	case from.send <- fwd:
 	default:
+	}
+}
+
+// handleIronFistLobbyJoin 加入 PVP 大厅在线列表。
+// 客户端进入 PVP 大厅页面时发送；服务端查询用户档案后存入 pvpLobby，
+// 并向所有在场用户广播最新列表（含本人在内）。
+func (h *Hub) handleIronFistLobbyJoin(c *Client) {
+	if h.ironFistSvc == nil {
+		return
+	}
+	// 查询档案（不在持锁期间做 DB 查询，避免阻塞其他 dispatch）
+	ctx := context.Background()
+	p, err := h.ironFistSvc.GetLobbyUserProfile(ctx, c.ChatID)
+	if err != nil {
+		log.Printf("[ws] ironfist_lobby_join get profile for %s: %v", c.ChatID, err)
+		return
+	}
+
+	h.mu.Lock()
+	// 已存在则覆盖（profile 可能变化：余额/场次更新）
+	h.pvpLobby[c.ChatID] = p
+	// 拷贝当前列表用于广播
+	list := make([]*service.LobbyUserProfile, 0, len(h.pvpLobby))
+	for _, v := range h.pvpLobby {
+		list = append(list, v)
+	}
+	recipients := make([]*Client, 0, len(list))
+	for _, v := range list {
+		if rc, ok := h.clients[v.ChatID]; ok {
+			recipients = append(recipients, rc)
+		}
+	}
+	h.mu.Unlock()
+
+	h.sendLobbyUpdate(recipients, list)
+}
+
+// handleIronFistLobbyLeave 主动离开 PVP 大厅
+func (h *Hub) handleIronFistLobbyLeave(c *Client) {
+	h.mu.Lock()
+	_, inLobby := h.pvpLobby[c.ChatID]
+	if !inLobby {
+		h.mu.Unlock()
+		return
+	}
+	delete(h.pvpLobby, c.ChatID)
+	list := make([]*service.LobbyUserProfile, 0, len(h.pvpLobby))
+	recipients := make([]*Client, 0, len(list)+1)
+	for _, v := range h.pvpLobby {
+		list = append(list, v)
+		if rc, ok := h.clients[v.ChatID]; ok {
+			recipients = append(recipients, rc)
+		}
+	}
+	// 离开者也要收到更新（清空自己的列表显示）
+	if rc, ok := h.clients[c.ChatID]; ok {
+		recipients = append(recipients, rc)
+	}
+	h.mu.Unlock()
+
+	h.sendLobbyUpdate(recipients, list)
+}
+
+// broadcastLobbyUpdate 向当前大厅所有在线用户广播最新列表。
+// 用于断线/异常下线场景（Unregister 路径），此时离开者已不可达，无需发回。
+func (h *Hub) broadcastLobbyUpdate() {
+	h.mu.RLock()
+	list := make([]*service.LobbyUserProfile, 0, len(h.pvpLobby))
+	recipients := make([]*Client, 0, len(list))
+	for _, v := range h.pvpLobby {
+		list = append(list, v)
+		if rc, ok := h.clients[v.ChatID]; ok {
+			recipients = append(recipients, rc)
+		}
+	}
+	h.mu.RUnlock()
+
+	h.sendLobbyUpdate(recipients, list)
+}
+
+// sendLobbyUpdate 组装并广播大厅列表消息
+func (h *Hub) sendLobbyUpdate(recipients []*Client, list []*service.LobbyUserProfile) {
+	type UpdatePayload struct {
+		Count int                           `json:"count"`
+		Users []*service.LobbyUserProfile   `json:"users"`
+	}
+	msg, _ := json.Marshal(Message{
+		Type: "ironfist_lobby_update",
+		Payload: mustMarshal(UpdatePayload{
+			Count: len(list),
+			Users: list,
+		}),
+	})
+	for _, rc := range recipients {
+		select {
+		case rc.send <- msg:
+		default:
+		}
 	}
 }

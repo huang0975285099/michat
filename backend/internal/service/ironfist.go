@@ -381,3 +381,32 @@ func (s *IronFistService) ListMatches(ctx context.Context, userID uint64, before
 	}
 	return out, rows.Err()
 }
+
+// LobbyUserProfile PVP 大厅展示的用户档案：聚合 users + fist_accounts + ironfist_stats
+type LobbyUserProfile struct {
+	ChatID       string `json:"chat_id"`
+	Nickname     string `json:"nickname"`
+	FistBalance  int64  `json:"fist_balance"`
+	TotalBattles int    `json:"total_battles"`
+}
+
+// GetLobbyUserProfile 联表查询指定 chatID 的 PVP 大厅档案信息。
+// 用于大厅列表展示与点击头像查看玩家信息。
+// 任意子表缺失均返回 0/空值，不报错（新用户可能尚无 fist_accounts / ironfist_stats 行）。
+func (s *IronFistService) GetLobbyUserProfile(ctx context.Context, chatID string) (*LobbyUserProfile, error) {
+	p := &LobbyUserProfile{}
+	// LEFT JOIN：users 一定存在；fist_accounts/ironfist_stats 可能为空
+	err := s.db.QueryRowContext(ctx, `
+		SELECT u.chat_id, u.nickname,
+		       COALESCE(fa.balance, 0),
+		       COALESCE(ist.total_battles, 0)
+		FROM users u
+		LEFT JOIN fist_accounts fa ON fa.user_id = u.id
+		LEFT JOIN ironfist_stats ist ON ist.user_id = u.id
+		WHERE u.chat_id = ?
+	`, chatID).Scan(&p.ChatID, &p.Nickname, &p.FistBalance, &p.TotalBattles)
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}

@@ -19,10 +19,9 @@
             <!-- 战绩概览 -->
             <div class="rec-total">
                 <div class="rec-total-num">{{ stats.total_battles }}</div>
-                <div class="rec-total-label">累计对战场次</div>
+                <div class="rec-total-label">累计对战场次🔥 </div>
                 <div class="rec-streak">
-                    当前连胜 {{ stats.current_win_streak }} 🔥 · 最高
-                    {{ stats.max_win_streak }}
+                    当前 {{ stats.current_win_streak }} 连胜，最高 {{ stats.max_win_streak }} 连胜
                 </div>
             </div>
 

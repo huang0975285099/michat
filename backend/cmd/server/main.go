@@ -141,6 +141,9 @@ func main() {
 		log.Println("JPush push notification enabled")
 	}
 
+	// 启用 PVP 大厅在线列表功能（大厅用户互看头像/余额/场次）
+	hub.SetIronFistService(ironFistSvc)
+
 	identHandler := handler.NewIdentityHandler(identSvc, inviteSvc, friendSvc, hub)
 	userHandler := handler.NewUserHandler(identSvc)
 	friendHandler := handler.NewFriendHandler(friendSvc, hub)
