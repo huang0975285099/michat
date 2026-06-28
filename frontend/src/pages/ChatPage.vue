@@ -182,7 +182,7 @@
       <q-btn
         round
         flat
-        :icon="burnMode ? 'local_fire_department' : 'local_fire_department'"
+        icon="local_fire_department"
         :color="burnMode ? 'orange' : 'grey-5'"
         @click="burnMode = !burnMode"
       >
@@ -462,9 +462,8 @@ onMounted(async () => {
     })
   })
 
-  // 启动阅后即焚定时删除检查
-  chatStore.startBurnTimer()
-  chatStore.checkExpiredMessages()
+  // 阅后即焚的定时删除检查已移至 MainLayout 应用级生命周期，
+  // 确保用户离开聊天页后倒计时仍能继续推进并按时删除。
 
   // 每分钟刷新一次响应式时间，驱动倒计时显示递减
   nowTimer = setInterval(() => { now.value = Date.now() }, 60000)
@@ -480,7 +479,6 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopStatus && stopStatus()
-  chatStore.stopBurnTimer()
   if (nowTimer) { clearInterval(nowTimer); nowTimer = null }
   if (nudgeTimer) { clearInterval(nudgeTimer); nudgeTimer = null }
   cancelRafNudge()

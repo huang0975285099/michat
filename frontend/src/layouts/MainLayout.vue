@@ -251,6 +251,10 @@ onMounted(() => {
     checkForceUpdate();
     // 启动时若已是解锁态，补解密上次锁定期间暂存的密文
     if (!identity.isLocked) chatStore.processPendingMessages();
+    // 阅后即焚定时删除检查挂在应用级生命周期，确保用户离开具体聊天页后
+    // 倒计时仍能继续推进并按时删除（原挂在 ChatPage 会在离开时被清除）
+    chatStore.startBurnTimer();
+    chatStore.checkExpiredMessages();
 });
 
 // 解锁后（锁定 → 解锁）补解密锁定期间暂存的消息
@@ -265,6 +269,7 @@ onUnmounted(() => {
     stopListening?.();
     stopCallListening?.();
     stopGameListening?.();
+    chatStore.stopBurnTimer();
 });
 
 const tab = ref(pathToTab(route.path));

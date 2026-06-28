@@ -88,6 +88,9 @@ const menuChat = ref(null);
 
 onActivated(async () => {
     await chatStore.loadAllMessages();
+    // 加载完所有消息后立即清理已过期的阅后即焚消息，
+    // 避免会话列表显示即将删除的陈旧条目
+    chatStore.checkExpiredMessages();
     const { data } = await friendApi.getFriends();
     friends.value = data;
     friendMap.value = {};

@@ -316,6 +316,8 @@ async function dbMarkReceiptSent(msgId) {
 }
 
 // 接收端首次读到阅后即焚消息时，启动销毁倒计时并持久化（保留记录的其他字段）
+// 对非阅后即焚消息仅置 read=true；对已启动倒计时的消息为幂等操作，
+// 因此可安全地对任意 msg_id 调用，无需调用方预先判断 burnAfterRead。
 async function dbStartBurnCountdown(msgId, readReceivedAt, burnAt) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {
@@ -326,8 +328,12 @@ async function dbStartBurnCountdown(msgId, readReceivedAt, burnAt) {
       const record = e.target.result
       if (record) {
         record.read = true
-        record.readReceivedAt = readReceivedAt
-        record.burnAt = burnAt
+        // 仅对阅后即焚消息且尚未启动倒计时时设置销毁时间，
+        // 避免重放回执（syncReadStatus 每次返回同一批 ID）导致倒计时反复重置
+        if (record.burnAfterRead && !record.readReceivedAt) {
+          record.readReceivedAt = readReceivedAt
+          record.burnAt = burnAt
+        }
         store.put(record)
       }
     }
@@ -1334,12 +1340,15 @@ function validateMsgId(msgId) {
         if (m.burnAfterRead && !m.readReceivedAt) {
           m.readReceivedAt = readReceivedAt
           m.burnAt = readReceivedAt + BURN_AFTER_READ_DELAY  // 仍保留用于显示倒计时
-          // 读取-修改-写回，保留密文 text 及其他字段（不要用内存中的明文覆盖）
-          await dbStartBurnCountdown(m.id, readReceivedAt, m.burnAt).catch(() => {})
         }
       }
     }
-    await Promise.all(msgIds.map(id => dbMarkMessageRead(id).catch(() => {})))
+    // 统一落库：dbStartBurnCountdown 内部会判断 burnAfterRead 且仅在未启动倒计时时写入，
+    // 因此对非阅后即焚消息仅置 read=true，对已在内存中处理过的消息为幂等操作。
+    // 关键修复：即使消息未加载进内存（发送方不在聊天页），也能正确启动销毁倒计时，
+    // 避免 DB 记录停留在 read=true 但 readReceivedAt/burnAt 为空导致永不删除。
+    const burnAt = readReceivedAt + BURN_AFTER_READ_DELAY
+    await Promise.all(msgIds.map(id => dbStartBurnCountdown(id, readReceivedAt, burnAt).catch(() => {})))
   }
 
   // ── 定时删除过期消息 ────────────────────────────────────────

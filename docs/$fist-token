@@ -510,4 +510,175 @@ programs/
 
 ---
 
-*文档版本：v1.0 | 最后更新：2026-06-28 | 状态：设计讨论稿，待团队确认后锁定*
+---
+
+## 十六、服务端架构与托管余额模型
+
+### 16.1 核心概念：游戏内托管余额
+
+**类比交易所账户**：用户在平台内的 $FIST 余额，由服务器数据库记录，实际资金存放在平台热钱包。用户提现时才真正发生链上转账。
+
+```
+用户 Phantom 钱包
+    │  充值（可选）
+    ▼
+平台热钱包（Solana 地址，平台持有私钥）
+    │
+    │  服务器数据库记账（fist_balance 字段）
+    ├── 玩家 A：2,000 $FIST
+    ├── 玩家 B：5,000 $FIST
+    └── ...
+    │
+    │  提现 / 大额直接上链
+    ▼
+用户各自的 Phantom 钱包（真正属于自己）
+```
+
+### 16.2 各场景的资金流与 Gas 归属
+
+**场景一：PvE 赢局**
+
+```
+链上：❌ 无交易
+服务器：user.fist_balance += 奖励
+Gas：无
+```
+
+**场景二：铜拳场 PvP（100 $FIST）**
+
+```
+对局中：
+  服务器：playerA.balance -= 100，playerB.balance -= 100，暂存奖池 = 200
+
+对局结束（赢家 A）：
+  服务器：playerA.balance += 190，奖池 += 10（待批量处理）
+
+每小时批量上链：
+  平台热钱包 发 1 笔交易：
+    → burn(当小时累计销毁量)
+    → transfer(国库累计量, 国库地址)
+  Gas：平台承担（约 $0.001/笔）
+```
+
+**场景三：金拳场 PvP（10,000 $FIST）**
+
+```
+入场：
+  双方 Phantom 签名 → 各自钱包扣款 → Anchor 合约托管
+  Gas：玩家自己承担（Phantom 弹窗，约 $0.001）
+
+对局结束：
+  服务器提交 settle_match() 指令
+  合约自动执行：赢家打款 + burn + 国库
+  Gas：合约预存 SOL 承担
+```
+
+**场景四：用户提现**
+
+```
+用户操作：填写提现金额 + Phantom 钱包地址
+服务器：user.fist_balance -= 金额
+链上：平台热钱包 → 用户钱包，transfer()
+Gas：平台承担（或收 1 $FIST 手续费覆盖）
+```
+
+### 16.3 分层上链策略
+
+| 场景 | 上链方式 | Gas 承担方 | 用户感知 |
+|------|---------|-----------|---------|
+| PvE 奖励 | 不上链，记账 | 无 | 秒到，无感 |
+| 铜拳场 PvP | 批量延迟上链 | 平台 | 无弹窗 |
+| 银拳场 PvP | 批量延迟上链 | 平台 | 无弹窗 |
+| 金拳场 PvP | 即时上链（Anchor 合约） | 玩家 | Phantom 确认 |
+| 提现 | 即时上链 | 平台或收手续费 | 约 1-3 秒 |
+| NFT 铸造 | 即时上链 | 玩家 | Phantom 确认 |
+| 质押（veFIST） | 即时上链 | 玩家 | Phantom 确认 |
+
+**设计原则**：金额越小越静默（平台吸收 Gas、批量处理）；金额越大越透明（玩家签名、即时上链）。
+
+### 16.4 服务端新增模块
+
+现有 michat 后端（WebSocket + 用户系统）基础上扩展：
+
+**新增数据库表**
+
+```sql
+-- 用户钱包绑定与托管余额
+ALTER TABLE users ADD COLUMN
+  wallet_address  VARCHAR(44),   -- Solana 公钥（可选绑定）
+  fist_balance    BIGINT DEFAULT 0,  -- 托管余额（lamport 精度）
+  referral_code   VARCHAR(8);
+
+-- PvE 每日胜场追踪（防刷）
+CREATE TABLE pve_daily (
+  user_id       BIGINT,
+  date          DATE,
+  wins_today    INT DEFAULT 0,
+  rewards_pending BIGINT DEFAULT 0,
+  PRIMARY KEY (user_id, date)
+);
+
+-- PvP 对局记录
+CREATE TABLE pvp_matches (
+  match_id    UUID PRIMARY KEY,
+  room_tier   SMALLINT,       -- 1=铜 2=银 3=金
+  player_a    BIGINT,
+  player_b    BIGINT,
+  amount      BIGINT,
+  winner      BIGINT,
+  tx_hash     VARCHAR(88),    -- 链上交易哈希（金拳场有）
+  created_at  TIMESTAMPTZ
+);
+
+-- 对局回合记录（用于 Merkle 存证）
+CREATE TABLE match_rounds (
+  match_id    UUID,
+  round_num   SMALLINT,
+  action_a    VARCHAR(8),
+  action_b    VARCHAR(8),
+  damage_a    SMALLINT,
+  damage_b    SMALLINT
+);
+
+-- 邀请关系
+CREATE TABLE referrals (
+  referrer_id         BIGINT,
+  referee_id          BIGINT PRIMARY KEY,
+  bound_at            TIMESTAMPTZ,
+  expires_at          TIMESTAMPTZ,      -- bound_at + 180天
+  total_rewards_paid  BIGINT DEFAULT 0
+);
+```
+
+**新增定时任务**
+
+| 任务 | 频率 | 说明 |
+|------|------|------|
+| 铜银拳场批量 burn + 国库 | 每小时 | 汇总手续费，发 1 笔链上交易 |
+| PvE 奖励计算 | 每日 00:00 | 当日奖励池 ÷ 总胜场数，写入用户 rewards_pending |
+| Merkle Root 存证 | 每日 00:01 | 汇总当日所有对局哈希，提交 1 笔 Solana 交易 |
+| PvE/邀请奖励批量打款 | 每周日 | 将 rewards_pending 批量转账到用户钱包 |
+| veFIST 质押分红 | 每周一 | 固定池 + 国库收入 40% → 按 veFIST 比例分配 |
+
+**热钱包安全规范**
+
+- 热钱包单次转账上限：50,000 $FIST（超额需多签审批）
+- 热钱包余额预警：低于 100 万 $FIST 触发补充告警
+- 大量代币存冷钱包，每日定时向热钱包补充
+- 服务器私钥使用 HSM 或 AWS KMS 管理，不以明文存储
+
+### 16.5 平台月度 Gas 成本估算
+
+| 操作 | 频率 | 单次成本 | 月成本 |
+|------|------|---------|--------|
+| 铜银拳批量结算 | 24次/天 | $0.001 | $0.72 |
+| 每日 Merkle Root | 1次/天 | $0.001 | $0.03 |
+| PvE 周批量打款（1万用户） | 4次/月 | $0.50 | $2.00 |
+| veFIST 分红 | 4次/月 | $0.50 | $2.00 |
+| **月合计** | — | — | **< $5** |
+
+Solana Gas 成本可忽略不计，热钱包安全管理是真正的运营重点。
+
+---
+
+*文档版本：v1.1 | 最后更新：2026-06-28 | 状态：设计讨论稿，待团队确认后锁定*
