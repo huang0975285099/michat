@@ -16,9 +16,18 @@ var messageReadsSQL string
 //go:embed 003_device_tokens.sql
 var deviceTokensSQL string
 
+//go:embed 004_fist_token.sql
+var fistTokenSQL string
+
+//go:embed 005_ironfist_stats.sql
+var ironfistStatsSQL string
+
+//go:embed 006_ironfist_matches.sql
+var ironfistMatchesSQL string
+
 // AutoMigrate 自动执行建表 SQL，幂等（IF NOT EXISTS）。
 func AutoMigrate(db *sql.DB) error {
-	migrations := []string{initSQL, messageReadsSQL, deviceTokensSQL}
+	migrations := []string{initSQL, messageReadsSQL, deviceTokensSQL, fistTokenSQL, ironfistStatsSQL, ironfistMatchesSQL}
 	for _, sql := range migrations {
 		for _, stmt := range splitStatements(sql) {
 			if _, err := db.Exec(stmt); err != nil {

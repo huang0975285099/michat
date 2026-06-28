@@ -74,6 +74,22 @@ export const deviceApi = {
   remove: () => api.delete('/device/token')
 }
 
+// $FIST 代币
+export const fistApi = {
+  getAccount: () => api.get('/fist/account'),
+  claimPvEReward: () => api.post('/fist/pve-reward'),
+  getTransactions: (beforeId, limit = 20) =>
+    api.get('/fist/transactions', { params: { before_id: beforeId || undefined, limit } })
+}
+
+// 铁拳对战统计与成就
+export const ironfistApi = {
+  getStats: () => api.get('/games/ironfist/stats'),
+  reportMatch: (payload) => api.post('/games/ironfist/stats', payload),
+  listMatches: (beforeId, limit = 20) =>
+    api.get('/games/ironfist/matches', { params: { before_id: beforeId || undefined, limit } }),
+}
+
 // 版本信息（公开接口，返回线上最新版本）
 export const versionApi = {
   get: () => api.get('/version')

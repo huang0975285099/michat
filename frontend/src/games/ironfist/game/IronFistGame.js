@@ -28,6 +28,7 @@ export class IronFistGame {
     this._myAction = null
     this._oppAction = null
     this._aiHistory = { consecutiveChargeInterrupted: 0 }
+    this._counterSuccesses = 0 // 本场反击成功次数（用于「反击大师」成就）
     this._pendingOppByRound = new Map() // PvP: 提前到达的对方动作按 round 暂存
     this._listeners = {}
     this._disposed = false
@@ -294,6 +295,11 @@ export class IronFistGame {
       trackAiHistory(this._aiHistory, oppAction, aiInterrupted)
     }
 
+    // 追踪本方反击成功（counter vs attack = 反击命中），用于「反击大师」成就
+    if (myAction === ACTION.COUNTER && oppAction === ACTION.ATTACK) {
+      this._counterSuccesses += 1
+    }
+
     // 提交新状态
     this.state = {
       playerHP: result.playerHP,
@@ -320,6 +326,19 @@ export class IronFistGame {
       this._emit('gameover', this.lastResult.gameResult)
     } else {
       this._startRound()
+    }
+  }
+
+  /**
+   * 返回本场对局摘要（供上报战绩与成就判定用）。
+   * 不含 result：result 由 gameover 事件回调参数提供（认输/超时判负等场景下
+   * lastResult.gameResult 不可靠）。
+   */
+  getMatchSummary() {
+    return {
+      playerHP: this.state.playerHP,
+      counterSuccesses: this._counterSuccesses,
+      rounds: this.state.totalRounds,
     }
   }
 

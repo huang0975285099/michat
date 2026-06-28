@@ -1,6 +1,6 @@
 {
-  "name": "e2eechat-frontend",
-  "version": "1.0.2",
+  "name": "e2eeyunmi",
+  "version": "1.0.6",
   "private": true,
   "dependencies": {
     "@capacitor/android": "^8.0.0",

@@ -127,6 +127,10 @@ func main() {
 	friendSvc := service.NewFriendService(db, rdb)
 	messageReadSvc := service.NewMessageReadService(db)
 	inviteSvc := service.NewInviteService(rdb, friendSvc)
+	fistSvc := service.NewFistService(db)
+	fistHandler := handler.NewFistHandler(fistSvc)
+	ironFistSvc := service.NewIronFistService(db)
+	ironFistHandler := handler.NewIronFistHandler(ironFistSvc)
 
 	hub := ws.NewHub(rdb, friendSvc, identSvc, messageReadSvc)
 
@@ -182,6 +186,16 @@ func main() {
 		auth.GET("/friends/:peerId/read-receipts", messagesHandler.GetReadReceipts)
 		auth.POST("/device/token", deviceHandler.SaveToken)
 		auth.DELETE("/device/token", deviceHandler.DeleteTokens)
+
+		// $FIST 代币
+		auth.GET("/fist/account", fistHandler.GetAccount)
+		auth.POST("/fist/pve-reward", fistHandler.ClaimPvEReward)
+		auth.GET("/fist/transactions", fistHandler.GetTransactions)
+
+		// 铁拳对战统计与成就
+		auth.GET("/games/ironfist/stats", ironFistHandler.GetStats)
+		auth.POST("/games/ironfist/stats", ironFistHandler.ReportMatch)
+		auth.GET("/games/ironfist/matches", ironFistHandler.ListMatches)
 	}
 
 	// 启动定时任务：自动拒绝超过 7 天未处理的好友申请
