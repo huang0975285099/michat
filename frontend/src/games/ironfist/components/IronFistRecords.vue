@@ -42,6 +42,14 @@
                     <span class="rec-d">{{ stats.pvp_draws }} 平</span>
                 </div>
             </div>
+            <div class="rec-mode">
+                <div class="rec-mode-title">👥 好友对战</div>
+                <div class="rec-wld">
+                    <span class="rec-w">{{ stats.friend_wins }} 胜</span>
+                    <span class="rec-l">{{ stats.friend_losses }} 负</span>
+                    <span class="rec-d">{{ stats.friend_draws }} 平</span>
+                </div>
+            </div>
 
             <!-- 逐局明细 -->
             <div class="section-title">逐局明细</div>
@@ -68,7 +76,13 @@
                         </div>
                         <div class="ml-info">
                             <div class="ml-line1">
-                                {{ m.mode === "pve" ? "人机 PvE" : "匹配 PvP" }}
+                                {{
+                                    m.mode === "pve"
+                                        ? "人机 PvE"
+                                        : m.mode === "friend"
+                                          ? "好友对战"
+                                          : "匹配 PvP"
+                                }}
                                 · {{ m.opponent_name || "对手" }}
                             </div>
                             <div class="ml-line2">

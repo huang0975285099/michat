@@ -26,6 +26,9 @@ type StatsView struct {
 	PveWins          int      `json:"pve_wins"`
 	PveLosses        int      `json:"pve_losses"`
 	PveDraws         int      `json:"pve_draws"`
+	FriendWins       int      `json:"friend_wins"`
+	FriendLosses     int      `json:"friend_losses"`
+	FriendDraws      int      `json:"friend_draws"`
 	CurrentWinStreak int      `json:"current_win_streak"`
 	MaxWinStreak     int      `json:"max_win_streak"`
 	TotalBattles     int      `json:"total_battles"`
@@ -76,11 +79,13 @@ func (s *IronFistService) GetStats(ctx context.Context, userID uint64) (*StatsVi
 	err := s.db.QueryRowContext(ctx, `
 		SELECT pvp_wins, pvp_losses, pvp_draws,
 		       pve_wins, pve_losses, pve_draws,
+		       friend_wins, friend_losses, friend_draws,
 		       current_win_streak, max_win_streak, total_battles
 		FROM ironfist_stats WHERE user_id = ?
 	`, userID).Scan(
 		&view.PvpWins, &view.PvpLosses, &view.PvpDraws,
 		&view.PveWins, &view.PveLosses, &view.PveDraws,
+		&view.FriendWins, &view.FriendLosses, &view.FriendDraws,
 		&view.CurrentWinStreak, &view.MaxWinStreak, &view.TotalBattles,
 	)
 	if err != nil {
@@ -128,7 +133,7 @@ func (s *IronFistService) queryAchievements(ctx context.Context, ex interface {
 // ReportMatch 上报对局结果，更新统计并判定成就解锁。
 // 全程在事务内原子执行，返回更新后的统计 + 本次新解锁的成就。
 func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *ReportMatchRequest) (*StatsView, error) {
-	if req.Mode != "pve" && req.Mode != "pvp" {
+	if req.Mode != "pve" && req.Mode != "pvp" && req.Mode != "friend" {
 		return nil, fmt.Errorf("invalid mode: %s", req.Mode)
 	}
 
@@ -147,11 +152,13 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 	err = tx.QueryRowContext(ctx, `
 		SELECT pvp_wins, pvp_losses, pvp_draws,
 		       pve_wins, pve_losses, pve_draws,
+		       friend_wins, friend_losses, friend_draws,
 		       current_win_streak, max_win_streak, total_battles
 		FROM ironfist_stats WHERE user_id = ? FOR UPDATE
 	`, userID).Scan(
 		&st.PvpWins, &st.PvpLosses, &st.PvpDraws,
 		&st.PveWins, &st.PveLosses, &st.PveDraws,
+		&st.FriendWins, &st.FriendLosses, &st.FriendDraws,
 		&st.CurrentWinStreak, &st.MaxWinStreak, &st.TotalBattles,
 	)
 	if err != nil {
@@ -162,7 +169,8 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 	isWin := req.Result == "win"
 	isDraw := req.Result == "draw"
 	// "lose" 与 "doubleLose" 均计为负
-	if req.Mode == "pvp" {
+	switch req.Mode {
+	case "pvp":
 		switch {
 		case isWin:
 			st.PvpWins++
@@ -171,7 +179,17 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 		default:
 			st.PvpLosses++
 		}
-	} else {
+	case "friend":
+		// 好友娱乐局：独立计数，不影响 total_battles / 连胜 / 成就
+		switch {
+		case isWin:
+			st.FriendWins++
+		case isDraw:
+			st.FriendDraws++
+		default:
+			st.FriendLosses++
+		}
+	default: // pve
 		switch {
 		case isWin:
 			st.PveWins++
@@ -182,26 +200,29 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 		}
 	}
 
-	// === 连胜 ===
-	if isWin {
-		st.CurrentWinStreak++
-		if st.CurrentWinStreak > st.MaxWinStreak {
-			st.MaxWinStreak = st.CurrentWinStreak
+	// === 连胜 & 总场次（好友局不计入）===
+	if req.Mode != "friend" {
+		if isWin {
+			st.CurrentWinStreak++
+			if st.CurrentWinStreak > st.MaxWinStreak {
+				st.MaxWinStreak = st.CurrentWinStreak
+			}
+		} else {
+			st.CurrentWinStreak = 0
 		}
-	} else {
-		st.CurrentWinStreak = 0
+		st.TotalBattles++
 	}
-
-	st.TotalBattles++
 
 	if _, err = tx.ExecContext(ctx, `
 		UPDATE ironfist_stats
 		SET pvp_wins=?, pvp_losses=?, pvp_draws=?,
 		    pve_wins=?, pve_losses=?, pve_draws=?,
+		    friend_wins=?, friend_losses=?, friend_draws=?,
 		    current_win_streak=?, max_win_streak=?, total_battles=?
 		WHERE user_id=?
 	`, st.PvpWins, st.PvpLosses, st.PvpDraws,
 		st.PveWins, st.PveLosses, st.PveDraws,
+		st.FriendWins, st.FriendLosses, st.FriendDraws,
 		st.CurrentWinStreak, st.MaxWinStreak, st.TotalBattles,
 		userID); err != nil {
 		return nil, err
@@ -225,50 +246,62 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 		return nil, err
 	}
 
-	// === 成就判定 ===
-	unlocked, err := s.queryAchievements(ctx, tx, userID)
-	if err != nil {
-		return nil, err
-	}
-	existing := make(map[string]struct{}, len(unlocked))
-	for _, c := range unlocked {
-		existing[c] = struct{}{}
-	}
-
-	// 依据更新后的统计 + 本场数据，计算应解锁的成就
-	shouldUnlock := []string{}
-	if st.TotalBattles >= 1 {
-		shouldUnlock = append(shouldUnlock, model.AchievementFirstBattle)
-	}
-	if st.TotalBattles >= 100 {
-		shouldUnlock = append(shouldUnlock, model.AchievementHundredBattles)
-	}
-	if st.MaxWinStreak >= 5 {
-		shouldUnlock = append(shouldUnlock, model.AchievementWinStreak5)
-	}
-	if req.CounterSuccesses >= 3 {
-		shouldUnlock = append(shouldUnlock, model.AchievementCounterMaster)
-	}
-	if isWin && req.PlayerHP < 10 {
-		shouldUnlock = append(shouldUnlock, model.AchievementLowHpComeback)
-	}
-	if isWin && req.PlayerHP > 90 {
-		shouldUnlock = append(shouldUnlock, model.AchievementHighHpWin)
-	}
-
-	// 插入尚未解锁的成就（INSERT IGNORE 保证幂等）
+	// === 成就判定（好友娱乐局不计入任何成就）===
+	var existing map[string]struct{}
 	var newAchievements []string
-	for _, code := range shouldUnlock {
-		if _, ok := existing[code]; ok {
-			continue
-		}
-		if _, err = tx.ExecContext(ctx, `
-			INSERT IGNORE INTO ironfist_achievements (user_id, achievement_code) VALUES (?, ?)
-		`, userID, code); err != nil {
+
+	if req.Mode != "friend" {
+		unlocked, err := s.queryAchievements(ctx, tx, userID)
+		if err != nil {
 			return nil, err
 		}
-		newAchievements = append(newAchievements, code)
-		existing[code] = struct{}{}
+		existing = make(map[string]struct{}, len(unlocked))
+		for _, c := range unlocked {
+			existing[c] = struct{}{}
+		}
+
+		shouldUnlock := []string{}
+		if st.TotalBattles >= 1 {
+			shouldUnlock = append(shouldUnlock, model.AchievementFirstBattle)
+		}
+		if st.TotalBattles >= 100 {
+			shouldUnlock = append(shouldUnlock, model.AchievementHundredBattles)
+		}
+		if st.MaxWinStreak >= 5 {
+			shouldUnlock = append(shouldUnlock, model.AchievementWinStreak5)
+		}
+		if req.CounterSuccesses >= 3 {
+			shouldUnlock = append(shouldUnlock, model.AchievementCounterMaster)
+		}
+		if isWin && req.PlayerHP < 10 {
+			shouldUnlock = append(shouldUnlock, model.AchievementLowHpComeback)
+		}
+		if isWin && req.PlayerHP > 90 {
+			shouldUnlock = append(shouldUnlock, model.AchievementHighHpWin)
+		}
+
+		for _, code := range shouldUnlock {
+			if _, ok := existing[code]; ok {
+				continue
+			}
+			if _, err = tx.ExecContext(ctx, `
+				INSERT IGNORE INTO ironfist_achievements (user_id, achievement_code) VALUES (?, ?)
+			`, userID, code); err != nil {
+				return nil, err
+			}
+			newAchievements = append(newAchievements, code)
+			existing[code] = struct{}{}
+		}
+	} else {
+		// 好友局：查询现有成就仅用于返回视图，不做任何写入
+		unlocked, err := s.queryAchievements(ctx, tx, userID)
+		if err != nil {
+			return nil, err
+		}
+		existing = make(map[string]struct{}, len(unlocked))
+		for _, c := range unlocked {
+			existing[c] = struct{}{}
+		}
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -292,6 +325,9 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 		PveWins:          st.PveWins,
 		PveLosses:        st.PveLosses,
 		PveDraws:         st.PveDraws,
+		FriendWins:       st.FriendWins,
+		FriendLosses:     st.FriendLosses,
+		FriendDraws:      st.FriendDraws,
 		CurrentWinStreak: st.CurrentWinStreak,
 		MaxWinStreak:     st.MaxWinStreak,
 		TotalBattles:     st.TotalBattles,

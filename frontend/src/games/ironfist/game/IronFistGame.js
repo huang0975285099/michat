@@ -158,6 +158,9 @@ export class IronFistGame {
 
   _onNetAction(payload) {
     if (this._disposed) return
+    // 对局已结束：丢弃任何后续动作，避免重结算翻转已定结果
+    // （60s 重连窗口超时判负后，对方延迟重连补发动作会在此被拦截）
+    if (this.phase === PHASE.GAME_OVER) return
     const { round, action } = payload
 
     // 收到对方任何消息 = 对方已重连（如果在 WAITING_RECONNECT）
@@ -210,9 +213,14 @@ export class IronFistGame {
     const {
       state, lastResult, completedRounds,
       pendingRound, pendingPlayerAction, pendingOpponentAction,
+      counterSuccesses, history,
     } = replayGame(actionLog, myChatId)
 
     this.state = state
+    // 恢复回合级派生数据：重放已完成回合时重算反击成功数与逐回合历史，
+    // 否则重连后 _counterSuccesses 归零（漏判「反击大师」成就）、UI moveHistory 缺失。
+    this._counterSuccesses = counterSuccesses
+    if (history.length) this._emit('replay-history', history)
 
     if (lastResult?.gameResult) {
       // 重放过程中游戏已结束（最后一回合结算出胜负）
@@ -281,7 +289,7 @@ export class IronFistGame {
   }
 
   _resolve() {
-    if (this.phase === PHASE.RESOLVING || this.phase === PHASE.WAITING_CONFIRM) return
+    if (this.phase === PHASE.RESOLVING || this.phase === PHASE.WAITING_CONFIRM || this.phase === PHASE.GAME_OVER) return
     this._clearGrace()
     this._setPhase(PHASE.RESOLVING)
 

@@ -3,6 +3,7 @@
 // 数学上必然得到一致状态。详见 docs/ironfist.md 第十四节。
 
 import { resolveRound, initialState } from './resolve.js'
+import { ACTION } from './GameConstants.js'
 
 /**
  * 将服务端返回的 action 列表按 round 配对为 [playerAction, opponentAction] 序列。
@@ -53,6 +54,8 @@ export function pairActionsByRound(actionLog, myChatId) {
  *   pendingRound: number|null, // 本回合（双方动作未齐）的 round 号
  *   pendingPlayerAction: string|null, // 本回合自己已选但对手未到的动作
  *   pendingOpponentAction: string|null,
+ *   counterSuccesses: number,  // 已结算回合中本方反击成功（counter vs attack）累计次数
+ *   history: Array,            // 已结算回合的逐回合结果（{round,playerAction,opponentAction,playerDmg,opponentDmg}）
  * }}
  */
 export function replayGame(actionLog, myChatId) {
@@ -63,6 +66,8 @@ export function replayGame(actionLog, myChatId) {
   let pendingRound = null
   let pendingPlayerAction = null
   let pendingOpponentAction = null
+  let counterSuccesses = 0
+  const history = []
 
   for (const item of paired) {
     if (item.complete) {
@@ -80,6 +85,23 @@ export function replayGame(actionLog, myChatId) {
         bothChargedStalemate: lastResult.bothChargedStalemate,
       }
       completedRounds = item.round
+      // 追踪本方反击成功（与 IronFistGame._resolve 的判定保持一致，用于「反击大师」成就）
+      // 注意：终局回合也计入 counterSuccesses（成就统计需完整），但下方 history 会跳过它
+      if (item.playerAction === ACTION.COUNTER && item.opponentAction === ACTION.ATTACK) {
+        counterSuccesses += 1
+      }
+      // 记录逐回合结果，供重连后恢复 UI 侧 moveHistory（出招统计/累计伤害/战绩明细）
+      // 终局回合不进 history：loadReplay 的 gameover 分支会 emit 'resolved'，
+      // 由 Vue 侧 resolved 监听器 push 进 moveHistory，避免重复
+      if (!lastResult.gameResult) {
+        history.push({
+          round: item.round,
+          playerAction: item.playerAction,
+          opponentAction: item.opponentAction,
+          playerDmg: lastResult.playerDmg,
+          opponentDmg: lastResult.opponentDmg,
+        })
+      }
       // 若该 round 已结束游戏，停止重放
       if (lastResult.gameResult) break
     } else {
@@ -98,5 +120,7 @@ export function replayGame(actionLog, myChatId) {
     pendingRound,
     pendingPlayerAction,
     pendingOpponentAction,
+    counterSuccesses,
+    history,
   }
 }

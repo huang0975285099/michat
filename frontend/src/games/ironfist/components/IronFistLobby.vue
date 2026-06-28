@@ -97,7 +97,7 @@
 
         <div
             class="mode-card mode-card--friend"
-            @click="showFriends = !showFriends"
+            @click="showFriends = true"
         >
             <div class="mode-emoji">👥</div>
             <div class="mode-text">
@@ -107,63 +107,61 @@
                 </div>
                 <div class="mode-desc">实时 1v1 邀请在线好友，不消耗 $FIST</div>
             </div>
-            <q-icon
-                :name="showFriends ? 'expand_less' : 'chevron_right'"
-                size="24px"
-                class="q-ml-auto"
-            />
+            <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
         </div>
 
-        <q-slide-transition>
-            <q-list
-                v-show="showFriends"
-                bordered
-                separator
-                rounded
-                class="q-mt-sm friend-list"
-            >
-                <q-item v-if="loadingFriends">
-                    <q-item-section class="text-center text-grey-5 q-py-md">
-                        <q-spinner-dots color="primary" size="30px" />
-                    </q-item-section>
-                </q-item>
-                <template v-else-if="onlineFriends.length">
-                    <q-item
-                        v-for="f in onlineFriends"
-                        :key="f.chat_id"
-                        clickable
-                        v-ripple
-                        @click="$emit('invite', f)"
-                    >
-                        <q-item-section avatar>
-                            <q-avatar color="purple" text-color="white" size="38px">
-                                {{
-                                    (f.nickname || f.chat_id)
-                                        .slice(0, 1)
-                                        .toUpperCase()
-                                }}
-                            </q-avatar>
-                        </q-item-section>
-                        <q-item-section>
-                            <q-item-label>{{
-                                f.nickname || f.chat_id
-                            }}</q-item-label>
-                            <q-item-label caption class="text-positive"
-                                >在线</q-item-label
-                            >
-                        </q-item-section>
-                        <q-item-section side
-                            ><q-icon name="chevron_right" color="grey-4"
-                        /></q-item-section>
-                    </q-item>
-                </template>
-                <q-item v-else>
-                    <q-item-section class="text-center text-grey-5 q-py-lg"
-                        >暂无在线好友</q-item-section
-                    >
-                </q-item>
-            </q-list>
-        </q-slide-transition>
+        <!-- 好友列表弹窗 -->
+        <q-dialog v-model="showFriends" position="bottom">
+            <q-card class="friend-dialog">
+                <q-card-section class="row items-center q-pb-none">
+                    <div class="text-h6">在线好友</div>
+                    <q-space />
+                    <q-btn icon="close" flat round dense v-close-popup />
+                </q-card-section>
+                <q-card-section>
+                    <q-list v-if="loadingFriends">
+                        <q-item>
+                            <q-item-section class="text-center text-grey-5 q-py-md">
+                                <q-spinner-dots color="primary" size="30px" />
+                            </q-item-section>
+                        </q-item>
+                    </q-list>
+                    <q-list v-else-if="onlineFriends.length" bordered separator rounded>
+                        <q-item
+                            v-for="f in onlineFriends"
+                            :key="f.chat_id"
+                            clickable
+                            v-ripple
+                            @click="$emit('invite', f)"
+                        >
+                            <q-item-section avatar>
+                                <q-avatar color="purple" text-color="white" size="38px">
+                                    {{
+                                        (f.nickname || f.chat_id)
+                                            .slice(0, 1)
+                                            .toUpperCase()
+                                    }}
+                                </q-avatar>
+                            </q-item-section>
+                            <q-item-section>
+                                <q-item-label>{{
+                                    f.nickname || f.chat_id
+                                }}</q-item-label>
+                                <q-item-label caption class="text-positive"
+                                    >在线</q-item-label
+                                >
+                            </q-item-section>
+                            <q-item-section side
+                                ><q-icon name="chevron_right" color="grey-4"
+                            /></q-item-section>
+                        </q-item>
+                    </q-list>
+                    <div v-else class="text-center text-grey-5 q-py-lg">
+                        暂无在线好友
+                    </div>
+                </q-card-section>
+            </q-card>
+        </q-dialog>
 
         <!-- 玩法弹窗 -->
         <q-dialog v-model="showRules" position="bottom">
@@ -365,8 +363,10 @@ onMounted(() => {
     background: rgba(120, 230, 160, 0.2);
     color: #8ef0b0;
 }
-.friend-list {
-    background: rgba(255, 255, 255, 0.04);
+.friend-dialog {
+    background: linear-gradient(180deg, #1a1f3e, #0c1024);
+    color: #fff;
+    border-radius: 16px 16px 0 0;
 }
 
 /* PVE 每日进度条 */

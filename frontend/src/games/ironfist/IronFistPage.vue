@@ -651,7 +651,14 @@ function startPve() {
 }
 
 async function startPvp() {
-    mode.value = "pvp";
+    // 通过好友邀请（URL 含 role=host/guest）进入的均为娱乐好友局。
+    // 注意：目前真实匹配对战尚未实现，所有走 GameNet 的对局都是好友局，
+    // 故 "pvp" 分支当前不可达。将来实现真实 PvP 撮合时，需用独立信号
+    // （如 query.matched / 专门的撮合房间号）区分，不能再复用 role=host/guest。
+    mode.value =
+        route.query.role === "host" || route.query.role === "guest"
+            ? "friend"
+            : "pvp";
     opponentName.value = gameStore.opponentNickname || "对手";
     opponentEmoji.value = "🥷";
     resultType.value = ""; // 清理上一局结果状态
@@ -711,6 +718,16 @@ function setupEngineListeners() {
             stopReconnectTicker();
         }
     });
+    // 重连重放：用服务端 action 流重建已结算回合的 moveHistory（含出招统计/累计伤害/战绩明细）
+    engine.on("replay-history", (history) => {
+        moveHistory.value = history.map((h) => ({
+            round: h.round,
+            player: h.playerAction,
+            opponent: h.opponentAction,
+            pDmg: h.playerDmg,
+            oDmg: h.opponentDmg,
+        }));
+    });
     engine.on("resolved", (r) => {
         stopCountdown();
         // 对方重连后若直接结算（_myAction 存在），需停掉重连倒计时；
@@ -753,7 +770,7 @@ function setupEngineListeners() {
         resultType.value = res;
         teardownTimers();
         stopReconnectTicker();
-        if (mode.value === "pvp") gameStore.reset();
+        if (mode.value === "pvp" || mode.value === "friend") gameStore.reset();
         if (mode.value === "pve" && res === "win") {
             pveReward.value = await fistStore.claimPvEReward();
         }

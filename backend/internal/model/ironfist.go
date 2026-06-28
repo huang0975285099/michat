@@ -11,6 +11,9 @@ type IronFistStats struct {
 	PveWins          int       `json:"pve_wins"`
 	PveLosses        int       `json:"pve_losses"`
 	PveDraws         int       `json:"pve_draws"`
+	FriendWins       int       `json:"friend_wins"`
+	FriendLosses     int       `json:"friend_losses"`
+	FriendDraws      int       `json:"friend_draws"`
 	CurrentWinStreak int       `json:"current_win_streak"`
 	MaxWinStreak     int       `json:"max_win_streak"`
 	TotalBattles     int       `json:"total_battles"`
