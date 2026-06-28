@@ -9,7 +9,7 @@
                     <q-card-section class="text-center q-pa-lg">
                         <div style="font-size: 52px">🥊</div>
                         <div class="text-subtitle1 text-bold q-mt-sm">铁拳3D</div>
-                        <div class="text-caption text-grey-6">回合制心理博弈</div>
+                        <div class="text-caption text-grey-6">区块链技术·零作弊·公开透明</div>
                     </q-card-section>
                     <q-separator />
                     <q-card-actions align="center" class="q-py-sm">

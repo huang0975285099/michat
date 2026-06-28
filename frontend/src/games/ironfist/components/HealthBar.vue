@@ -10,9 +10,11 @@
     </div>
     <div class="hb-track" :class="{ 'hb-track--shake': hit }">
       <!--
-        SVG 血条：viewBox 锁定 100x18，rect 永远画满宽度，
+        SVG 血条：viewBox 锁定 100x18，rect 永远画满宽度（直角矩形），
         通过 clip-path 裁剪右/左侧露出 pct% 区域。
-        好处：渐变/高光保持稳定不变形，宽度变化只擦除不重绘。
+        外轮廓圆角由父容器 .hb-track 的 border-radius + overflow:hidden 负责，
+        避免 preserveAspectRatio="none" 时 SVG rx 圆角被非均匀拉伸变形。
+        好处：渐变/高光保持稳定不变形，宽度变化只擦除不重绘，宽屏下圆角也完美。
       -->
       <svg class="hb-svg" viewBox="0 0 100 18" preserveAspectRatio="none" aria-hidden="true">
         <defs>
@@ -34,12 +36,9 @@
           </filter>
         </defs>
 
-        <!-- 轨道 -->
-        <rect x="0" y="0" width="100" height="18" rx="9" class="hb-track-rect" />
-
         <!-- 残血拖影（红，慢速延迟收缩） -->
         <rect
-          x="0" y="0" width="100" height="18" rx="9"
+          x="0" y="0" width="100" height="18" rx="0"
           :fill="`url(#${ghostId})`"
           class="hb-ghost-rect"
           :style="{ 'clip-path': ghostClip }"
@@ -47,7 +46,7 @@
 
         <!-- 主血条（快速收缩，盖在拖影上） -->
         <rect
-          x="0" y="0" width="100" height="18" rx="9"
+          x="0" y="0" width="100" height="18" rx="0"
           :fill="`url(#${gradId})`"
           class="hb-fill-rect"
           :class="hpClass"
@@ -57,7 +56,7 @@
 
         <!-- 顶部高光条 -->
         <rect
-          x="0" y="0" width="100" height="9" rx="9"
+          x="0" y="0" width="100" height="9" rx="0"
           fill="url(#shineGrad)"
           class="hb-shine-rect"
           :style="{ 'clip-path': fillClip }"
@@ -66,7 +65,7 @@
         <!-- 受击白闪：命中瞬间血量区域闪一下再淡出（key 变化强制重放动画） -->
         <rect
           v-if="flash" :key="flashKey"
-          x="0" y="0" width="100" height="18" rx="9"
+          x="0" y="0" width="100" height="18" rx="0"
           fill="#fff" class="hb-flash-rect"
           :style="{ 'clip-path': fillClip }"
         />
