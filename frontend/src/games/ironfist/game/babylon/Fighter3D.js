@@ -283,6 +283,15 @@ export class Fighter3D {
     setTimeout(() => { if (this._current === g) g.speedRatio = prev }, ms)
   }
 
+  // 子弹时间：把当前动画降速播放一段（暴击专属慢镜，比 hitStop 全冻更有"重拳"延展感）
+  slowMo(ratio = 0.2, ms = 380) {
+    if (!this.hasModel || !this._current) return
+    const g = this._current
+    const prev = g.speedRatio || 1
+    g.speedRatio = ratio
+    setTimeout(() => { if (this._current === g) g.speedRatio = prev }, ms)
+  }
+
   _flash() {
     if (!this._flashMats?.length) return
     this._hitFlashing = true   // 暂停蓄力脉动，让受击红闪显示出来
@@ -315,5 +324,5 @@ export const PAL_OPP_3D = {
   body: new BABYLON.Color3(1.0, 0.40, 0.40), bodyEmis: new BABYLON.Color3(0.28, 0.05, 0.07),
   head: new BABYLON.Color3(0.72, 0.74, 0.82), headEmis: new BABYLON.Color3(0.22, 0.06, 0.07),
   glove: new BABYLON.Color3(0.36, 0.62, 1.0), visor: new BABYLON.Color3(1.0, 0.35, 0.30),
-  aura: new BABYLON.Color3(1.0, 0.78, 0.32),
+  aura: new BABYLON.Color3(1.0, 0.34, 0.30),
 }

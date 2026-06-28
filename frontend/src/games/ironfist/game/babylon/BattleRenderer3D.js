@@ -35,12 +35,16 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
 
   // 环境光照(IBL / studio.hdr)按需求停用——仅靠下方灯光照明。
 
-  // 灯光：环境 + 主光 + 蓝/红边缘光（呼应参考图左蓝右红）
+  // 灯光：半球补光 + 上方主光 + 正面中性补光 + 蓝/红边缘光（呼应参考图左蓝右红）
   const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene)
-  hemi.intensity = 0.7  // 无 IBL 补光，半球光提回
-  hemi.groundColor = new BABYLON.Color3(0.1, 0.1, 0.2)
-  const dir = new BABYLON.DirectionalLight('dir', new BABYLON.Vector3(-0.3, -1, 0.45), scene)
-  dir.intensity = 0.55
+  hemi.intensity = 2  // 无 IBL，整体补光提回（人物为主角，提亮）
+  hemi.groundColor = new BABYLON.Color3(0.14, 0.14, 0.24)
+  const dir = new BABYLON.DirectionalLight('dir', new BABYLON.Vector3(-0.2, -0.95, 0.35), scene)
+  dir.intensity = 2
+  // 正面补光：相机一侧(−z)一盏中性灯，专打角色朝镜头的那面，解决"太暗看不清"
+  const fill = new BABYLON.PointLight('pFill', new BABYLON.Vector3(0, 2.6, -4.8), scene)
+  fill.diffuse = new BABYLON.Color3(1.0, 0.97, 0.92); fill.intensity = 24; fill.range = 20
+  // fill.diffuse = new BABYLON.Color3(1.0, 0.97, 0.92); fill.intensity = 36; fill.range = 20
   const blue = new BABYLON.PointLight('pBlue', new BABYLON.Vector3(-3.4, 2.2, -2.2), scene)
   blue.diffuse = new BABYLON.Color3(0.35, 0.55, 1.0); blue.intensity = 13
   const red = new BABYLON.PointLight('pRed', new BABYLON.Vector3(3.4, 2.2, -2.2), scene)
@@ -61,22 +65,70 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
   pipe.imageProcessingEnabled = true
   pipe.imageProcessing.toneMappingEnabled = true
   pipe.imageProcessing.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES
-  pipe.imageProcessing.exposure = 0.92
-  pipe.imageProcessing.contrast = 1.1
+  pipe.imageProcessing.exposure = 1.06
+  pipe.imageProcessing.contrast = 1.05
   pipe.imageProcessing.vignetteEnabled = true
-  pipe.imageProcessing.vignetteWeight = 2.6
+  pipe.imageProcessing.vignetteWeight = 1.8
   pipe.imageProcessing.vignetteColor = new BABYLON.Color4(0, 0, 0, 0)
 
-  // 擂台
+  // 擂台：暗色侧壁(柱体) + 金色科技顶面(程序贴图，自发光不泛白) + 金色霓虹边环
   const plat = BABYLON.MeshBuilder.CreateCylinder('plat', { diameter: 5.4, height: 0.3, tessellation: 56 }, scene)
   const pm = new BABYLON.StandardMaterial('pm', scene)
-  pm.diffuseColor = new BABYLON.Color3(0.12, 0.10, 0.20)
-  pm.emissiveColor = new BABYLON.Color3(0.05, 0.04, 0.11)
-  pm.specularColor = new BABYLON.Color3(0.06, 0.06, 0.08)  // 压掉默认白高光（地台被打爆白的主因）
+  pm.diffuseColor = new BABYLON.Color3(0.10, 0.07, 0.035)
+  pm.emissiveColor = new BABYLON.Color3(0.04, 0.028, 0.012)
+  pm.specularColor = new BABYLON.Color3(0.05, 0.04, 0.02)  // 压掉白高光，避免被强灯打爆
   plat.material = pm; plat.position.y = -0.15
+
+  // 金色冠军赛顶面（程序生成：同心金环 + 辐射科技线 + 中心五角星徽记）
+  function _star(c, cx, cy, ro, ri, n) {
+    c.beginPath()
+    for (let i = 0; i < n * 2; i++) {
+      const r = i % 2 === 0 ? ro : ri
+      const a = (i / (n * 2)) * Math.PI * 2 - Math.PI / 2
+      const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r
+      i === 0 ? c.moveTo(x, y) : c.lineTo(x, y)
+    }
+    c.closePath(); c.fill()
+  }
+  function _platTopTex() {
+    const s = 1024, R = s / 2
+    const t = new BABYLON.DynamicTexture('platTopTex', { width: s, height: s }, scene, true)
+    const c = t.getContext()
+    const bg = c.createRadialGradient(R, R, 0, R, R, R)
+    bg.addColorStop(0, '#2c1e0b'); bg.addColorStop(0.7, '#1a1208'); bg.addColorStop(1, '#0d0904')
+    c.fillStyle = bg; c.fillRect(0, 0, s, s)
+    c.translate(R, R)
+    for (let i = 0; i < 5; i++) {            // 同心金环
+      c.strokeStyle = 'rgba(255,194,77,' + (0.45 + i * 0.1) + ')'
+      c.lineWidth = i === 4 ? 11 : 4
+      c.beginPath(); c.arc(0, 0, R * (0.22 + i * 0.16), 0, 7); c.stroke()
+    }
+    c.strokeStyle = 'rgba(255,138,61,0.38)'; c.lineWidth = 3   // 辐射科技线
+    for (let i = 0; i < 16; i++) {
+      const a = i / 16 * Math.PI * 2
+      c.beginPath(); c.moveTo(Math.cos(a) * R * 0.40, Math.sin(a) * R * 0.40); c.lineTo(Math.cos(a) * R * 0.84, Math.sin(a) * R * 0.84); c.stroke()
+    }
+    // 中心徽记：暗圆底 + 金环 + 金色五角星
+    c.fillStyle = 'rgba(18,12,6,0.96)'; c.beginPath(); c.arc(0, 0, R * 0.18, 0, 7); c.fill()
+    c.strokeStyle = 'rgba(255,194,77,0.9)'; c.lineWidth = 5; c.beginPath(); c.arc(0, 0, R * 0.18, 0, 7); c.stroke()
+    c.fillStyle = 'rgba(255,212,125,1)'; _star(c, 0, 0, R * 0.12, R * 0.05, 5)
+    // 整体压暗：金台是背景、别抢角色（叠一层半透明黑）
+    // c.fillStyle = 'rgba(0,0,0,0.5)'; c.fillRect(-R, -R, s, s)
+    t.update()
+    return t
+  }
+  const platTop = BABYLON.MeshBuilder.CreateDisc('platTop', { radius: 2.68, tessellation: 64 }, scene)
+  platTop.rotation.x = -Math.PI / 2          // 立面 → 朝上
+  platTop.position.y = 0.012                  // 紧贴柱顶、压在边环之下，防 z-fighting
+  const ptm = new BABYLON.StandardMaterial('ptm', scene)
+  ptm.emissiveTexture = _platTopTex(); ptm.disableLighting = true
+  ptm.specularColor = new BABYLON.Color3(0, 0, 0); ptm.backFaceCulling = false
+  platTop.material = ptm; platTop.isPickable = false
+
+  // 金色霓虹边环
   const ring = BABYLON.MeshBuilder.CreateTorus('ring', { diameter: 5.2, thickness: 0.08, tessellation: 56 }, scene)
   const rm = new BABYLON.StandardMaterial('rm', scene)
-  rm.emissiveColor = new BABYLON.Color3(0.42, 0.32, 0.85); rm.disableLighting = true
+  rm.emissiveColor = new BABYLON.Color3(1.0, 0.62, 0.18); rm.disableLighting = true
   ring.material = rm; ring.position.y = 0.02
 
   // ── 环境层：星空穹顶 / 反光地面 / 能量网格 / 浮尘 / 光柱（全部程序生成，无额外贴图文件）──
@@ -162,19 +214,6 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
   gm.backFaceCulling = false
   gridDisc.material = gm; gridDisc.isPickable = false
 
-  // 4) 顶部双色光柱：左蓝右红两道体积光，加色混合当"光"读，呼应边缘光
-  function _beam(x, color) {
-    const cone = BABYLON.MeshBuilder.CreateCylinder('beam', { diameterTop: 0.2, diameterBottom: 3.0, height: 5.2, tessellation: 24 }, scene)
-    cone.position.set(x, 3.0, -1.4); cone.isPickable = false
-    const bm = new BABYLON.StandardMaterial('beamM', scene)
-    bm.emissiveColor = color; bm.disableLighting = true; bm.backFaceCulling = false
-    bm.alpha = 0.32; bm.alphaMode = BABYLON.Engine.ALPHA_ADD; bm.fogEnabled = false
-    cone.material = bm; glow.addExcludedMesh(cone)
-    return cone
-  }
-  _beam(-3.4, new BABYLON.Color3(0.30, 0.5, 1.0))
-  _beam(3.4, new BABYLON.Color3(1.0, 0.32, 0.30))
-
   // 5) 空气浮尘：缓慢上升的发光微粒，给空间体积感与生命力
   const motes = new BABYLON.ParticleSystem('motes', 220, scene)
   motes.particleTexture = _softTex('mote')
@@ -230,15 +269,114 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     const now = performance.now() - _pulseT0
     const p = 0.5 + 0.5 * Math.sin(now * 0.0011)
     gm.emissiveColor.set(0.22 + 0.16 * p, 0.34 + 0.18 * p, 0.62 + 0.33 * p)
-    rm.emissiveColor.set(0.34 + 0.12 * p, 0.26 + 0.10 * p, 0.78 + 0.12 * p)
+    // rm.emissiveColor.set(0.90 + 0.28 * p, 0.52 + 0.18 * p, 0.14 + 0.08 * p)
+    rm.emissiveColor.set(0.52 + 0.16 * p, 0.30 + 0.10 * p, 0.08 + 0.05 * p)
     for (const o of sparks) {
       const ang = o.a + now * o.sp
       o.mesh.position.set(Math.cos(ang) * o.r, o.h + Math.sin(now * 0.001 + o.a) * 0.35, Math.sin(ang) * o.r)
     }
   })
 
+  // 8) 看台建筑：lathe 旋转阶梯剖面 → 环绕擂台的体育馆碗状看台（暗色 + 冷色台阶边线，不与金台抢眼）
+  // {
+  //   const prof = [new BABYLON.Vector3(6.8, -0.35, 0)]
+  //   for (let i = 0; i < 6; i++) {
+  //     const r0 = 7.0 + i * 1.45, y0 = -0.1 + i * 0.6
+  //     prof.push(new BABYLON.Vector3(r0, y0, 0))            // 台阶踏面内沿
+  //     prof.push(new BABYLON.Vector3(r0 + 1.25, y0, 0))     // 踏面外沿
+  //     prof.push(new BABYLON.Vector3(r0 + 1.25, y0 + 0.6, 0)) // 竖起的踢面
+  //   }
+  //   prof.push(new BABYLON.Vector3(16.6, 3.7, 0))           // 顶圈收口
+  //   const stands = BABYLON.MeshBuilder.CreateLathe('stands', { shape: prof, tessellation: 72, sideOrientation: BABYLON.Mesh.DOUBLESIDE }, scene)
+  //   const sm = new BABYLON.StandardMaterial('standsMat', scene)
+  //   sm.diffuseColor = new BABYLON.Color3(0.05, 0.055, 0.085)
+  //   sm.specularColor = new BABYLON.Color3(0.02, 0.02, 0.03)
+  //   sm.emissiveColor = new BABYLON.Color3(0.015, 0.018, 0.03)
+  //   stands.material = sm; stands.isPickable = false
+  //   // 各层踏面前沿冷色霓虹边线：定义看台层次（暗，避免与金台争抢）
+  //   const edgeMat = new BABYLON.StandardMaterial('standEdge', scene)
+  //   edgeMat.emissiveColor = new BABYLON.Color3(0.16, 0.30, 0.6); edgeMat.disableLighting = true
+  //   for (let i = 0; i < 6; i++) {
+  //     const r = 7.0 + i * 1.45 + 1.25
+  //     const e = BABYLON.MeshBuilder.CreateTorus('standEdge' + i, { diameter: r * 2, thickness: 0.05, tessellation: 64 }, scene)
+  //     e.position.y = -0.1 + i * 0.6 + 0.02; e.material = edgeMat; e.isPickable = false
+  //     glow.addExcludedMesh(e)
+  //   }
+  // }
+
+  // 9) 观众席：环绕擂台、逐层升高的人群光点（thin instances → 上千个点仅 1 个 draw call）
+  //    暖白/蓝/红混色 + 亮度随机，远处被纵深雾吃掉融入暗场，像体育馆里的观众灯海。
+  const crowd = BABYLON.MeshBuilder.CreateBox('crowd', { size: 0.12 }, scene)
+  const crowdMat = new BABYLON.StandardMaterial('crowdMat', scene)
+  crowdMat.emissiveColor = new BABYLON.Color3(1, 1, 1); crowdMat.disableLighting = true
+  crowd.material = crowdMat; crowd.isPickable = false
+  crowd.alwaysSelectAsActiveMesh = true   // 防止 thin instance 被整体视锥剔除
+  glow.addExcludedMesh(crowd)             // 不进 GlowLayer（仍吃管线 Bloom，足够闪烁）
+  {
+    const mats = [], cols = [], tmp = BABYLON.Matrix.Identity()
+    const palette = [[1.0, 0.86, 0.6], [0.4, 0.62, 1.0], [1.0, 0.45, 0.4], [0.82, 0.82, 0.95]]
+    for (let tier = 0; tier < 6; tier++) {
+      const radius = 8.0 + tier * 1.45      // 逐层外扩
+      const y = 0.15 + tier * 0.6           // 逐层升高（看台坡度）
+      const n = Math.max(40, Math.floor(2 * Math.PI * radius / 0.42))
+      for (let j = 0; j < n; j++) {
+        const ang = (j / n) * Math.PI * 2 + (Math.random() - 0.5) * 0.06
+        const rr = radius + (Math.random() - 0.5) * 0.7
+        BABYLON.Matrix.TranslationToRef(Math.cos(ang) * rr, y + (Math.random() - 0.5) * 0.3, Math.sin(ang) * rr, tmp)
+        mats.push(...tmp.asArray())
+        const col = palette[(Math.random() * palette.length) | 0], b = 0.45 + Math.random() * 0.85
+        cols.push(col[0] * b, col[1] * b, col[2] * b, 1)
+      }
+    }
+    crowd.thinInstanceSetBuffer('matrix', new Float32Array(mats), 16)
+    crowd.thinInstanceSetBuffer('color', new Float32Array(cols), 4)
+  }
+  // 观众灯海整体的轻微明暗呼吸（单值，开销极小）
+  const _crowdT0 = performance.now()
+  scene.onBeforeRenderObservable.add(() => {
+    const k = 0.9 + 0.1 * Math.sin((performance.now() - _crowdT0) * 0.0016)
+    crowdMat.emissiveColor.set(k, k, k)
+  })
+
   const me = new Fighter3D(scene, 'me', PAL_ME_3D, +1)
   const opp = new Fighter3D(scene, 'opp', PAL_OPP_3D, -1)
+
+  // 脚下阵营光圈：跟随各自斗士、轻微呼吸脉动，强化站位（蓝=我方 / 红=对手）
+  function _footRingTex() {
+    const s = 256, R = s / 2
+    const t = new BABYLON.DynamicTexture('footRing', s, scene, false)
+    const c = t.getContext(); c.translate(R, R)
+    const g = c.createRadialGradient(0, 0, 0, 0, 0, R)
+    g.addColorStop(0, 'rgba(255,255,255,0.16)')   // 中心淡填充
+    g.addColorStop(0.74, 'rgba(255,255,255,0.04)')
+    g.addColorStop(0.84, 'rgba(255,255,255,0.95)') // 亮环带
+    g.addColorStop(0.93, 'rgba(255,255,255,0.85)')
+    g.addColorStop(1, 'rgba(255,255,255,0)')
+    c.fillStyle = g; c.beginPath(); c.arc(0, 0, R, 0, 7); c.fill()
+    c.strokeStyle = 'rgba(255,255,255,1)'; c.lineWidth = s * 0.05   // 实描边，定义清晰
+    c.beginPath(); c.arc(0, 0, R * 0.87, 0, 7); c.stroke()
+    t.hasAlpha = true; t.update()
+    return t
+  }
+  const footTex = _footRingTex()
+  function _footRing(color) {
+    const d = BABYLON.MeshBuilder.CreateDisc('foot', { radius: 0.8, tessellation: 40 }, scene)
+    d.rotation.x = -Math.PI / 2; d.position.y = 0.024; d.isPickable = false
+    const m = new BABYLON.StandardMaterial('footM', scene)
+    m.emissiveTexture = footTex; m.opacityTexture = footTex; m.emissiveColor = color
+    m.disableLighting = true; m.backFaceCulling = false; m.fogEnabled = false
+    m.alphaMode = BABYLON.Engine.ALPHA_ADD
+    d.material = m; return d
+  }
+  // 阵营色主通道提到 >1：叠在亮金台面上仍能压住金色、并触发 bloom 发光（不会被洗成灰）
+  const meFoot = _footRing(new BABYLON.Color3(0.22, 0.6, 2.1))
+  const oppFoot = _footRing(new BABYLON.Color3(2.1, 0.28, 0.22))
+  scene.onBeforeRenderObservable.add(() => {
+    const pulse = 0.88 + 0.12 * Math.sin(performance.now() * 0.004)
+    if (me.root) { meFoot.position.x = me.root.position.x; meFoot.position.z = me.root.position.z }
+    if (opp.root) { oppFoot.position.x = opp.root.position.x; oppFoot.position.z = opp.root.position.z }
+    meFoot.scaling.setAll(pulse); oppFoot.scaling.setAll(pulse)
+  })
 
   const ctrl = {
     engine, scene, ready: false,
@@ -272,8 +410,10 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     opp.playAction(r.opponentAction)
     _approach(r)
 
-    const meKO = r.gameResult === 'lose' || r.gameResult === 'doubleLose'
-    const oppKO = r.gameResult === 'win' || r.gameResult === 'doubleLose'
+    // 倒地看血量，不只看结果字串：游戏结束时 HP≤0 即倒下（含"双双空血却判平局"）
+    const ended = !!r.gameResult
+    const meKO = ended && (r.gameResult === 'lose' || r.gameResult === 'doubleLose' || r.playerHP <= 0)
+    const oppKO = ended && (r.gameResult === 'win' || r.gameResult === 'doubleLose' || r.opponentHP <= 0)
 
     // 命中/终局都挪到拳头"打实"的时刻统一触发（按动画时长动态算），才对得上
     if (r.playerDmg > 0 || r.opponentDmg > 0 || meKO || oppKO) {
@@ -296,12 +436,44 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     const big = Math.max(r.playerDmg, r.opponentDmg) >= CRIT_THRESHOLD
     if (r.playerDmg > 0) _impactFx(me, opp, r.playerDmg)
     if (r.opponentDmg > 0) _impactFx(opp, me, r.opponentDmg)
-
-    me.hitStop(big ? 150 : HITSTOP_MS); opp.hitStop(big ? 150 : HITSTOP_MS)
-    _shake(r)
-    _zoomPunch(r)
-    if (big) _critFlash()
     _dmgText(r)
+
+    if (big) {
+      // 暴击专属演出：子弹时间 + 全屏顿亮 + 推近受击者的特写镜头
+      me.slowMo(0.2, 430); opp.slowMo(0.2, 430)
+      _critFlash()
+      const victim = meKO ? me : oppKO ? opp : (r.playerDmg >= r.opponentDmg ? me : opp)
+      _critCinematic(victim)
+    } else {
+      me.hitStop(HITSTOP_MS); opp.hitStop(HITSTOP_MS)
+      _shake(r)
+      _zoomPunch(r)
+    }
+  }
+
+  // 暴击特写：快速推近受击者(降 radius + target 平移到其身上)，短暂定格后回弹；
+  // 自带轻微抖动，替代普通命中的震屏/推镜。临时放宽 lowerRadiusLimit 以便贴近。
+  function _critCinematic(victim) {
+    const baseR = cam.radius, baseLower = cam.lowerRadiusLimit
+    const baseTarget = cam.target.clone()
+    cam.lowerRadiusLimit = 3.0
+    const vx = victim.root ? victim.root.position.x : victim.home.x
+    const focus = new BABYLON.Vector3(vx, 1.2, 0)
+    const zoomR = Math.max(3.0, baseR * 0.6)
+    const start = performance.now(), inMs = 120, hold = 170, outMs = 280, dur = inMs + hold + outMs
+    const obs = scene.onBeforeRenderObservable.add(() => {
+      const t = performance.now() - start
+      if (t >= dur) {
+        cam.radius = baseR; cam.target.copyFrom(baseTarget); cam.lowerRadiusLimit = baseLower
+        scene.onBeforeRenderObservable.remove(obs); return
+      }
+      const k = t < inMs ? t / inMs : t < inMs + hold ? 1 : 1 - (t - inMs - hold) / outMs
+      const e = k * k * (3 - 2 * k)  // smoothstep
+      const j = (t > inMs && t < inMs + hold) ? 0.05 : 0  // 定格期轻微抖动
+      cam.radius = baseR + (zoomR - baseR) * e
+      cam.target.x = baseTarget.x + (focus.x - baseTarget.x) * e + (Math.random() - 0.5) * j
+      cam.target.y = baseTarget.y + (focus.y - baseTarget.y) * e + (Math.random() - 0.5) * j
+    })
   }
 
   // 命中镜头震屏
@@ -437,30 +609,45 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
   }
   function _float(pos, dmg) {
     const crit = dmg >= CRIT_THRESHOLD
-    const dt = new BABYLON.DynamicTexture('dmg', { width: 256, height: 128 }, scene, false)
+    const W = 512, H = crit ? 256 : 160
+    const dt = new BABYLON.DynamicTexture('dmg', { width: W, height: H }, scene, false)
     dt.hasAlpha = true
     const ctx = dt.getContext()
-    ctx.clearRect(0, 0, 256, 128)
-    ctx.font = 'bold ' + (crit ? 96 : 72) + 'px Arial'
+    ctx.clearRect(0, 0, W, H)
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-    ctx.lineWidth = 8; ctx.strokeStyle = '#000'
-    ctx.strokeText('-' + dmg, 128, 64)
-    ctx.fillStyle = crit ? '#ffd34d' : '#ff5a5a'
-    ctx.fillText('-' + dmg, 128, 64)
+    if (crit) {
+      // CRITICAL! 横幅
+      ctx.font = 'bold italic 66px Arial'
+      ctx.lineWidth = 10; ctx.strokeStyle = '#5a1500'; ctx.strokeText('CRITICAL!', W / 2, 60)
+      ctx.fillStyle = '#ff7a1a'; ctx.fillText('CRITICAL!', W / 2, 60)
+      // 伤害数字（大、金）
+      ctx.font = 'bold 140px Arial'
+      ctx.lineWidth = 13; ctx.strokeStyle = '#000'; ctx.strokeText('-' + dmg, W / 2, 178)
+      ctx.fillStyle = '#ffd34d'; ctx.fillText('-' + dmg, W / 2, 178)
+    } else {
+      ctx.font = 'bold 100px Arial'
+      ctx.lineWidth = 8; ctx.strokeStyle = '#000'; ctx.strokeText('-' + dmg, W / 2, H / 2)
+      ctx.fillStyle = '#ff5a5a'; ctx.fillText('-' + dmg, W / 2, H / 2)
+    }
     dt.update()
     const mat = new BABYLON.StandardMaterial('dmgM', scene)
     mat.diffuseTexture = dt; mat.emissiveColor = new BABYLON.Color3(1, 1, 1)
-    mat.opacityTexture = dt; mat.disableLighting = true; mat.backFaceCulling = false
-    const plane = BABYLON.MeshBuilder.CreatePlane('dmgP', { width: 1.6, height: 0.8 }, scene)
+    mat.opacityTexture = dt; mat.disableLighting = true; mat.backFaceCulling = false; mat.fogEnabled = false
+    const w = crit ? 3.2 : 2.0, h = w * H / W
+    const plane = BABYLON.MeshBuilder.CreatePlane('dmgP', { width: w, height: h }, scene)
     plane.material = mat; plane.position.copyFrom(pos)
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL
-    const start = performance.now(), dur = 850, y0 = pos.y
+    const start = performance.now(), dur = crit ? 1150 : 850, y0 = pos.y, rise = crit ? 1.2 : 0.9
     const obs = scene.onBeforeRenderObservable.add(() => {
       const t = performance.now() - start
       if (t >= dur) { plane.dispose(); mat.dispose(); dt.dispose(); scene.onBeforeRenderObservable.remove(obs); return }
       const k = t / dur
-      plane.position.y = y0 + k * 0.9
-      mat.alpha = 1 - k
+      plane.position.y = y0 + k * rise
+      mat.alpha = k > 0.7 ? (1 - (k - 0.7) / 0.3) : 1
+      if (crit) {  // 弹入：0→1.2 过冲再回落到 1
+        const s = k < 0.15 ? (k / 0.15) * 1.2 : k < 0.3 ? 1.2 - 0.2 * ((k - 0.15) / 0.15) : 1
+        plane.scaling.setAll(s)
+      }
     })
   }
 

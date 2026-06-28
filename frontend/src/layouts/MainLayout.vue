@@ -90,7 +90,7 @@
                 <q-tab
                     name="games"
                     icon="sports_esports"
-                    label="游戏"
+                    label="链游"
                     @click="router.push('/games')"
                 />
                 <q-tab
@@ -302,7 +302,7 @@ const pageTitle = computed(() => {
     if (route.path === "/") return "云密";
     if (route.path.startsWith("/chat/")) return route.query.nickname || "聊天";
     if (route.path === "/friends") return "好友";
-    if (route.path === "/games") return "游戏中心";
+    if (route.path === "/games") return "区块链游戏";
     if (route.path === "/profile") return "我的资料";
     return "云密";
 });

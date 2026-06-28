@@ -5,7 +5,7 @@
       <div class="row items-center q-mb-md">
         <q-btn flat round dense icon="arrow_back" color="white" @click="goHome" />
         <div style="font-size: 24px" class="q-ml-sm">🥊</div>
-        <div class="text-h6 q-ml-xs">铁拳</div>
+        <div class="text-h6 q-ml-xs">铁拳3D</div>
         <q-space />
         <span class="text-caption text-grey-5">回合制心理博弈</span>
       </div>
@@ -89,6 +89,7 @@
     <div v-else-if="view === 'playing'" class="battle">
       <!-- ===== 顶部对战 HUD：我方 | 回合+环形倒计时 | 对手 ===== -->
       <div class="match-hud">
+       <div class="mh-grid">
         <!-- 我方 -->
         <div class="mh-player mh-player--me" :class="{ 'mh-player--hit': meHit }">
           <div class="mh-head">
@@ -98,7 +99,10 @@
               <div class="mh-score"><span class="mh-score-ic">⚔</span>{{ myDamage }}</div>
             </div>
           </div>
-          <HealthBar :hp="pHP" :charged="pCharged" bare />
+          <div class="mh-hpbar">
+            <span class="mh-heart mh-heart--me">♥</span>
+            <HealthBar :hp="pHP" :charged="pCharged" bare />
+          </div>
           <div class="mh-tally">
             <span v-for="t in myTally" :key="t.key" class="tally">
               <span class="tally-ic">{{ t.icon }}</span>{{ t.count }}
@@ -108,7 +112,11 @@
 
         <!-- 中央：回合数 + 环形倒计时（SVG 描边动画） -->
         <div class="mh-center">
-          <div class="mh-round">ROUND {{ round }}</div>
+          <div class="mh-round-bar">
+            <span class="mh-round-tick mh-round-tick--me"></span>
+            <div class="mh-round">ROUND {{ round }}</div>
+            <span class="mh-round-tick mh-round-tick--opp"></span>
+          </div>
           <div class="cd-ring" :class="cdStage ? `cd-ring--${cdStage}` : ''">
             <!--
               SVG 圆环：viewBox 64x64，r=28，周长 ≈ 175.93。
@@ -139,11 +147,16 @@
             <div class="cd-inner">
               <template v-if="phase === 'deciding'">
                 <span class="cd-num">{{ countdown }}</span>
+                <!-- <span class="cd-unit">秒</span> -->
               </template>
               <span v-else class="cd-glyph">⚔</span>
             </div>
           </div>
-          <div class="mh-status">{{ phaseLabel }}</div>
+          <div class="mh-status-bar">
+            <span class="mh-status-dot mh-status-dot--me"></span>
+            <div class="mh-status">{{ phaseLabel }}</div>
+            <span class="mh-status-dot mh-status-dot--opp"></span>
+          </div>
         </div>
 
         <!-- 对手 -->
@@ -155,13 +168,17 @@
               <div class="mh-score"><span class="mh-score-ic">⚔</span>{{ oppDamage }}</div>
             </div>
           </div>
-          <HealthBar :hp="oHP" :charged="oCharged" align="right" bare />
+          <div class="mh-hpbar mh-hpbar--right">
+            <HealthBar :hp="oHP" :charged="oCharged" align="right" bare />
+            <span class="mh-heart mh-heart--opp">♥</span>
+          </div>
           <div class="mh-tally mh-tally--right">
             <span v-for="t in oppTally" :key="t.key" class="tally">
               <span class="tally-ic">{{ t.icon }}</span>{{ t.count }}
             </span>
           </div>
         </div>
+       </div>
       </div>
 
       <!-- 3D 战斗区（出招揭示行作为浮层叠在底部，不占布局、不抖动） -->
@@ -172,24 +189,24 @@
 
         <transition name="reveal-fade">
           <div v-if="showReveal" class="reveal-wrap">
+            <div v-if="resultPhase" class="reveal-verdict" :class="'rvv--' + roundVerdict.tone">
+              {{ roundVerdict.text }}
+            </div>
             <div class="reveal">
               <div class="rv-side rv-side--me">
-                <span class="rv-label">我方出招</span>
+                <!-- <span class="rv-label">我方出招</span> -->
                 <span class="rv-move">
                   <span class="rv-ic">{{ actionMeta[revealMy]?.icon }}</span>{{ actionMeta[revealMy]?.name }}
                 </span>
               </div>
-              <div class="rv-vs">VS</div>
+              <!-- <div class="rv-vs">VS</div> -->
               <div class="rv-side rv-side--opp">
-                <span class="rv-label">对手出招</span>
+                <!-- <span class="rv-label">对手出招</span> -->
                 <span v-if="revealOpp" class="rv-move">
                   <span class="rv-ic">{{ actionMeta[revealOpp]?.icon }}</span>{{ actionMeta[revealOpp]?.name }}
                 </span>
                 <span v-else class="rv-move rv-move--wait">？</span>
               </div>
-            </div>
-            <div v-if="resultPhase" class="reveal-verdict" :class="'rvv--' + roundVerdict.tone">
-              {{ roundVerdict.text }}
             </div>
           </div>
         </transition>
@@ -526,7 +543,10 @@ function setupEngineListeners() {
     // 与命中特效/飘字同帧呈现；无人掉血的回合不会有 impact，HP 无变化直接同步即可。
     if (r.playerDmg <= 0 && r.opponentDmg <= 0) { pHP.value = r.playerHP; oHP.value = r.opponentHP }
     clearTimeout(confirmTimer)
-    const koEnd = r.gameResult === 'win' || r.gameResult === 'lose' || r.gameResult === 'doubleLose'
+    // 有人倒地（含双双空血的平局）就走长停留，留足倒地动画
+    const koEnd = !!r.gameResult && (
+      r.gameResult === 'win' || r.gameResult === 'lose' || r.gameResult === 'doubleLose' ||
+      r.playerHP <= 0 || r.opponentHP <= 0)
     const holdMs = r.gameResult ? (koEnd ? END_HOLD_KO_MS : END_HOLD_MS) : ROUND_HOLD_MS
     confirmTimer = setTimeout(() => engine?.confirmNextRound(), holdMs)
   })
@@ -813,19 +833,47 @@ function goHome() { router.push('/games') }
   display: flex; flex-direction: column;
   height: 100dvh; padding: 8px 10px 10px;
   gap: 8px;
+  /* 手机竖屏设计：PC/宽屏上限制宽度并居中，避免血条等被横向拉伸变形 */
+  /* width: 100%; max-width: 480px; margin: 0 auto; */
 }
 
 /* ===== 顶部对战 HUD ===== */
+/* 外层 = 发光渐变描边（蓝→紫→红），用 2px padding 露出作为边框；
+   切角 clip-path 营造设计稿的科技感折角面板。 */
 .match-hud {
+  padding: 2px;
+  border-radius: 16px;
+  background: linear-gradient(110deg, #4d8cff 0%, #6a4fc0 42%, #8a3f9a 58%, #ff5a5a 100%);
+  /* clip-path 会裁掉 box-shadow，故用 drop-shadow（贴合切角轮廓、渲染在裁剪外）发光 */
+  filter:
+    drop-shadow(0 0 9px rgba(77, 140, 255, 0.4))
+    drop-shadow(0 0 9px rgba(255, 90, 90, 0.35))
+    drop-shadow(0 5px 12px rgba(0, 0, 0, 0.5));
+  clip-path: polygon(
+    16px 0, calc(100% - 16px) 0, 100% 16px,
+    100% calc(100% - 14px), calc(100% - 16px) 100%,
+    16px 100%, 0 calc(100% - 14px), 0 16px
+  );
+}
+/* 内层 = 深色面板 + 点阵纹理 + 左右蓝/红冷暖辉光，同向切角略微内收 */
+.mh-grid {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: start;
-  gap: 10px;
-  padding: 10px 10px 8px;
-  border-radius: 16px;
-  background: linear-gradient(180deg, rgba(44, 34, 84, 0.6), rgba(18, 14, 34, 0.55));
-  border: 1px solid rgba(150, 120, 255, 0.22);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 4px 14px rgba(0, 0, 0, 0.35);
+  gap: 12px;
+  padding: 12px 14px 10px;
+  border-radius: 14px;
+  background:
+    radial-gradient(130% 100% at 0% 0%, rgba(60, 110, 255, 0.20), transparent 52%),
+    radial-gradient(130% 100% at 100% 0%, rgba(255, 70, 70, 0.18), transparent 52%),
+    radial-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1.6px) 0 0 / 14px 14px,
+    linear-gradient(180deg, rgba(22, 19, 44, 0.97), rgba(10, 8, 22, 0.97));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  clip-path: polygon(
+    15px 0, calc(100% - 15px) 0, 100% 15px,
+    100% calc(100% - 13px), calc(100% - 15px) 100%,
+    15px 100%, 0 calc(100% - 13px), 0 15px
+  );
 }
 /* 每侧：头像+名字一行 → 全宽血条 → 出招统计 */
 .mh-player {
@@ -857,14 +905,33 @@ function goHome() { router.push('/games') }
 
 /* 头像 */
 .mh-avatar {
+  position: relative;
   flex: 0 0 auto;
   width: 52px; height: 52px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   font-size: 30px; line-height: 1;
   background: radial-gradient(circle at 50% 32%, rgba(255, 255, 255, 0.16), rgba(0, 0, 0, 0.35));
 }
+/* 外层科技虚线环（设计稿头像外的描边圈） */
+.mh-avatar::before {
+  content: ''; position: absolute; inset: -5px; border-radius: 50%;
+  border: 1px dashed rgba(255, 255, 255, 0.28);
+  pointer-events: none;
+}
+/* 上下两段实弧，呼应设计稿环上的高亮缺口 */
+.mh-avatar::after {
+  content: ''; position: absolute; inset: -5px; border-radius: 50%;
+  border: 2px solid transparent;
+  pointer-events: none;
+}
 .mh-avatar--me  { border: 3px solid #5b8cff; box-shadow: 0 0 12px rgba(91, 140, 255, 0.7), inset 0 0 8px rgba(91, 140, 255, 0.35); }
 .mh-avatar--opp { border: 3px solid #ff5a5a; box-shadow: 0 0 12px rgba(255, 90, 90, 0.7), inset 0 0 8px rgba(255, 90, 90, 0.35); }
+.mh-avatar--me::before  { border-color: rgba(91, 140, 255, 0.55); }
+.mh-avatar--opp::before { border-color: rgba(255, 90, 90, 0.55); }
+.mh-avatar--me::after  { border-top-color: #7aa8ff; border-bottom-color: #7aa8ff; filter: drop-shadow(0 0 4px rgba(91, 140, 255, 0.8)); }
+.mh-avatar--opp::after { border-top-color: #ff8a8a; border-bottom-color: #ff8a8a; filter: drop-shadow(0 0 4px rgba(255, 90, 90, 0.8)); }
+/* 蓄力时整圈高亮脉冲 */
+.mh-avatar.charged::after { animation: blink 1.1s ease-in-out infinite; }
 
 .mh-name {
   font-size: 13px; font-weight: 800; line-height: 1.15;
@@ -874,6 +941,13 @@ function goHome() { router.push('/games') }
 .mh-id--right .mh-name { text-align: right; width: 100%; }
 .mh-score { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 800; color: #ffd76a; }
 .mh-score-ic { font-size: 12px; }
+
+/* 血条行：心形图标 + 血条（对手侧镜像） */
+.mh-hpbar { display: flex; align-items: center; gap: 7px; }
+.mh-hpbar :deep(.hb-row) { flex: 1; min-width: 0; }
+.mh-heart { flex: 0 0 auto; font-size: 15px; line-height: 1; }
+.mh-heart--me  { color: #5b8cff; filter: drop-shadow(0 0 5px rgba(91, 140, 255, 0.85)); }
+.mh-heart--opp { color: #ff5a5a; filter: drop-shadow(0 0 5px rgba(255, 90, 90, 0.85)); }
 
 .mh-tally { display: flex; gap: 4px; flex-wrap: wrap; }
 .mh-tally--right { justify-content: flex-end; }
@@ -886,16 +960,45 @@ function goHome() { router.push('/games') }
 
 /* 中央：回合 + 环形倒计时 */
 .mh-center {
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
   padding: 0 2px;
 }
-.mh-round { font-size: 12px; font-weight: 800; white-space: nowrap; color: #e7e0ff; }
+/* ROUND 徽标：六边形切角 + 两侧蓝/红点缀（设计稿顶部标牌） */
+.mh-round-bar { display: flex; align-items: center; gap: 7px; }
+.mh-round {
+  font-size: 12px; font-weight: 900; letter-spacing: 1px; white-space: nowrap;
+  color: #eaf0ff;
+  padding: 3px 13px;
+  background: linear-gradient(180deg, rgba(42, 48, 92, 0.92), rgba(20, 22, 48, 0.92));
+  border: 1px solid rgba(140, 160, 255, 0.4);
+  clip-path: polygon(9px 0, calc(100% - 9px) 0, 100% 50%, calc(100% - 9px) 100%, 9px 100%, 0 50%);
+  text-shadow: 0 0 8px rgba(120, 150, 255, 0.6);
+}
+.mh-round-tick {
+  position: relative; width: 16px; height: 2px; border-radius: 2px; flex: 0 0 auto;
+}
+.mh-round-tick--me  { background: linear-gradient(90deg, transparent, #4d8cff); }
+.mh-round-tick--opp { background: linear-gradient(90deg, #ff5a5a, transparent); }
+.mh-round-tick::after {
+  content: ''; position: absolute; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 3px; border-radius: 50%;
+}
+.mh-round-tick--me::after  { right: -6px; background: #4d8cff; box-shadow: 0 0 5px #4d8cff; }
+.mh-round-tick--opp::after { left: -6px;  background: #ff5a5a; box-shadow: 0 0 5px #ff5a5a; }
+
 .cd-ring {
   position: relative;
-  width: 64px; height: 64px;
+  width: 78px; height: 78px;
   display: grid; place-items: center;
-  box-shadow: 0 0 12px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
   border-radius: 50%;
+}
+/* 环外刻度：细密虚线圈，mask 成一圈薄环（设计稿环外的 tick 刻度） */
+.cd-ring::before {
+  content: ''; position: absolute; inset: -4px; border-radius: 50%;
+  background: repeating-conic-gradient(rgba(170, 190, 255, 0.22) 0deg 1.2deg, transparent 1.2deg 6deg);
+  -webkit-mask: radial-gradient(transparent 60%, #000 61%);
+          mask: radial-gradient(transparent 60%, #000 61%);
+  pointer-events: none;
 }
 .cd-ring--danger { animation: blink 0.7s infinite; }
 .cd-svg {
@@ -923,64 +1026,80 @@ function goHome() { router.push('/games') }
 .cd-progress-circle--danger { stroke: #ff5b5b; }   /* 危险(红) ≤ 30% */
 .cd-inner {
   position: relative;
-  width: 50px; height: 50px; border-radius: 50%;
-  background: radial-gradient(circle at 50% 35%, #1c1730, #100c1d);
-  display: flex; align-items: center; justify-content: center;
+  width: 60px; height: 60px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, #1c1730, #0c0918);
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.7), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0;
   z-index: 1;
 }
-.cd-num { font-size: 23px; font-weight: 900; }
-.cd-unit { font-size: 11px; font-weight: 700; color: #b39ddb; margin-left: 1px; }
-.cd-glyph { font-size: 22px; align-self: center; }
+.cd-num { font-size: 30px; font-weight: 900; line-height: 1; letter-spacing: -1px; text-shadow: 0 0 10px rgba(120, 150, 255, 0.4); }
+.cd-unit { font-size: 10px; font-weight: 700; color: #b39ddb; line-height: 1; margin-top: 2px; }
+.cd-glyph { font-size: 26px; }
+
+/* 状态条：胶囊 + 两侧蓝/红呼吸点（设计稿底部「出招准备中」） */
+.mh-status-bar {
+  display: flex; align-items: center; gap: 7px;
+  padding: 2px 10px; border-radius: 11px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
 .mh-status { font-size: 10px; color: #9a92b8; white-space: nowrap; }
+.mh-status-dot { width: 5px; height: 5px; border-radius: 50%; flex: 0 0 auto; }
+.mh-status-dot--me  { background: #4d8cff; box-shadow: 0 0 6px #4d8cff; animation: blink 1.4s infinite; }
+.mh-status-dot--opp { background: #ff5a5a; box-shadow: 0 0 6px #ff5a5a; animation: blink 1.4s infinite 0.7s; }
 
 .arena-slot { position: relative; flex: 1; min-height: 180px; }
 
 /* ===== 出招揭示行（浮层：绝对定位叠在战斗区底部，不占布局/不抖动） ===== */
 .reveal-wrap {
-  position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 5;
+  position: absolute; left: 0px; right: 0px; bottom: 2px; z-index: 5;
   display: flex; flex-direction: column; align-items: center; gap: 6px;
   pointer-events: none;
 }
 .reveal {
   position: relative;
   width: 100%;
-  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px;
-  padding: 9px 14px; border-radius: 16px;
-  background: linear-gradient(180deg, #1a1f3e, #0c1024);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  display: flex; align-items: center; 
+  justify-content: space-between;
+  /* padding: 9px 14px; border-radius: 16px; */
+  /* background: linear-gradient(180deg, #1a1f3e, #0c1024);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6); */
+  background: url(./assets/result.png) no-repeat center/contain;
+  height: 120px;
 }
 /* 蓝→红 发光渐变描边（贴合设计稿） */
-.reveal::before {
+/* .reveal::before {
   content: ''; position: absolute; inset: -2px; border-radius: 18px; z-index: -1;
   background: linear-gradient(90deg, #4d8cff 0%, #8a5cff 50%, #ff5a5a 100%);
   filter: blur(3px); opacity: 0.85;
-}
-.rv-side { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.rv-side--opp { align-items: flex-end; }
-.rv-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; }
-.rv-side--me .rv-label  { color: #8fb6ff; }
-.rv-side--opp .rv-label { color: #ff9a9a; }
+} */
+.rv-side { text-align: center; padding: 10px 60px 0 60px;}
+/* .rv-side { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.rv-side--opp { align-items: flex-end; } */
+/* .rv-label { font-size: 24px; font-weight: 700; letter-spacing: 1px; } */
+/* .rv-side--me .rv-label  { color: #8fb6ff; }
+.rv-side--opp .rv-label { color: #ff9a9a; } */
 .rv-move {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 18px; font-weight: 900; color: #fff;
-  padding: 6px 16px; border-radius: 11px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), inset 0 -2px 5px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.45);
+  font-size: 24px; font-weight: 900; color: #fff;
+  text-align: center
 }
+/* 
 .rv-side--me .rv-move  { background: linear-gradient(180deg, #4f8cff, #2a5bc0); }
-.rv-side--opp .rv-move { background: linear-gradient(180deg, #ff6b6b, #c0392b); }
+.rv-side--opp .rv-move { background: linear-gradient(180deg, #ff6b6b, #c0392b); } */
 .rv-move--wait {
   background: rgba(255, 255, 255, 0.08) !important; color: #9a93b8 !important;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1) !important; animation: blink 1s infinite;
 }
-.rv-ic { font-size: 20px; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)); }
-.rv-vs {
+.rv-ic { font-size: 24px; margin-right: 10px; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)); }
+/* .rv-vs {
   font-size: 28px; font-weight: 900; font-style: italic; color: #fff;
   text-shadow: 0 0 8px rgba(90, 140, 255, 0.9), 0 0 16px rgba(255, 80, 80, 0.7), 0 2px 3px rgba(0, 0, 0, 0.6);
-}
+} */
 .reveal-verdict {
   font-size: 13px; font-weight: 800; text-align: center;
   padding: 3px 14px; border-radius: 10px;
   background: rgba(12, 14, 30, 0.92);
+  margin-bottom: -10px
 }
 .rvv--good    { color: #6ee7a0; box-shadow: 0 0 0 1px rgba(76, 175, 80, 0.45); }
 .rvv--bad     { color: #ff7a7a; box-shadow: 0 0 0 1px rgba(255, 82, 82, 0.45); }
@@ -992,11 +1111,11 @@ function goHome() { router.push('/games') }
 
 /* ===== 操作按钮 ===== */
 .control-deck {
-  padding: 10px 12px;
+  /* padding: 10px 12px;
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.045);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.3); */
 }
 .hud-action { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 
@@ -1004,18 +1123,20 @@ function goHome() { router.push('/games') }
 .act-btn {
   position: relative;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 5px; padding: 12px 4px 10px; border: none;
+  gap: 5px; padding: 6px 4px; border: none;
   border-radius: 10px; color: #fff; cursor: pointer;
   /* 注意：不给 button 加 overflow:hidden，会触发 form-control 内部布局 quirk 把按钮撑高。
      涟漪改用 ::after 伪元素 + clip-path 限制范围。 */
   --ripple-x: 50%;
   --ripple-y: 50%;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -2px 0 rgba(255, 255, 255, 0.4),
     inset 0 -3px 6px rgba(0, 0, 0, 0.28),
     0 4px 0 rgba(0, 0, 0, 0.35),
     0 6px 12px rgba(0, 0, 0, 0.4);
   transition: transform 0.1s, box-shadow 0.1s, filter 0.15s;
+  background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.28);
 }
 /* 涟漪：用伪元素绘制白色半透明圆，从点击点扩散后淡出。
    通过 clip-path 限制在按钮圆角矩形内（替代 overflow:hidden）。 */
@@ -1041,10 +1162,10 @@ function goHome() { router.push('/games') }
   60%  { opacity: 0.55; }
   100% { transform: scale(40); opacity: 0; }
 }
-.act-btn--attack  { background: linear-gradient(180deg, #ff7d6e 0%, #d2382a 100%); }
+/* .act-btn--attack  { background: linear-gradient(180deg, #ff7d6e 0%, #d2382a 100%); }
 .act-btn--defend  { background: linear-gradient(180deg, #5cb6ff 0%, #2867bd 100%); }
 .act-btn--charge  { background: linear-gradient(180deg, #ffcb52 0%, #e07c0a 100%); }
-.act-btn--counter { background: linear-gradient(180deg, #b692ff 0%, #7a32e0 100%); }
+.act-btn--counter { background: linear-gradient(180deg, #b692ff 0%, #7a32e0 100%); } */
 
 .act-btn:not(:disabled):active {
   transform: translateY(3px);
@@ -1067,10 +1188,11 @@ function goHome() { router.push('/games') }
 
 /* 图标置于半透明深色内嵌框 */
 .act-frame {
-  width: 52px; height: 52px;
+  /* width: 52px; */
+  /* height: 52px; */
   display: flex; align-items: center; justify-content: center;
 }
-.act-icon { font-size: 38px; line-height: 1; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4)); }
+.act-icon { font-size: 32px; line-height: 1; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4)); }
 .act-name { font-weight: 900; font-size: 15px; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45); }
 .act-hint { font-size: 10px; opacity: 0.92; line-height: 1.1; text-align: center; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.4); }
 

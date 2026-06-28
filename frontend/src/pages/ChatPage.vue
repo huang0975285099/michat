@@ -1,5 +1,5 @@
 <template>
-  <q-page class="column" style="height: calc(100vh - 110px)">
+  <q-page ref="pageEl" class="column">
     <!-- 顶部好友信息 -->
     <div class="row items-center q-pa-sm q-gutter-sm bg-grey-2">
       <deterministic-avatar :seed="friendChatId" :size="32" />
@@ -42,7 +42,7 @@
       :items="messages"
       :virtual-scroll-item-size="60"
       class="col q-pa-md"
-      style="min-height: 0"
+      :style="{ minHeight: 0, overflowAnchor: 'none', opacity: scrolled ? 1 : 0, transition: 'opacity 0.08s' }"
       v-slot="{ item: msg, index: idx }"
     >
       <div
@@ -296,14 +296,20 @@ if (!CHAT_ID_PATTERN.test(friendChatId)) {
   throw new Error('Invalid chatId format')
 }
 const virtualScrollEl = ref(null)
+const pageEl = ref(null)
 const inputEl = ref(null)
 const fileInputEl = ref(null)
 const inputText = ref('')
 const sending = ref(false)
 const burnMode = ref(false)  // 阅后即焚模式
+// 初次滚动到底部完成后才显示消息区，避免用户看到从中间跳到最底的抖动
+const scrolled = ref(false)
 // 每分钟自增的响应式时间戳，驱动阅后即焚倒计时刷新（Date.now() 本身不是响应式的）
 const now = ref(Date.now())
 let nowTimer = null
+let nudgeTimer = null
+let heightResizeObserver = null
+let rafNudgeId = null
 const imagePreview = ref({ show: false, url: '' })
 
 // 允许的文件类型（用于 input accept 属性）
@@ -402,20 +408,59 @@ const messages = computed(() => chatStore.getMessages(friendChatId))
 let stopStatus = null
 
 onMounted(async () => {
-  // 先注册状态监听，避免在 loadMessages/fetchFriendInfo 异步等待期间遗漏状态变更事件
+  // 先注册状态监听，避免在异步等待期间遗漏状态变更事件
   stopStatus = onStatusUpdate((chatId, online) => {
     if (chatId === friendChatId) {
       friendOnline.value = online
     }
   })
 
-  await chatStore.loadMessages(friendChatId)
-  await fetchFriendInfo()
+  // 精确设置 q-page 高度：首次同步尝试，再在 nextTick + rAF 后补充一次，
+  // 确保 Quasar 完成布局后 header/footer 尺寸准确
+  updatePageHeight()
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => updatePageHeight())
+    })
+  })
+  // 监听 header/footer 高度变化（如断线提示条出现/消失）
+  const header = document.querySelector('.q-header')
+  const footer = document.querySelector('.q-footer')
+  if (header || footer) {
+    heightResizeObserver = new ResizeObserver(() => updatePageHeight())
+    if (header) heightResizeObserver.observe(header)
+    if (footer) heightResizeObserver.observe(footer)
+  }
+  window.addEventListener('resize', updatePageHeight)
 
-  // 打开聊天时标记所有对方消息为已读
-  await chatStore.markAsRead(friendChatId)
-  // 从服务器拉取离线期间错过的已读回执，补齐 ✔✔ 状态
-  await chatStore.syncReadStatus(friendChatId)
+  // 加载消息——消息一到立即滚动到底，不等待后续网络请求
+  await chatStore.loadMessages(friendChatId)
+
+  // 等待 DOM 更新、页面高度生效后立即滚动
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      // 第一次强制滚动到底（opacity:0 不可见状态下执行 vs.scrollTo，确保最后一项渲染进 DOM）
+      scrollToBottom()
+      // 再等一帧让浏览器应用 scrollTop，然后显示内容（用户看到的就是底部，不会看到跳动）
+      requestAnimationFrame(() => {
+        scrolled.value = true
+        // 内容可见后逐帧轻量对齐（只设 scrollTop，不调用 vs.scrollTo()），
+        // 修正虚拟滚动实测 item 高度产生的微小偏差
+        startRafNudge(30)
+        // 启动 3 秒 nudge 定时器，覆盖异步状态更新（已读回执、在线状态等）导致的弹回
+        let nudgeCount = 0
+        nudgeTimer = setInterval(() => {
+          nudgeCount++
+          if (nudgeCount > 20 || !isNearBottom()) {
+            clearInterval(nudgeTimer)
+            nudgeTimer = null
+            return
+          }
+          nudgeToBottom()
+        }, 150)
+      })
+    })
+  })
 
   // 启动阅后即焚定时删除检查
   chatStore.startBurnTimer()
@@ -424,14 +469,23 @@ onMounted(async () => {
   // 每分钟刷新一次响应式时间，驱动倒计时显示递减
   nowTimer = setInterval(() => { now.value = Date.now() }, 60000)
 
-  // 虚拟滚动需待首屏项渲染、测量后再定位到底部（逐帧重试修正估算高度偏差）
-  nextTick(() => scrollToBottomReliable())
+  // 以下为不影响首屏布局的异步操作，不阻塞滚动：
+  // 获取好友信息、标记已读、同步已读回执——这些网络请求耗时较长，
+  // 但不会改变消息列表高度（仅更新头像/在线状态/已读标记），
+  // nudgeTimer 会在它们触发响应式更新后自动修正可能的微小偏移。
+  fetchFriendInfo()
+  chatStore.markAsRead(friendChatId)
+  chatStore.syncReadStatus(friendChatId)
 })
 
 onUnmounted(() => {
   stopStatus && stopStatus()
   chatStore.stopBurnTimer()
   if (nowTimer) { clearInterval(nowTimer); nowTimer = null }
+  if (nudgeTimer) { clearInterval(nudgeTimer); nudgeTimer = null }
+  cancelRafNudge()
+  if (heightResizeObserver) { heightResizeObserver.disconnect(); heightResizeObserver = null }
+  window.removeEventListener('resize', updatePageHeight)
 })
 
 // 仅监听消息条数变化（新增/删除），避免对整个数组做 deep 遍历，
@@ -582,6 +636,47 @@ function clearHistory() {
   })
 }
 
+// 动态计算 q-page 的高度：Quasar QPage 默认只设 min-height，
+// 不给 height 会导致 flex:1 的子元素（虚拟滚动）无法获得确定高度，
+// 从而使整个页面在 body 上滚动、最后一条消息被底部栏遮挡。
+// 精确测量 q-header 和 q-footer 的实际高度（含断线提示条等动态元素），
+// 用 100vh 减去得到 q-page 的确切高度。
+function updatePageHeight() {
+  const el = pageEl.value?.$el
+  if (!el) return
+  const header = document.querySelector('.q-header')
+  const footer = document.querySelector('.q-footer')
+  const headerH = header ? Math.round(header.getBoundingClientRect().height) : 0
+  const footerH = footer ? Math.round(footer.getBoundingClientRect().height) : 0
+  el.style.height = `calc(100vh - ${headerH + footerH}px)`
+  // 高度变化后，如果用户在底部附近，轻量对齐避免出现间隙
+  if (isNearBottom()) nudgeToBottom()
+}
+
+// 取消正在进行的 rAF nudge 循环（用于组件卸载时清理）
+function cancelRafNudge() {
+  if (rafNudgeId !== null) {
+    cancelAnimationFrame(rafNudgeId)
+    rafNudgeId = null
+  }
+}
+
+// 启动 rAF 逐帧轻量对齐（tries 帧后自动停止），用于初始滚动阶段
+function startRafNudge(tries = 30) {
+  cancelRafNudge()
+  const tick = (remaining) => {
+    rafNudgeId = requestAnimationFrame(() => {
+      rafNudgeId = null
+      const el = virtualScrollEl.value?.$el
+      if (!el || remaining <= 0) return
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+      if (dist > 0) nudgeToBottom()
+      tick(remaining - 1)
+    })
+  }
+  tick(tries)
+}
+
 function scrollToBottom() {
   const vs = virtualScrollEl.value
   if (!vs || !messages.value.length) return
@@ -593,16 +688,19 @@ function scrollToBottom() {
   if (el) el.scrollTop = el.scrollHeight
 }
 
+// 轻量对齐：仅设 scrollTop，不调用 vs.scrollTo()，避免触发 q-virtual-scroll
+// 内部的虚拟位置重算（重算会在异步帧里覆盖 scrollTop，造成"弹回"）
+function nudgeToBottom() {
+  const el = virtualScrollEl.value?.$el
+  if (el) el.scrollTop = el.scrollHeight
+}
+
 // 虚拟滚动首屏按估算高度定位，跳到底后各项被实测修正会出现「没贴底」的偏差。
-// 逐帧重试定位，直到真正到底或重试用尽。
-function scrollToBottomReliable(tries = 15) {
+// 初次用 scrollToBottom() 让最后一项进入渲染，之后逐帧用轻量对齐修正，
+// 不再反复调用 vs.scrollTo() 以免触发虚拟滚动内部重算覆盖 scrollTop。
+function scrollToBottomReliable(tries = 30) {
   scrollToBottom()
-  requestAnimationFrame(() => {
-    const el = virtualScrollEl.value?.$el
-    if (!el || tries <= 0) return
-    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-    if (dist > 4) scrollToBottomReliable(tries - 1)
-  })
+  startRafNudge(tries)
 }
 
 // 用户是否处于（接近）最底部：仅在此情况下新消息才自动滚动，避免回看历史时被强制拉回
