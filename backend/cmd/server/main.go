@@ -130,9 +130,11 @@ func main() {
 	fistSvc := service.NewFistService(db)
 	fistHandler := handler.NewFistHandler(fistSvc)
 	ironFistSvc := service.NewIronFistService(db)
-	ironFistHandler := handler.NewIronFistHandler(ironFistSvc)
 
 	hub := ws.NewHub(rdb, friendSvc, identSvc, messageReadSvc)
+
+	// IronFistHandler 需要 hub 推送 PVP 匹配通知，故在 hub 之后构造
+	ironFistHandler := handler.NewIronFistHandler(ironFistSvc, hub)
 
 	// 极光推送（AppKey 和 MasterSecret 均配置时启用）
 	if cfg.JPush.AppKey != "" && cfg.JPush.MasterSecret != "" {
@@ -199,6 +201,11 @@ func main() {
 		auth.GET("/games/ironfist/stats", ironFistHandler.GetStats)
 		auth.POST("/games/ironfist/stats", ironFistHandler.ReportMatch)
 		auth.GET("/games/ironfist/matches", ironFistHandler.ListMatches)
+
+		// PVP 撮合队列（加入 / 取消）
+		auth.POST("/games/ironfist/pvp/queue", ironFistHandler.EnqueuePVP)
+		auth.DELETE("/games/ironfist/pvp/queue", ironFistHandler.CancelPVPQueue)
+		auth.GET("/games/ironfist/pvp/queue", ironFistHandler.GetPVPQueueStatus)
 	}
 
 	// 启动定时任务：自动拒绝超过 7 天未处理的好友申请
@@ -231,6 +238,31 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			cleanup()
+		}
+	}()
+
+	// 启动定时任务：每 1 分钟扫描超时的 PVP 房间并退款兜底
+	//   - matching 超时：客户端崩溃/失联未取消，全额退给 A
+	//   - matched 超时：双方/单方断线未上报结果、或 WS 匹配通知丢失导致一方未开局，
+	//     按平局退款，避免质押永久锁定
+	go func() {
+		sweep := func() {
+			if n, err := ironFistSvc.SweepTimeoutPVPQueues(context.Background()); err != nil {
+				log.Printf("[cron] sweep pvp timeout queues: %v", err)
+			} else if n > 0 {
+				log.Printf("[cron] swept %d timeout pvp queues", n)
+			}
+			if n, err := ironFistSvc.SweepTimeoutPVPMatched(context.Background()); err != nil {
+				log.Printf("[cron] sweep pvp timeout matched: %v", err)
+			} else if n > 0 {
+				log.Printf("[cron] swept %d timeout pvp matched rooms", n)
+			}
+		}
+		// 启动后等 1 分钟再首次执行，避免启动瞬间误判
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			sweep()
 		}
 	}()
 

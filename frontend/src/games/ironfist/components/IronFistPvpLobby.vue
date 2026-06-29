@@ -109,7 +109,7 @@
       </div>
     </div>
 
-    <!-- 匹配遮罩：模拟匹配 → 提示后续开放 -->
+    <!-- 匹配遮罩：调真实撮合 API，等待 WS 推送或立即匹配 -->
     <transition name="result-fade">
       <div v-if="matchState !== 'idle'" class="match-overlay">
         <div class="match-card">
@@ -120,20 +120,23 @@
               {{ matchTier?.name }} · 质押
               {{ matchTier?.stake.toLocaleString() }} $FIST
             </div>
-            <q-btn flat color="grey-5" label="取消匹配" @click="cancelMatch" />
+            <q-btn
+              flat
+              color="grey-5"
+              label="取消匹配"
+              :disable="cancelling"
+              @click="cancelMatch"
+            />
           </template>
-          <template v-else>
-            <div class="match-soon-emoji">🚧</div>
-            <div class="match-title">敬请期待</div>
-            <div class="match-sub">
-              PVP 链上对战即将开放，先在人机模式中练手吧
-            </div>
+          <template v-else-if="matchState === 'error'">
+            <div class="match-soon-emoji">⚠️</div>
+            <div class="match-title">{{ matchError || "匹配失败" }}</div>
             <q-btn
               unelevated
               color="amber-8"
               text-color="dark"
               label="知道了"
-              @click="cancelMatch"
+              @click="resetMatch"
             />
           </template>
         </div>
@@ -152,16 +155,45 @@ import {
   send as wsSend,
   connect as wsConnect,
 } from "src/services/websocket.js";
+import { ironfistApi } from "src/services/api.js";
 import { PVP_TIERS } from "../game/ironfistMeta";
 
-defineEmits(["back"]);
+const emit = defineEmits(["back", "matched"]);
 
 const fistStore = useFistStore();
 const identityStore = useIdentityStore();
 
-const matchState = ref("idle"); // idle | searching | soon
+const matchState = ref("idle"); // idle | searching | error
 const matchTier = ref(null);
+const matchError = ref("");
+const cancelling = ref(false);
 let matchTimer = null;
+let matchEpoch = 0; // 每次 startMatch/cancelMatch 自增，用于丢弃过期的异步响应
+let pollTimer = null; // WS 通知丢失时的轮询兜底
+
+// 收到 WS 推送的匹配成功（仅作为等待方时触发；B 端立即匹配走 joinPVPQueue 返回值）
+function onPVPMatched(payload) {
+  if (matchState.value !== "searching") return;
+  if (!payload?.room_id) return;
+  // payload: { room_id, opponent, tier, stake }
+  emitMatched(payload);
+}
+
+// 统一出口：携带房间号与对手档案给父级路由切到对战页
+function emitMatched({ room_id, opponent, tier, stake }) {
+  clearTimeout(matchTimer);
+  clearTimeout(pollTimer);
+  // 先暂存 matchTier 再置 null，否则下方 fallback 永远拿到 null
+  const savedTier = matchTier.value;
+  matchState.value = "idle";
+  matchTier.value = null;
+  emit("matched", {
+    roomId: room_id,
+    opponent,
+    tier: tier || savedTier?.key,
+    stake: stake ?? savedTier?.stake,
+  });
+}
 
 // PVP 大厅在线玩家列表
 const lobbyUsers = ref([]); // [{chat_id, nickname, fist_balance, total_battles}]
@@ -180,6 +212,7 @@ function onLobbyUpdate(payload) {
 // 进入大厅：注册监听 + 发送 join
 async function joinLobby() {
   wsOn("ironfist_lobby_update", onLobbyUpdate);
+  wsOn("ironfist_pvp_matched", onPVPMatched);
   await wsConnect(); // 确保连接已建立（IronFistPage 进入时已连接，幂等）
   wsSend("ironfist_lobby_join", {});
 }
@@ -187,23 +220,174 @@ async function joinLobby() {
 function leaveLobby() {
   wsSend("ironfist_lobby_leave", {});
   wsOff("ironfist_lobby_update", onLobbyUpdate);
+  wsOff("ironfist_pvp_matched", onPVPMatched);
   lobbyUsers.value = [];
+  // 离开大厅时若仍在匹配中，需释放质押。但存在竞态：恰在离开瞬间可能已被撮合，
+  // 此时 cancel 对 matched 房间无效（静默跳过），直接 idle 会留下孤儿 matched 房间，
+  // 质押被锁定至后端 matched 超时才按平局退款。故与 cancelMatch 一致先复查队列状态：
+  //   - 已 matched → 改为进入对战页（已质押不能丢，父级仍挂载，emit 可被处理）
+  //   - 否则 → 正常取消退款
+  if (matchState.value === "searching") {
+    matchEpoch++;
+    clearTimeout(matchTimer);
+    clearTimeout(pollTimer);
+    matchState.value = "idle";
+    matchTier.value = null;
+    (async () => {
+      try {
+        const { data } = await ironfistApi.getPVPQueueStatus();
+        if (data?.status === "matched" && data.room_id) {
+          emit("matched", {
+            roomId: data.room_id,
+            opponent: data.opponent,
+            tier: data.tier,
+            stake: data.stake,
+          });
+          return;
+        }
+      } catch {
+        // 复查失败：退回到主动取消兜底
+      }
+      ironfistApi.cancelPVPQueue().catch(() => {});
+    })();
+  }
 }
 
-// 选择档位后进入匹配：模拟寻找对手 → 提示后续开放
-function startMatch(tier) {
+// 选择档位后进入匹配：调用撮合 API。
+//   - status='queued'：保持 searching，等待 WS ironfist_pvp_matched 推送 + 轮询兜底
+//   - status='matched'：本地调用方为 B，opponent 已是 A 档案，立即切到对战页
+async function startMatch(tier) {
+  const epoch = ++matchEpoch;
   matchTier.value = tier;
   matchState.value = "searching";
-  clearTimeout(matchTimer);
-  matchTimer = setTimeout(() => {
-    matchState.value = "soon";
-  }, 1800);
+  matchError.value = "";
+  cancelling.value = false;
+  try {
+    const { data } = await ironfistApi.joinPVPQueue(tier.key);
+    if (data?.status === "matched") {
+      // 立即匹配：即便用户在 POST 飞行期间点了取消也直接进入——
+      // matched 房间无法取消，强行丢弃只会让对手空等并触发 15 分钟超时退款
+      emitMatched({
+        room_id: data.room_id,
+        opponent: data.opponent,
+        tier: data.tier,
+        stake: data.stake,
+      });
+      return;
+    }
+    // status === 'queued'：保持 searching 等待 WS 推送
+    // 若用户在 POST 飞行期间已点取消（epoch 已变），先前的 DELETE 可能未命中此房间，补一次取消
+    if (epoch !== matchEpoch) {
+      ironfistApi.cancelPVPQueue().catch(() => {});
+      return;
+    }
+    // WS 通知丢失兜底：每 5 秒轮询一次队列状态，发现 matched 立即进入对战页
+    startMatchPoll(epoch);
+    // 兜底超时（10 分钟），避免后端漏推 + 轮询同时失效导致用户卡死
+    clearTimeout(matchTimer);
+    matchTimer = setTimeout(() => {
+      if (matchState.value === "searching") {
+        matchError.value = "匹配超时，请重试";
+        matchState.value = "error";
+        clearTimeout(pollTimer);
+        ironfistApi.cancelPVPQueue().catch(() => {});
+      }
+    }, 10 * 60 * 1000);
+  } catch (e) {
+    if (epoch !== matchEpoch) return;
+    const status = e?.response?.status;
+    const msg = e?.response?.data?.error;
+    if (status === 402) {
+      matchError.value = "$FIST 余额不足，无法质押";
+    } else if (status === 400) {
+      matchError.value = msg || "档位无效";
+    } else if (status === 409) {
+      matchError.value = msg || "已在一场对局中，请先完成或等待结算";
+    } else {
+      matchError.value = msg || "匹配失败，请稍后重试";
+    }
+    matchState.value = "error";
+  }
 }
-function cancelMatch() {
+
+// 轮询队列状态兜底 WS 通知丢失：发现 matched 则切到对战页
+function startMatchPoll(epoch) {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(async () => {
+    if (epoch !== matchEpoch || matchState.value !== "searching") return;
+    try {
+      const { data } = await ironfistApi.getPVPQueueStatus();
+      if (epoch !== matchEpoch || matchState.value !== "searching") return;
+      if (data?.status === "matched" && data.room_id) {
+        emitMatched({
+          room_id: data.room_id,
+          opponent: data.opponent,
+          tier: data.tier,
+          stake: data.stake,
+        });
+        return;
+      }
+      // 仍 queued 或 idle 则继续轮询
+      startMatchPoll(epoch);
+    } catch (e) {
+      // 轮询失败不致命，继续下一轮
+      startMatchPoll(epoch);
+    }
+  }, 5000);
+}
+
+// 用户主动取消匹配：调后端取消接口（退款），并复位本地状态
+async function cancelMatch() {
+  if (cancelling.value) return;
+  cancelling.value = true;
+  matchEpoch++; // 使进行中的 startMatch 响应失效
   clearTimeout(matchTimer);
-  matchTimer = null;
+  clearTimeout(pollTimer);
+  try {
+    await ironfistApi.cancelPVPQueue();
+  } catch (e) {
+    // 取消失败不能静默回退到 idle：后端可能仍持有 matching 房间，
+    // 用户以为已取消却仍可能被撮合。保留错误状态提示重试。
+    matchError.value = e?.response?.data?.error || "取消失败，请重试";
+    matchState.value = "error";
+    cancelling.value = false;
+    return;
+  }
+  // 竞态复查：cancelPVPQueue 仅能取消 status='matching' 的房间，已 matched 的房间
+  // 会被静默跳过（返回 ok=true）。若不复查，玩家 A 会在被撮合的瞬间点取消，
+  // 误以为取消成功置 idle，导致 WS 推送与轮询双双失效，形成孤儿 matched 房间，
+  // 质押被锁定 15 分钟才由 SweepTimeoutPVPMatched 按平局退款。
+  try {
+    const { data } = await ironfistApi.getPVPQueueStatus();
+    if (data?.status === "matched" && data.room_id) {
+      // 实际已被撮合：matched 房间无法取消，直接进入对战页避免孤儿房间
+      emitMatched({
+        room_id: data.room_id,
+        opponent: data.opponent,
+        tier: data.tier,
+        stake: data.stake,
+      });
+      cancelling.value = false;
+      return;
+    }
+  } catch (e) {
+    // 复查失败不影响取消结果，仍按已取消处理（最坏情况由 15 分钟超时兜底）
+  }
+  cancelling.value = false;
   matchState.value = "idle";
   matchTier.value = null;
+}
+
+function resetMatch() {
+  // 关闭错误弹窗：清理定时器、使进行中的异步响应失效，
+  // 并 best-effort 清理可能残留的 matching 房间（如 cancelMatch 失败场景）。
+  matchEpoch++;
+  clearTimeout(matchTimer);
+  clearTimeout(pollTimer);
+  ironfistApi.cancelPVPQueue().catch(() => {});
+  matchState.value = "idle";
+  matchTier.value = null;
+  matchError.value = "";
 }
 
 // 头像字母与配色（与好友列表风格一致）
@@ -237,6 +421,7 @@ onMounted(() => {
 onUnmounted(() => {
   leaveLobby();
   clearTimeout(matchTimer);
+  clearTimeout(pollTimer);
 });
 </script>
 

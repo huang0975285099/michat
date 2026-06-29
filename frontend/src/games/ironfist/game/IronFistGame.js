@@ -2,7 +2,7 @@
 // 渲染层/UI 通过 on(event, cb) 订阅事件驱动动画，不直接读内部状态。
 // 见 docs/ironfist.md 第十三/十五节（逻辑与渲染解耦）
 
-import { PHASE, ACTION, OPPONENT_GRACE_MS, RECONNECT_WINDOW_MS, LS_PENDING_KEY } from './GameConstants.js'
+import { PHASE, ACTION, OPPONENT_GRACE_MS, RECONNECT_WINDOW_MS, LS_PENDING_KEY, LS_ROUND_KEY } from './GameConstants.js'
 import { resolveRound, initialState } from './resolve.js'
 import { aiDecide, trackAiHistory } from './GameAI.js'
 import { replayGame } from './replay.js'
@@ -34,6 +34,7 @@ export class IronFistGame {
     this._disposed = false
     this._graceTimer = null             // PvP: 已出招后等待对方动作的宽限计时器
     this._reconnectTimer = null         // PvP: 对方掉线后等待重连的计时器（60s）
+    this._roundStartedAt = 0            // 本回合 DECIDING 起始时间戳（本端时钟），用于倒计时锚定与重连恢复
 
     if (this.mode === 'pve') this._opponentName = 'AI'
 
@@ -77,8 +78,11 @@ export class IronFistGame {
     this.round += 1
     this._myAction = null
     this._oppAction = null
+    // 锚定本回合 DECIDING 起始时刻（本端时钟）。此处是回合真正开始，记新时间戳并持久化，
+    // 以便本端刷新重连后据此恢复倒计时，而非拿到全新 30s。
+    this._markRoundStart(Date.now())
     this._setPhase(PHASE.ROUND_START)
-    this._emit('round-start', { round: this.round, state: { ...this.state } })
+    this._emit('round-start', { round: this.round, state: { ...this.state }, startedAt: this._roundStartedAt })
     this._setPhase(PHASE.DECIDING)
 
     // PvP：若对方动作已提前到达，立即取用
@@ -182,9 +186,10 @@ export class IronFistGame {
     if (this._myAction) {
       this._resolve()
     } else {
-      // 对方已选，我还没选 → 回到 DECIDING 让本端继续选
+      // 对方已选，我还没选 → 回到 DECIDING 让本端继续选。
+      // 携带已锚定的本回合起始时间，避免 UI 把倒计时重置为全新 30s（对手先出招时尤甚）。
       this._setPhase(PHASE.DECIDING)
-      this._emit('round-resume', { round: this.round })
+      this._emit('round-resume', { round: this.round, startedAt: this._roundStartedAt })
     }
   }
 
@@ -265,9 +270,12 @@ export class IronFistGame {
         // 对方可能也掉线了，启动 grace
         if (this.mode === 'pvp') this._startGrace()
       } else {
-        // 对方已选等我 / 都未选 → 进入决策
+        // 对方已选等我 / 都未选 → 进入决策。
+        // 该回合在刷新前已开始：恢复持久化的起始时间戳，倒计时按真实已耗时续算，
+        // 不发新 30s（取不到则回退为 now）。
+        const startedAt = this._restoreRoundStart(this.round)
         this._setPhase(PHASE.DECIDING)
-        this._emit('round-start', { round: this.round, state: { ...this.state } })
+        this._emit('round-start', { round: this.round, state: { ...this.state }, startedAt })
       }
     } else {
       // 没有进行中的 round，所有已选动作都已结算，开始下一 round
@@ -362,7 +370,38 @@ export class IronFistGame {
   /** 清理 localStorage 中本房间的 pending action（对局结束/认输时调用）。 */
   _clearPendingAction() {
     if (!this.roomId) return
-    try { localStorage.removeItem(LS_PENDING_KEY(this.roomId)) } catch { /* ignore */ }
+    try {
+      localStorage.removeItem(LS_PENDING_KEY(this.roomId))
+      localStorage.removeItem(LS_ROUND_KEY(this.roomId))
+    } catch { /* ignore */ }
+  }
+
+  /** 记录本回合 DECIDING 起始时间戳，并持久化（PvP）以支撑刷新重连后的倒计时恢复。 */
+  _markRoundStart(ts) {
+    this._roundStartedAt = ts
+    if (this.mode !== 'pvp' || !this.roomId) return
+    try {
+      localStorage.setItem(LS_ROUND_KEY(this.roomId), JSON.stringify({ round: this.round, ts }))
+    } catch { /* localStorage 不可用时降级：重连回退为全新倒计时 */ }
+  }
+
+  /**
+   * 读取持久化的本回合起始时间戳。仅当存储的 round 与目标 round 一致时有效，
+   * 用于刷新重连恢复"进行中回合"的倒计时（本端同一时钟，无跨端时钟漂移）。
+   * 取不到则返回 now，使重连方退回为全新倒计时（不优于但不会更糟）。
+   */
+  _restoreRoundStart(round) {
+    if (this.roomId) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(LS_ROUND_KEY(this.roomId)) || 'null')
+        if (saved && saved.round === round && Number.isFinite(saved.ts)) {
+          this._roundStartedAt = saved.ts
+          return saved.ts
+        }
+      } catch { /* ignore */ }
+    }
+    this._roundStartedAt = Date.now()
+    return this._roundStartedAt
   }
 
   dispose() {

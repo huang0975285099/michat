@@ -88,6 +88,12 @@ export const ironfistApi = {
   reportMatch: (payload) => api.post('/games/ironfist/stats', payload),
   listMatches: (beforeId, limit = 20) =>
     api.get('/games/ironfist/matches', { params: { before_id: beforeId || undefined, limit } }),
+  // 加入 PVP 撮合队列 → 返回 {status:'queued'|'matched', room_id, opponent, tier, stake}
+  joinPVPQueue: (tier) => api.post('/games/ironfist/pvp/queue', { tier }),
+  // 主动取消撮合（全额退回质押）
+  cancelPVPQueue: () => api.delete('/games/ironfist/pvp/queue'),
+  // 查询当前撮合队列状态 → {status:'idle'|'queued'|'matched', ...}（WS 通知丢失时轮询兜底）
+  getPVPQueueStatus: () => api.get('/games/ironfist/pvp/queue'),
 }
 
 // 版本信息（公开接口，返回线上最新版本）

@@ -31,10 +31,22 @@ var ironfistMatchesSQL string
 //go:embed 007_ironfist_friend_mode.sql
 var ironfistFriendModeSQL string
 
+//go:embed 008_ironfist_pvp_matchmaking.sql
+var ironfistPvpMatchmakingSQL string
+
+//go:embed 009_ironfist_match_pvp_room.sql
+var ironfistMatchPvpRoomSQL string
+
+//go:embed 010_ironfist_pvp_reports.sql
+var ironfistPvpReportsSQL string
+
+//go:embed 011_fist_tx_pvp_refund.sql
+var fistTxPvpRefundSQL string
+
 // AutoMigrate 自动执行建表 SQL，幂等（IF NOT EXISTS）。
 // MySQL 1060（列已存在）和 1061（索引已存在）被视为已完成，静默跳过。
 func AutoMigrate(db *sql.DB) error {
-	migrations := []string{initSQL, messageReadsSQL, deviceTokensSQL, fistTokenSQL, ironfistStatsSQL, ironfistMatchesSQL, ironfistFriendModeSQL}
+	migrations := []string{initSQL, messageReadsSQL, deviceTokensSQL, fistTokenSQL, ironfistStatsSQL, ironfistMatchesSQL, ironfistFriendModeSQL, ironfistPvpMatchmakingSQL, ironfistMatchPvpRoomSQL, ironfistPvpReportsSQL, fistTxPvpRefundSQL}
 	for _, sql := range migrations {
 		for _, stmt := range splitStatements(sql) {
 			if _, err := db.Exec(stmt); err != nil {

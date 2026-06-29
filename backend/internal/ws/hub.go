@@ -62,8 +62,8 @@ type Hub struct {
 	friendSvc      *service.FriendService
 	identitySvc    *service.IdentityService
 	messageReadSvc *service.MessageReadService
-	pushSvc        *service.PushService             // 可为 nil（未配置时禁用推送）
-	ironFistSvc    *service.IronFistService         // 可为 nil（PVP 大厅禁用）
+	pushSvc        *service.PushService                 // 可为 nil（未配置时禁用推送）
+	ironFistSvc    *service.IronFistService             // 可为 nil（PVP 大厅禁用）
 	pvpLobby       map[string]*service.LobbyUserProfile // chatID → 大厅用户档案（PVP 大厅在线列表）
 }
 
@@ -134,6 +134,25 @@ func (h *Hub) Unregister(c *Client) {
 	// 离开 PVP 大厅：广播更新给仍在场的大厅用户
 	if inLobby {
 		h.broadcastLobbyUpdate()
+	}
+
+	// 取消该用户在 PVP 撮合队列中的等待（避免被匹配给他人后无人开局）。
+	// 加 5 秒宽限期：ws.js 会自动重连，重连窗口内的短暂断线不应触发取消，
+	// 否则用户前端仍显示"搜索中"但后端已退款，再也等不到匹配。
+	// 异步执行，不阻塞 Unregister；失败仅日志，不影响断线流程。
+	if h.ironFistSvc != nil {
+		go func(chatID string) {
+			time.Sleep(5 * time.Second)
+			h.mu.RLock()
+			_, online := h.clients[chatID]
+			h.mu.RUnlock()
+			if online {
+				return // 已重连，跳过取消
+			}
+			if _, err := h.ironFistSvc.CancelPVPQueue(context.Background(), chatID); err != nil {
+				log.Printf("[ws] auto cancel pvp queue for %s: %v", chatID, err)
+			}
+		}(c.ChatID)
 	}
 }
 
@@ -558,6 +577,29 @@ func (h *Hub) NotifyFriendRejected(toChatID string) {
 	}
 }
 
+// NotifyPVPMatched 推送 PVP 匹配成功通知给等待方玩家。
+// payload 包含 room_id / opponent / tier / stake，前端收到后切换到对战页面。
+// 用阻塞发送 + 2 秒超时替代 default 丢弃：匹配通知丢失会导致等待方永远停留在
+// 搜索页且房间变孤儿（质押锁死），不能静默丢弃。
+func (h *Hub) NotifyPVPMatched(toChatID string, payload any) {
+	msg, _ := json.Marshal(Message{
+		Type:    "ironfist_pvp_matched",
+		Payload: mustMarshal(payload),
+	})
+	h.mu.RLock()
+	c, ok := h.clients[toChatID]
+	h.mu.RUnlock()
+	if !ok {
+		log.Printf("[ws] notify pvp matched: %s offline, room may be swept as draw", toChatID)
+		return
+	}
+	select {
+	case c.send <- msg:
+	case <-time.After(2 * time.Second):
+		log.Printf("[ws] notify pvp matched: %s send buffer full after 2s, room may be swept as draw", toChatID)
+	}
+}
+
 // ── 文件传输处理 ──────────────────────────────────────────────────
 
 // FileOfferPayload 文件发送请求负载
@@ -918,11 +960,11 @@ func mustMarshal(v any) json.RawMessage {
 // 服务端不做任何游戏逻辑，仅追加存储 + 转发。详见 docs/ironfist.md 第十四节方案 B。
 func (h *Hub) handleIronFistAction(from *Client, payload json.RawMessage) {
 	var p struct {
-		To      string `json:"to"`
-		RoomID  string `json:"room_id"`
-		Round   int    `json:"round"`
-		Action  string `json:"action"`
-		TS      int64  `json:"ts"`
+		To     string `json:"to"`
+		RoomID string `json:"room_id"`
+		Round  int    `json:"round"`
+		Action string `json:"action"`
+		TS     int64  `json:"ts"`
 	}
 	if err := json.Unmarshal(payload, &p); err != nil || !chatIDRe.MatchString(p.To) || p.RoomID == "" {
 		log.Printf("[ws] invalid ironfist_action from %s", from.ChatID)
@@ -952,7 +994,7 @@ func (h *Hub) handleIronFistAction(from *Client, payload json.RawMessage) {
 	// 中继给对方（注入 from 字段）
 	m := map[string]interface{}{
 		"to":      p.To,
-		"room_id":  p.RoomID,
+		"room_id": p.RoomID,
 		"round":   p.Round,
 		"action":  p.Action,
 		"ts":      p.TS,
@@ -1091,8 +1133,8 @@ func (h *Hub) broadcastLobbyUpdate() {
 // sendLobbyUpdate 组装并广播大厅列表消息
 func (h *Hub) sendLobbyUpdate(recipients []*Client, list []*service.LobbyUserProfile) {
 	type UpdatePayload struct {
-		Count int                           `json:"count"`
-		Users []*service.LobbyUserProfile   `json:"users"`
+		Count int                         `json:"count"`
+		Users []*service.LobbyUserProfile `json:"users"`
 	}
 	msg, _ := json.Marshal(Message{
 		Type: "ironfist_lobby_update",

@@ -17,7 +17,11 @@
             v-else-if="view === 'achievements'"
             @back="view = 'lobby'"
         />
-        <IronFistPvpLobby v-else-if="view === 'pvp'" @back="view = 'lobby'" />
+        <IronFistPvpLobby
+            v-else-if="view === 'pvp'"
+            @back="view = 'lobby'"
+            @matched="onPVPMatched"
+        />
 
         <!-- ── 邀请中 ───────────────────────────────────────── -->
         <div
@@ -420,7 +424,9 @@ const opponentName = ref("对手");
 const opponentEmoji = ref("🤖");
 
 const resultType = ref("");
+const errorMsg = ref(""); // resultType==="error" 时的具体提示文案
 const pveReward = ref(null); // PvE 胜利时由 claimPvEReward 填充，结果页展示奖励
+const pvpRoomId = ref(null); // 真实 PVP 撮合房间号（仅 mode=pvp & query.matched=1 时填充）
 
 // PvP 重连相关
 const reconnectCountdown = ref(0); // 剩余重连等待秒数
@@ -541,6 +547,7 @@ const RESULT_MAP = {
     draw: ["🤝", "平局"],
     doubleLose: ["💥", "双双力竭"],
     aborted: ["📡", "对战中断"],
+    error: ["⚠️", "发生错误"],
 };
 const resultEmoji = computed(
     () => (RESULT_MAP[resultType.value] || ["🎮", ""])[0],
@@ -548,17 +555,20 @@ const resultEmoji = computed(
 const resultText = computed(
     () => (RESULT_MAP[resultType.value] || ["", "游戏结束"])[1],
 );
-const resultSub = computed(() =>
-    resultType.value === "aborted" ? "对手长时间未响应，可能已掉线" : "",
-);
+const resultSub = computed(() => {
+    if (resultType.value === "aborted") return "对手长时间未响应，可能已掉线";
+    if (resultType.value === "error") return errorMsg.value;
+    return "";
+});
 
 // ── 生命周期 ──────────────────────────────────────────────
 onMounted(() => {
     window.addEventListener("beforeunload", handleBeforeUnload);
     const role = route.query.role;
-    // 通过好友邀请进入（host/guest）直接开战；否则停在大厅，
-    // 由 IronFistLobby 组件自行拉取余额与好友列表。
-    if (role === "host" || role === "guest") {
+    const matched = route.query.matched;
+    // 通过好友邀请进入（host/guest）或真实 PVP 撮合成功（matched=1）直接开战；
+    // 否则停在大厅，由 IronFistLobby 组件自行拉取余额与好友列表。
+    if (role === "host" || role === "guest" || matched === "1") {
         startPvp();
     }
 });
@@ -578,9 +588,10 @@ watch(
 // 已在本页（大厅或邀请中）时被接受/接收到对方接受而进入对战：
 // 同路径仅 query 变化不会重新挂载组件，onMounted 不会再次触发，需手动开战。
 watch(
-    () => route.query.role,
-    (role) => {
-        if ((role === "host" || role === "guest") && view.value !== "playing") {
+    () => [route.query.role, route.query.matched],
+    ([role, matched]) => {
+        if (view.value === "playing") return;
+        if (role === "host" || role === "guest" || matched === "1") {
             startPvp();
         }
     },
@@ -594,6 +605,22 @@ function startInvite(friend) {
         "ironfist",
     );
     view.value = "inviting";
+}
+
+// 真实 PVP 撮合成功（IronFistPvpLobby @matched 触发）：
+// 切换 query 触发 startPvp 重新执行，携带 room_id / 对手信息。
+function onPVPMatched({ roomId, opponent, tier, stake }) {
+    const query = {
+        matched: "1",
+        room_id: String(roomId),
+        opponent: opponent?.chat_id,
+        opponent_name: opponent?.nickname || opponent?.chat_id || "对手",
+        tier,
+        stake: String(stake ?? 0),
+    };
+    router.replace({ query });
+    // view 切换由 query.matched 的 watcher 驱动；这里直接触发 startPvp 也可。
+    // 同路径 router.replace 不会重新挂载，仍由 query watcher 捕获并开战。
 }
 
 // 对战结束后上报战绩与逐局明细。res 为 gameover 结果（win/lose/draw/doubleLose）
@@ -621,6 +648,8 @@ async function reportMatchResult(res) {
             rounds: summary.rounds,
             opponent_name: opponentName.value,
             detail,
+            // 真实 PVP 携带 room_id，触发后端质押结算（幂等）
+            room_id: pvpRoomId.value ?? undefined,
         });
         // 新解锁成就弹层提示
         const newly = data.new_achievements ?? [];
@@ -635,9 +664,81 @@ async function reportMatchResult(res) {
                 timeout: 3000,
             });
         });
+        // 真实 PVP 结算结果展示。双上报仲裁下，先上报方拿到的是 pending（无金额），
+        // 后上报方才触发结算拿到金额。为让双方都看到一致的最终结果，pending 时轮询补齐。
+        if (data.pvp_settle) {
+            const s = data.pvp_settle;
+            if (s.settled) {
+                showPvpSettle(s, res);
+            } else if (s.pending && pvpRoomId.value) {
+                pollPvpSettle(pvpRoomId.value, res, 0);
+            }
+        }
     } catch {
         // 上报失败静默，不阻塞结果页展示
     }
+}
+
+// 渲染 PVP 结算提示并刷新余额。平局退款双方已对等，refund_a 即本方退款额。
+function showPvpSettle(s, res) {
+    let txt;
+    if (res === "win") {
+        txt = `🏆 胜者通吃 +${s.winner_amount} $FIST`;
+    } else if (res === "lose") {
+        txt = `💫 本局失利，质押已扣除`;
+    } else if (res === "draw") {
+        txt = `🤝 平局退回 ${s.refund_a || 0} $FIST`;
+    } else {
+        // doubleLose：双方力竭，各退回
+        txt = `🤝 双方力竭，退回 ${s.refund_a || 0} $FIST`;
+    }
+    Notify.create({
+        message: txt,
+        color: "deep-orange",
+        textColor: "white",
+        position: "top",
+        timeout: 4000,
+    });
+    // 刷新 $FIST 余额（结算已落库）
+    fistStore.fetchAccount?.().catch(() => {});
+}
+
+// 先上报方轮询结算结果：对手上报后房间结算，幂等再请求即可拿到最终金额。
+// 最多 6 次（约 7s），仍未结算则提示稍后查看（兜底由后端超时 sweep 保证退款）。
+async function pollPvpSettle(roomId, res, attempt) {
+    if (attempt >= 6) {
+        Notify.create({
+            message: "结算中，请稍后在账本查看",
+            color: "deep-orange",
+            textColor: "white",
+            position: "top",
+            timeout: 3000,
+        });
+        fistStore.fetchAccount?.().catch(() => {});
+        return;
+    }
+    await new Promise((r) => setTimeout(r, 1200));
+    try {
+        // 幂等再请求：mode=pvp + room_id，统计已去重不会重复计数
+        const { data } = await ironfistApi.reportMatch({
+            mode: "pvp",
+            result: res,
+            room_id: roomId,
+            opponent_name: opponentName.value,
+            detail: [],
+            player_hp: 0,
+            opponent_hp: 0,
+            counter_successes: 0,
+            rounds: 0,
+        });
+        if (data?.pvp_settle?.settled) {
+            showPvpSettle(data.pvp_settle, res);
+            return;
+        }
+    } catch {
+        // 单次失败忽略，继续重试
+    }
+    pollPvpSettle(roomId, res, attempt + 1);
 }
 
 // ── 启动对战 ──────────────────────────────────────────────
@@ -651,20 +752,45 @@ function startPve() {
 }
 
 async function startPvp() {
-    // 通过好友邀请（URL 含 role=host/guest）进入的均为娱乐好友局。
-    // 注意：目前真实匹配对战尚未实现，所有走 GameNet 的对局都是好友局，
-    // 故 "pvp" 分支当前不可达。将来实现真实 PvP 撮合时，需用独立信号
-    // （如 query.matched / 专门的撮合房间号）区分，不能再复用 role=host/guest。
-    mode.value =
-        route.query.role === "host" || route.query.role === "guest"
-            ? "friend"
-            : "pvp";
-    opponentName.value = gameStore.opponentNickname || "对手";
+    // 通过好友邀请（URL 含 role=host/guest）进入的均为娱乐好友局；
+    // 通过真实 PVP 撮合（query.matched=1）进入的为质押 PVP，需在上报时携带 room_id 触发结算。
+    const isFriend =
+        route.query.role === "host" || route.query.role === "guest";
+    const isRealPVP = route.query.matched === "1";
+    mode.value = isFriend ? "friend" : "pvp";
+    // 真实 PVP 的 room_id（用于上报结算）；好友局保持 null
+    // URL query 是字符串，但后端 RoomID *uint64 需要数字，故转换并校验
+    const parsedRoomId = isRealPVP ? Number(route.query.room_id) : null;
+    pvpRoomId.value = Number.isFinite(parsedRoomId) && parsedRoomId > 0
+        ? parsedRoomId
+        : null;
+    if (isRealPVP && pvpRoomId.value == null) {
+        // matched=1 但 room_id 缺失/非法：无法结算，应阻断进入对局而非静默上报空值。
+        // 此时尚未进入 playing 视图，结果遮罩不可见，故用 Notify 明确提示并退回大厅
+        // （已质押的房间由后端 matched 超时按平局退款兜底）。
+        Notify.create({
+            message: "匹配信息异常（room_id 缺失），请返回大厅重试",
+            color: "negative",
+            textColor: "white",
+            position: "top",
+            timeout: 3500,
+        });
+        mode.value = "pve"; // 复位，避免残留 pvp 态影响后续
+        pvpRoomId.value = null;
+        view.value = "lobby";
+        return;
+    }
+    opponentName.value =
+        route.query.opponent_name ||
+        gameStore.opponentNickname ||
+        "对手";
     opponentEmoji.value = "🥷";
     resultType.value = ""; // 清理上一局结果状态
     await nextTick();
 
-    const roomId = route.query.room;
+    // roomId 来源：真实 PVP 用 query.room_id；好友局用 query.room。
+    // 两者都用作 GameNet 消息过滤、IronFistGame localStorage pending key、后端 redis key。
+    const roomId = route.query.room_id || route.query.room;
     const myChatId = identityStore.chatId;
     net = new GameNet(route.query.opponent, roomId);
     engine = new IronFistGame({ mode: "pvp", net, roomId, myChatId });
@@ -694,7 +820,7 @@ async function startPvp() {
 }
 
 function setupEngineListeners() {
-    engine.on("round-start", ({ round: r, state }) => {
+    engine.on("round-start", ({ round: r, state, startedAt }) => {
         round.value = r;
         pHP.value = state.playerHP;
         oHP.value = state.opponentHP;
@@ -703,7 +829,7 @@ function setupEngineListeners() {
         myAction.value = null;
         lastResult.value = null; // 清除上回合结算，避免新回合揭示行残留旧招
         view.value = "playing";
-        startCountdown();
+        startCountdown(startedAt);
     });
     engine.on("phase", (p) => {
         phase.value = p;
@@ -782,11 +908,11 @@ function setupEngineListeners() {
     engine.on("opponent-disconnected", ({ timeoutMs }) => {
         startReconnectTicker(timeoutMs);
     });
-    // 对手重连后恢复到本回合决策（重启倒计时）
-    engine.on("round-resume", ({ round: r }) => {
+    // 对手重连后/对手先出招，恢复到本回合决策。携带 startedAt 续算倒计时（不重置为 30s）。
+    engine.on("round-resume", ({ round: r, startedAt }) => {
         stopReconnectTicker();
         round.value = r;
-        startCountdown();
+        startCountdown(startedAt);
     });
 }
 
@@ -837,9 +963,12 @@ function spawnRipple(btn, e) {
 }
 
 // ── 计时器 ────────────────────────────────────────────────
-function startCountdown() {
+// startedAt：本回合 DECIDING 起始时间戳（引擎给出，本端时钟）。据此按真实已耗时续算，
+// 使刷新重连方/对手先出招方不会拿到全新 30s。缺省（如 PvE）则从满 30s 起算。
+function startCountdown(startedAt) {
     stopCountdown();
-    countdown.value = ROUND_SECONDS;
+    const elapsed = startedAt ? (Date.now() - startedAt) / 1000 : 0;
+    countdown.value = Math.max(1, Math.ceil(ROUND_SECONDS - elapsed));
     countdownTimer = setInterval(() => {
         countdown.value -= 1;
         if (countdown.value <= 0) {

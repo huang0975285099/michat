@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS fist_transactions (
                    'pve_reward',      -- PvE 胜局奖励
                    'pvp_win',         -- PvP 赢局到手金额
                    'pvp_loss',        -- PvP 输局扣款
+                   'pvp_refund',      -- PvP 取消/平局/超时退款
                    'pvp_fee',         -- PvP 赢局手续费（赢家被扣）
                    'tournament_entry',-- 锦标赛报名费
                    'tournament_prize',-- 锦标赛奖励
