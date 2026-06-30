@@ -155,10 +155,24 @@ func main() {
 	deviceHandler := handler.NewDeviceHandler(db)
 	versionHandler := handler.NewVersionHandler(cfg.Version.Latest, cfg.Version.MinSupported, cfg.Version.URL, cfg.Version.Notes)
 
-	// 限流：公开接口 20 次/分钟/IP
-	publicRL := middleware.NewRateLimiter(20, time.Minute)
+	// 限流（手机为主 + 运营商 CGNAT：按 IP 的阈值放宽，主防线放在按用户 authRL）：
+	//   - publicRL：未认证公开接口 100 次/分钟/IP（同 IP 多手机的版本检查/登录突发）
+	//   - authRL  ：已认证接口 120 次/分钟/用户（按 chatID，完全不受共享 IP 影响）
+	// WS 建连的“按 IP 速率”限流交给边缘 nginx（有突发平滑、用真实 IP），后端不再
+	// 叠加速率限流以免 CGNAT 下重连风暴误伤；后端用并发连接数上限（见 ws.go）兜底。
+	publicRL := middleware.NewRateLimiter(100, time.Minute)
+	authRL := middleware.NewRateLimiterFunc(120, time.Minute, func(c *gin.Context) string {
+		if id := c.GetString(middleware.CtxChatID); id != "" {
+			return id
+		}
+		return c.ClientIP()
+	})
 
 	r := gin.Default()
+	// 后端只在 nginx 反代之后暴露，信任私网代理以便 ClientIP() 取到 XFF 中的真实客户端 IP。
+	if err := r.SetTrustedProxies([]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/32"}); err != nil {
+		log.Fatalf("set trusted proxies: %v", err)
+	}
 	r.Use(corsMiddleware(cfg.AllowedOrigins))
 
 	api := r.Group("/api")
@@ -171,8 +185,8 @@ func main() {
 		open.GET("/invite/validate", inviteHandler.Validate)
 		open.GET("/version", versionHandler.Get)
 
-		// 需要鉴权
-		auth := api.Group("", middleware.Auth(identSvc))
+		// 需要鉴权（按用户限流）
+		auth := api.Group("", middleware.Auth(identSvc), authRL.Limit())
 		auth.PUT("/identity/pubkey", identHandler.UploadPubkey)
 		auth.PUT("/identity/nickname", identHandler.UpdateNickname)
 		auth.GET("/identity/me", identHandler.Me)
@@ -269,7 +283,20 @@ func main() {
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	log.Printf("E2EE Chat server listening on %s", addr)
-	if err = http.ListenAndServe(addr, r); err != nil {
+
+	// 显式配置超时，防 Slowloris 等慢速攻击占满连接/goroutine。
+	//   - ReadHeaderTimeout：读完请求头的上限（慢速攻击核心防线）
+	//   - ReadTimeout：读完整个请求的上限（WS 升级后 gorilla 自管 deadline，不受影响）
+	//   - IdleTimeout：keep-alive 空闲回收
+	//   - 不设 WriteTimeout：WS 为长连接，统一写超时会误杀（gorilla 每次写自带 deadline）
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       20 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	if err = srv.ListenAndServe(); err != nil {
 		log.Fatalf("server: %v", err)
 	}
 }

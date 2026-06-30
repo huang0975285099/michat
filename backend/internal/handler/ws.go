@@ -3,9 +3,12 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +17,19 @@ import (
 	"e2eechat/internal/service"
 	"e2eechat/internal/ws"
 )
+
+// WS 并发连接上限：防连接洪水耗尽 socket / goroutine / 内存。
+// 手机为主 + 运营商 CGNAT：大量真实用户共用一个出口 IP，故单 IP 上限放宽，
+// 仅作单机异常洪水兜底；真正的精细管控靠按用户(authRL)与按连接(msgLimiter)的限流。
+const (
+	maxWSConns      = 50000 // 全局并发连接上限（按单机容量设，超量直接拒新连）
+	maxWSConnsPerIP = 500   // 单 IP 并发连接上限（CGNAT 下众多手机共用 IP）
+)
+
+// clientIPSelfCheckN 启动后记录前 N 条 WS 连接的 IP 解析详情，用于核对反代/可信代理
+// 配置是否让 ClientIP() 取到真实客户端公网 IP（而非内网代理 IP）。达到 N 后自动静默。
+// 核对无误后可删除相关日志代码。
+const clientIPSelfCheckN = 50
 
 // IsLocalDevOrigin 判断 origin 是否为应始终放行的本地开发 / 原生壳来源：
 //   - file:// / capacitor://（移动端原生壳，无标准 http origin）
@@ -41,6 +57,13 @@ type WSHandler struct {
 	identSvc       *service.IdentityService
 	allowedOrigins map[string]struct{}
 	allowAll       bool
+
+	// 并发连接计数（建连已被上游限流，非热路径，用互斥锁简单且无计数竞态）。
+	connMu     sync.Mutex
+	curConns   int            // 当前全局并发连接数
+	connsPerIP map[string]int // ip → 当前该 IP 并发连接数
+
+	ipCheckN atomic.Int64 // ClientIP 自检日志计数（见 clientIPSelfCheckN）
 }
 
 func NewWSHandler(hub *ws.Hub, svc *service.IdentityService, allowedOrigins []string) *WSHandler {
@@ -53,6 +76,35 @@ func NewWSHandler(hub *ws.Hub, svc *service.IdentityService, allowedOrigins []st
 		}
 	}
 	return h
+}
+
+// acquireConn 尝试为来自 ip 的新连接占用名额：超过全局或单 IP 上限则返回 false。
+// 成功时须在连接结束时调用对应的 releaseConn。
+func (h *WSHandler) acquireConn(ip string) bool {
+	h.connMu.Lock()
+	defer h.connMu.Unlock()
+	if h.curConns >= maxWSConns || h.connsPerIP[ip] >= maxWSConnsPerIP {
+		return false
+	}
+	if h.connsPerIP == nil {
+		h.connsPerIP = make(map[string]int)
+	}
+	h.curConns++
+	h.connsPerIP[ip]++
+	return true
+}
+
+func (h *WSHandler) releaseConn(ip string) {
+	h.connMu.Lock()
+	defer h.connMu.Unlock()
+	if h.curConns > 0 {
+		h.curConns--
+	}
+	if h.connsPerIP[ip] <= 1 {
+		delete(h.connsPerIP, ip) // 归零即删除，防止 IP 条目无界增长
+	} else {
+		h.connsPerIP[ip]--
+	}
 }
 
 func (h *WSHandler) upgrader() websocket.Upgrader {
@@ -74,6 +126,27 @@ func (h *WSHandler) upgrader() websocket.Upgrader {
 
 // GET /ws  — token is sent via the first WebSocket message, not in the URL.
 func (h *WSHandler) Serve(c *gin.Context) {
+	// 连接数上限：升级前即拦截，避免为超额连接分配资源。
+	ip := c.ClientIP()
+
+	// 自检：启动后前 N 条连接打印 IP 解析详情，核对反代是否把真实客户端 IP 透传到位。
+	if h.ipCheckN.Add(1) <= clientIPSelfCheckN {
+		log.Printf("[clientip-selfcheck] ClientIP=%s RemoteAddr=%s X-Forwarded-For=%q X-Real-IP=%q",
+			ip, c.Request.RemoteAddr, c.GetHeader("X-Forwarded-For"), c.GetHeader("X-Real-IP"))
+	}
+
+	if !h.acquireConn(ip) {
+		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many connections"})
+		return
+	}
+	// 未成功移交给读写 goroutine 前（升级/认证失败等），由本 defer 释放名额。
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			h.releaseConn(ip)
+		}
+	}()
+
 	upgrader := h.upgrader()
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -128,7 +201,9 @@ func (h *WSHandler) Serve(c *gin.Context) {
 	}
 	ws.InitClient(client, conn, make(chan []byte, 256))
 
+	handedOff = true
 	go func() {
+		defer h.releaseConn(ip)
 		h.hub.ServeClient(client)
 		h.identSvc.UpdateLastSeen(ctx, chatID)
 	}()

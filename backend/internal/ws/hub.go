@@ -48,8 +48,10 @@ type Client struct {
 	ChatID string
 	UserID uint64 // 用于查询好友列表
 
-	// 铁拳消息限流状态：固定窗口计数。仅在该连接自身的 readPump goroutine
-	// 内访问（dispatch 同步执行），故无需加锁。action / reconnect 各一套窗口。
+	// 消息限流状态：固定窗口计数。仅在该连接自身的 readPump goroutine 内访问
+	// （dispatch 同步执行），故无需加锁。
+	msgLimiter         fixedWindow // 所有入站消息的总闸
+	lobbyLimiter       fixedWindow // 大厅加入/离开（会触发 O(N) 广播，单独严格限）
 	ifActionLimiter    fixedWindow
 	ifReconnectLimiter fixedWindow
 }
@@ -79,10 +81,12 @@ func InitClient(c *Client, conn *websocket.Conn, send chan []byte) {
 	c.send = send
 }
 
-// 单连接每秒允许的铁拳消息上限（固定窗口）。
+// 单连接每秒允许的消息上限（固定窗口）。
 const (
-	ifActionMaxPerSec    = 30 // ironfist_action：实时对战动作，给足余量
-	ifReconnectMaxPerSec = 5  // ironfist_reconnect：低频操作，每次都做全量 LRANGE
+	msgMaxPerSec         = 100 // 所有入站消息总闸：挡单连接刷消息打 CPU/Redis/DB
+	lobbyMaxPerSec       = 5   // 大厅加入/离开：每次触发全大厅广播，严格限
+	ifActionMaxPerSec    = 30  // ironfist_action：实时对战动作，给足余量
+	ifReconnectMaxPerSec = 5   // ironfist_reconnect：低频操作，每次都做全量 LRANGE
 )
 
 // Hub 管理所有在线连接
@@ -357,6 +361,10 @@ func (c *Client) readPump(h *Hub) {
 				log.Printf("[ws] unexpected close for %s: %v", c.ChatID, err)
 			}
 			break
+		}
+		// 总闸限流：单连接每秒消息数封顶，挡刷消息打 CPU/Redis/DB。超限静默丢弃。
+		if !c.msgLimiter.allow(time.Now(), msgMaxPerSec) {
+			continue
 		}
 		var msg Message
 		if err := json.Unmarshal(raw, &msg); err != nil {
@@ -1209,6 +1217,10 @@ func (h *Hub) handleIronFistLobbyJoin(c *Client) {
 	if h.ironFistSvc == nil {
 		return
 	}
+	// 限流：加入会触发 DB 查询 + 全大厅 O(N) 广播，严格限频防广播风暴。
+	if !c.lobbyLimiter.allow(time.Now(), lobbyMaxPerSec) {
+		return
+	}
 	// 查询档案（不在持锁期间做 DB 查询，避免阻塞其他 dispatch）
 	ctx := context.Background()
 	p, err := h.ironFistSvc.GetLobbyUserProfile(ctx, c.ChatID)
@@ -1238,6 +1250,10 @@ func (h *Hub) handleIronFistLobbyJoin(c *Client) {
 
 // handleIronFistLobbyLeave 主动离开 PVP 大厅
 func (h *Hub) handleIronFistLobbyLeave(c *Client) {
+	// 共用大厅限流器：挡 join/leave 快速来回切换触发的广播风暴。
+	if !c.lobbyLimiter.allow(time.Now(), lobbyMaxPerSec) {
+		return
+	}
 	h.mu.Lock()
 	_, inLobby := h.pvpLobby[c.ChatID]
 	if !inLobby {

@@ -15,16 +15,23 @@ type windowCounter struct {
 	reset time.Time
 }
 
-// RateLimiter 固定窗口、按 IP 限流
+// RateLimiter 固定窗口限流。默认按 IP，可通过 NewRateLimiterFunc 自定义键
+// （如按已认证用户 chatID，避免共享 NAT 下多用户互相挤占额度）。
 type RateLimiter struct {
 	clients sync.Map
 	limit   int
 	window  time.Duration
+	keyFn   func(*gin.Context) string
 	reqN    atomic.Uint64
 }
 
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
-	return &RateLimiter{limit: limit, window: window}
+	return &RateLimiter{limit: limit, window: window, keyFn: func(c *gin.Context) string { return c.ClientIP() }}
+}
+
+// NewRateLimiterFunc 与 NewRateLimiter 相同，但用 keyFn 提取限流键。
+func NewRateLimiterFunc(limit int, window time.Duration, keyFn func(*gin.Context) string) *RateLimiter {
+	return &RateLimiter{limit: limit, window: window, keyFn: keyFn}
 }
 
 func (rl *RateLimiter) Limit() gin.HandlerFunc {
@@ -34,10 +41,10 @@ func (rl *RateLimiter) Limit() gin.HandlerFunc {
 			rl.cleanupStale()
 		}
 
-		ip := c.ClientIP()
+		key := rl.keyFn(c)
 		now := time.Now()
 
-		v, _ := rl.clients.LoadOrStore(ip, &windowCounter{reset: now.Add(rl.window)})
+		v, _ := rl.clients.LoadOrStore(key, &windowCounter{reset: now.Add(rl.window)})
 		wc := v.(*windowCounter)
 
 		wc.mu.Lock()
