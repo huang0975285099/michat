@@ -7,8 +7,10 @@ import * as BABYLON from '@babylonjs/core'
 import '@babylonjs/loaders/glTF'  // 注册 glTF/glb 加载器（副作用 import）
 import { Fighter3D, PAL_ME_3D, PAL_OPP_3D } from './Fighter3D.js'
 
-// glb 放在 public/ 下，构建后从站点根提供
-const GLB_ROOT = '/games/ironfist/'
+// glb 放在 public/ 下。用 BASE_URL 拼接以兼容两种部署：
+// 网页端 BASE_URL='/' → '/games/ironfist/'；Electron BASE_URL='./' → './games/ironfist/'
+// （Electron 用 file:// 加载，绝对路径 '/games' 会指向磁盘根而加载失败）
+const GLB_ROOT = import.meta.env.BASE_URL + 'games/ironfist/'
 const GLB_FILE = 'fighter.glb'       // 我方模型（Vanguard）
 const GLB_FILE_OPP = 'fighter.glb'  // 对手模型（Mutant）；缺省则回退用 fighter.glb
 

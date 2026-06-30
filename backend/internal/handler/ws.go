@@ -3,12 +3,10 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -25,11 +23,6 @@ const (
 	maxWSConns      = 50000 // 全局并发连接上限（按单机容量设，超量直接拒新连）
 	maxWSConnsPerIP = 500   // 单 IP 并发连接上限（CGNAT 下众多手机共用 IP）
 )
-
-// clientIPSelfCheckN 启动后记录前 N 条 WS 连接的 IP 解析详情，用于核对反代/可信代理
-// 配置是否让 ClientIP() 取到真实客户端公网 IP（而非内网代理 IP）。达到 N 后自动静默。
-// 核对无误后可删除相关日志代码。
-const clientIPSelfCheckN = 50
 
 // IsLocalDevOrigin 判断 origin 是否为应始终放行的本地开发 / 原生壳来源：
 //   - file:// / capacitor://（移动端原生壳，无标准 http origin）
@@ -62,8 +55,6 @@ type WSHandler struct {
 	connMu     sync.Mutex
 	curConns   int            // 当前全局并发连接数
 	connsPerIP map[string]int // ip → 当前该 IP 并发连接数
-
-	ipCheckN atomic.Int64 // ClientIP 自检日志计数（见 clientIPSelfCheckN）
 }
 
 func NewWSHandler(hub *ws.Hub, svc *service.IdentityService, allowedOrigins []string) *WSHandler {
@@ -128,13 +119,6 @@ func (h *WSHandler) upgrader() websocket.Upgrader {
 func (h *WSHandler) Serve(c *gin.Context) {
 	// 连接数上限：升级前即拦截，避免为超额连接分配资源。
 	ip := c.ClientIP()
-
-	// 自检：启动后前 N 条连接打印 IP 解析详情，核对反代是否把真实客户端 IP 透传到位。
-	if h.ipCheckN.Add(1) <= clientIPSelfCheckN {
-		log.Printf("[clientip-selfcheck] ClientIP=%s RemoteAddr=%s X-Forwarded-For=%q X-Real-IP=%q",
-			ip, c.Request.RemoteAddr, c.GetHeader("X-Forwarded-For"), c.GetHeader("X-Real-IP"))
-	}
-
 	if !h.acquireConn(ip) {
 		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many connections"})
 		return

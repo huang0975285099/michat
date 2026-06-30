@@ -66,7 +66,13 @@
                                 class="mh-avatar mh-avatar--me"
                                 :class="{ charged: pCharged }"
                             >
-                                {{ myEmoji }}
+                                <DeterministicAvatar
+                                    v-if="identityStore.chatId"
+                                    :seed="identityStore.chatId"
+                                    :size="46"
+                                    class="mh-avatar-img"
+                                />
+                                <span v-else>{{ myEmoji }}</span>
                             </div>
                             <div class="mh-id">
                                 <div class="mh-name">{{ myName }}</div>
@@ -186,7 +192,13 @@
                                 class="mh-avatar mh-avatar--opp"
                                 :class="{ charged: oCharged }"
                             >
-                                {{ opponentEmoji }}
+                                <DeterministicAvatar
+                                    v-if="opponentChatId"
+                                    :seed="opponentChatId"
+                                    :size="46"
+                                    class="mh-avatar-img"
+                                />
+                                <span v-else>{{ opponentEmoji }}</span>
                             </div>
                             <div class="mh-id mh-id--right">
                                 <div class="mh-name">{{ opponentName }}</div>
@@ -365,6 +377,7 @@ import IronFistRecords from "./components/IronFistRecords.vue";
 import IronFistAchievements from "./components/IronFistAchievements.vue";
 import IronFistPvpLobby from "./components/IronFistPvpLobby.vue";
 import HealthBar from "./components/HealthBar.vue";
+import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
 // 三期：Babylon.js 3D 渲染层（方案B）。props 接口与一/二期一致，可一行回退。
 // 一期 BattleArena.vue(2D-CSS) / 二期 BattleArenaPhaser.vue 仍保留备用。
 import BattleArena from "./components/BattleArena3D.vue";
@@ -422,6 +435,7 @@ let meHitTimer = null;
 let oppHitTimer = null;
 const opponentName = ref("对手");
 const opponentEmoji = ref("🤖");
+const opponentChatId = ref("");
 
 const resultType = ref("");
 const errorMsg = ref(""); // resultType==="error" 时的具体提示文案
@@ -752,6 +766,7 @@ function startPve() {
     mode.value = "pve";
     opponentName.value = "电脑";
     opponentEmoji.value = "🤖";
+    opponentChatId.value = "";
     resultType.value = ""; // 清理上一局结果状态
     engine = new IronFistGame({ mode: "pve" });
     beginBattle();
@@ -791,6 +806,7 @@ async function startPvp() {
         gameStore.opponentNickname ||
         "对手";
     opponentEmoji.value = "🥷";
+    opponentChatId.value = route.query.opponent || gameStore.opponentId || "";
     resultType.value = ""; // 清理上一局结果状态
     await nextTick();
 
@@ -1427,6 +1443,11 @@ function goHome() {
 }
 
 /* 头像 */
+.mh-avatar-img {
+    border-radius: 50%;
+    object-fit: cover;
+    pointer-events: none;
+}
 .mh-avatar {
     position: relative;
     flex: 0 0 auto;
@@ -1869,13 +1890,6 @@ function goHome() {
 }
 
 /* ===== 操作按钮 ===== */
-.control-deck {
-    /* padding: 10px 12px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.045);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.3); */
-}
 .hud-action {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
