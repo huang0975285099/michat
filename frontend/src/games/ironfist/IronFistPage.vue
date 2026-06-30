@@ -1822,23 +1822,20 @@ function goHome() {
   filter: blur(3px); opacity: 0.85;
 } */
 .rv-side {
+    flex: 1;
+    min-width: 0;
     text-align: center;
-    padding: 10px 60px 0 60px;
+    /* 60px at max-width(530px) ≈ 11.5%；窄屏按比例收缩，最低 8px */
+    padding: 10px min(60px, 11.5%) 0 min(60px, 11.5%);
 }
-/* .rv-side { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.rv-side--opp { align-items: flex-end; } */
-/* .rv-label { font-size: 24px; font-weight: 700; letter-spacing: 1px; } */
-/* .rv-side--me .rv-label  { color: #8fb6ff; }
-.rv-side--opp .rv-label { color: #ff9a9a; } */
 .rv-move {
-    font-size: 24px;
+    /* 最大 24px，窄屏按 vw 缩小，最小 13px */
+    font-size: clamp(13px, 4.5vw, 24px);
     font-weight: 900;
     color: #fff;
     text-align: center;
+    white-space: nowrap;
 }
-/* 
-.rv-side--me .rv-move  { background: linear-gradient(180deg, #4f8cff, #2a5bc0); }
-.rv-side--opp .rv-move { background: linear-gradient(180deg, #ff6b6b, #c0392b); } */
 .rv-move--wait {
     background: rgba(255, 255, 255, 0.08) !important;
     color: #9a93b8 !important;
@@ -1846,8 +1843,8 @@ function goHome() {
     animation: blink 1s infinite;
 }
 .rv-ic {
-    font-size: 24px;
-    margin-right: 10px;
+    font-size: clamp(13px, 4.5vw, 24px);
+    margin-right: clamp(4px, 2vw, 10px);
     filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
 }
 /* .rv-vs {
@@ -1855,13 +1852,14 @@ function goHome() {
   text-shadow: 0 0 8px rgba(90, 140, 255, 0.9), 0 0 16px rgba(255, 80, 80, 0.7), 0 2px 3px rgba(0, 0, 0, 0.6);
 } */
 .reveal-verdict {
-    font-size: 13px;
+    font-size: clamp(11px, 3.2vw, 13px);
     font-weight: 800;
     text-align: center;
     padding: 3px 14px;
     border-radius: 10px;
     background: rgba(12, 14, 30, 0.92);
     margin-bottom: -10px;
+    white-space: nowrap;
 }
 .rvv--good {
     color: #6ee7a0;
