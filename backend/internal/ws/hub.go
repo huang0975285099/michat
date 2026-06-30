@@ -1066,50 +1066,34 @@ func (h *Hub) handleIronFistAction(from *Client, payload json.RawMessage) {
 		return
 	}
 
-	// 越权校验：from 必须是该房间的参与方（玩家 A 或 B），且房间处于 matched
-	// 状态（结算后不再允许注入）；同时 p.To 必须等于对手 chatID，防止参与方向
-	// 任意非对手用户投递中继消息。
-	if h.ironFistSvc == nil {
-		log.Printf("[ws] ironfist_action: ironfist service unavailable, reject from %s", from.ChatID)
-		return
-	}
-	roomID, err := strconv.ParseUint(p.RoomID, 10, 64)
-	if err != nil {
-		log.Printf("[ws] ironfist_action invalid room_id %q from %s", p.RoomID, from.ChatID)
-		return
-	}
-	part, err := h.getRoomParticipants(roomID)
-	if err != nil {
-		log.Printf("[ws] ironfist_action GetPVPRoomParticipants err: %v", err)
-		return
-	}
-	if part == nil {
-		log.Printf("[ws] ironfist_action: room %d not found", roomID)
-		return
-	}
-	if part.Status != "matched" {
-		log.Printf("[ws] ironfist_action: room %d status=%s, expected matched", roomID, part.Status)
-		return
-	}
-	// 确认 from 是参与方并计算对手 chatID（用于校验 p.To）
-	var opponentChatID string
-	switch from.ChatID {
-	case part.AChatID:
-		opponentChatID = part.BChatID
-	case part.BChatID:
-		opponentChatID = part.AChatID
-	default:
-		log.Printf("[ws] ironfist_action: %s not a participant of room %d", from.ChatID, roomID)
-		return
-	}
-	if opponentChatID == "" {
-		log.Printf("[ws] ironfist_action: room %d has no opponent yet", roomID)
-		return
-	}
-	if p.To != opponentChatID {
-		log.Printf("[ws] ironfist_action: %s tried to relay to %s, opponent is %s",
-			from.ChatID, p.To, opponentChatID)
-		return
+	// 房间类型区分：
+	//  - 质押 PVP 房间：room_id 是数字 DB 主键且存在于 ironfist_pvp_rooms。涉及资金，
+	//    需严格越权校验（from 必须是参与方、房间 matched、p.To 必须是对手）。
+	//  - 好友娱乐局：room_id 是 randomId 字符串（非数字 / 不在 PVP 表）。无资金风险，
+	//    仅中继不做游戏逻辑校验——randomId（36^8 空间，不可枚举）本身即访问凭据。
+	// 仅当肯定识别为 PVP 房间时才走严格校验，避免误伤好友局（其 action 不应被丢弃）。
+	if roomID, perr := strconv.ParseUint(p.RoomID, 10, 64); perr == nil && h.ironFistSvc != nil {
+		if part, gerr := h.getRoomParticipants(roomID); gerr == nil && part != nil {
+			if part.Status != "matched" {
+				log.Printf("[ws] ironfist_action: room %d status=%s, expected matched", roomID, part.Status)
+				return
+			}
+			var opponentChatID string
+			switch from.ChatID {
+			case part.AChatID:
+				opponentChatID = part.BChatID
+			case part.BChatID:
+				opponentChatID = part.AChatID
+			default:
+				log.Printf("[ws] ironfist_action: %s not a participant of room %d", from.ChatID, roomID)
+				return
+			}
+			if opponentChatID == "" || p.To != opponentChatID {
+				log.Printf("[ws] ironfist_action: %s relay to %s rejected (opponent %s) room %d",
+					from.ChatID, p.To, opponentChatID, roomID)
+				return
+			}
+		}
 	}
 
 	// 存储项含 from，便于客户端重放时区分双方动作
@@ -1171,35 +1155,22 @@ func (h *Hub) handleIronFistReconnect(from *Client, payload json.RawMessage) {
 		return
 	}
 
-	// 越权校验：from 必须是该房间的参与方（玩家 A 或 B），且房间处于 matched
-	// 或 settled 状态（matching 阶段无可重放动作；cancelled 不应重放）。否则任意
-	// 用户可通过枚举自增 room_id 拉取他人对局完整动作历史。
-	if h.ironFistSvc == nil {
-		log.Printf("[ws] ironfist_reconnect: ironfist service unavailable, reject from %s", from.ChatID)
-		return
-	}
-	roomID, err := strconv.ParseUint(p.RoomID, 10, 64)
-	if err != nil {
-		log.Printf("[ws] ironfist_reconnect invalid room_id %q from %s", p.RoomID, from.ChatID)
-		return
-	}
-	part, err := h.getRoomParticipants(roomID)
-	if err != nil {
-		log.Printf("[ws] ironfist_reconnect GetPVPRoomParticipants err: %v", err)
-		return
-	}
-	if part == nil {
-		log.Printf("[ws] ironfist_reconnect: room %d not found", roomID)
-		return
-	}
-	if part.Status != "matched" && part.Status != "settled" {
-		log.Printf("[ws] ironfist_reconnect: room %d status=%s, expected matched/settled",
-			roomID, part.Status)
-		return
-	}
-	if from.ChatID != part.AChatID && from.ChatID != part.BChatID {
-		log.Printf("[ws] ironfist_reconnect: %s not a participant of room %d", from.ChatID, roomID)
-		return
+	// 越权校验：仅对质押 PVP 房间（数字 DB 主键且存在于 ironfist_pvp_rooms）生效——
+	// 否则任意用户可枚举自增 room_id 拉取他人对局完整动作历史。要求 from 是参与方、
+	// 房间 matched/settled。好友娱乐局 room_id 为不可枚举的 randomId 字符串，不在 PVP 表，
+	// randomId 本身即访问凭据，直接放行重放（否则好友局刷新无法重连）。
+	if roomID, perr := strconv.ParseUint(p.RoomID, 10, 64); perr == nil && h.ironFistSvc != nil {
+		if part, gerr := h.getRoomParticipants(roomID); gerr == nil && part != nil {
+			if part.Status != "matched" && part.Status != "settled" {
+				log.Printf("[ws] ironfist_reconnect: room %d status=%s, expected matched/settled",
+					roomID, part.Status)
+				return
+			}
+			if from.ChatID != part.AChatID && from.ChatID != part.BChatID {
+				log.Printf("[ws] ironfist_reconnect: %s not a participant of room %d", from.ChatID, roomID)
+				return
+			}
+		}
 	}
 
 	ctx := context.Background()

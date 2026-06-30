@@ -9,7 +9,7 @@
                 color="white"
                 @click="$emit('back')"
             />
-            <div class="text-h6 q-ml-sm">账本明细</div>
+            <div class="text-h6 q-ml-sm">$FIST 明细</div>
             <q-space />
             <q-chip dense color="amber-9" text-color="white" class="fist-chip">
                 ⚡ {{ fistStore.balance.toLocaleString() }} $FIST

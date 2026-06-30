@@ -28,7 +28,7 @@
                 <div class="mini-name">
                     {{ fistStore.balance.toLocaleString() }}
                 </div>
-                <div class="mini-sub">$FIST · 账本明细</div>
+                <div class="mini-sub">$FIST · 明细</div>
             </div>
             <div class="mini-card" @click="$emit('open-records')">
                 <div class="mini-emoji">📜</div>

@@ -631,6 +631,12 @@ async function reportMatchResult(res) {
             counterSuccesses: 0,
             rounds: 0,
         };
+        // 好友/人机：未实际开打（0 回合，对手开局即离开导致超时判胜）不记录，
+        // 避免出现"0 回合 · 胜利"这类无意义战绩。真实 PVP（带 room_id）必须照常上报，
+        // 由后端结算与双上报仲裁兜底（双方都弃局会被仲裁为平局并退款）。
+        if (!pvpRoomId.value && summary.rounds === 0) {
+            return;
+        }
         // 逐局明细：从 moveHistory 压成紧凑 JSON 数组
         const detail = moveHistory.value.map((m) => ({
             r: m.round,

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { Notify } from 'quasar'
 import { send, on, off } from 'src/services/websocket'
+import { useIdentityStore } from 'src/stores/identity'
 
 function randomId() { return Math.random().toString(36).slice(2, 10) }
 function randomSeed() { return (Math.random() * 2 ** 31) >>> 0 }
@@ -33,7 +34,14 @@ export const useGameStore = defineStore('game', () => {
     game.value = gameType
     state.value = 'inviting'
 
-    send('game_invite', { to: chatId, game: gameType, room_id: roomId.value })
+    // 携带邀请方自己的昵称：受邀方（guest）据此显示对手昵称，
+    // 否则只能拿到对方 chat_id，导致战绩里显示 ID 而非昵称。
+    send('game_invite', {
+      to: chatId,
+      game: gameType,
+      room_id: roomId.value,
+      from_nickname: useIdentityStore().nickname,
+    })
 
     _inviteTimer = setTimeout(() => {
       if (state.value === 'inviting') {
@@ -78,7 +86,11 @@ export const useGameStore = defineStore('game', () => {
     }
     isHost.value = false
     opponentId.value = payload.from
-    opponentNickname.value = payload.from   // resolved to nickname by UI if available
+    // 优先用邀请方携带的昵称；否则回退好友昵称缓存；再退化为 chat_id
+    opponentNickname.value =
+      payload.from_nickname ||
+      useIdentityStore().getFriendName(payload.from) ||
+      payload.from
     roomId.value = payload.room_id
     game.value = payload.game || 'bomberman'
     state.value = 'invited'
