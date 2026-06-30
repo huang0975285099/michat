@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
@@ -46,6 +47,30 @@ type Client struct {
 	send   chan []byte
 	ChatID string
 	UserID uint64 // 用于查询好友列表
+
+	// 铁拳消息限流状态：固定窗口计数。仅在该连接自身的 readPump goroutine
+	// 内访问（dispatch 同步执行），故无需加锁。action / reconnect 各一套窗口。
+	ifActionLimiter    fixedWindow
+	ifReconnectLimiter fixedWindow
+}
+
+// fixedWindow 是一个非并发安全的固定窗口限流器，仅供单 goroutine 使用。
+type fixedWindow struct {
+	windowStart time.Time
+	count       int
+}
+
+// allow 在当前 1 秒窗口内放行不超过 max 次，超限返回 false。
+func (w *fixedWindow) allow(now time.Time, max int) bool {
+	if now.Sub(w.windowStart) >= time.Second {
+		w.windowStart = now
+		w.count = 0
+	}
+	if w.count >= max {
+		return false
+	}
+	w.count++
+	return true
 }
 
 // InitClient 由 handler 层调用，设置连接和发送通道
@@ -53,6 +78,12 @@ func InitClient(c *Client, conn *websocket.Conn, send chan []byte) {
 	c.conn = conn
 	c.send = send
 }
+
+// 单连接每秒允许的铁拳消息上限（固定窗口）。
+const (
+	ifActionMaxPerSec    = 30 // ironfist_action：实时对战动作，给足余量
+	ifReconnectMaxPerSec = 5  // ironfist_reconnect：低频操作，每次都做全量 LRANGE
+)
 
 // Hub 管理所有在线连接
 type Hub struct {
@@ -65,7 +96,23 @@ type Hub struct {
 	pushSvc        *service.PushService                 // 可为 nil（未配置时禁用推送）
 	ironFistSvc    *service.IronFistService             // 可为 nil（PVP 大厅禁用）
 	pvpLobby       map[string]*service.LobbyUserProfile // chatID → 大厅用户档案（PVP 大厅在线列表）
+
+	// PVP 房间参与方短 TTL 缓存：避免 ironfist_action 热路径每个动作打一次 DB
+	// （否则已认证用户狂刷 action 会把 WS 流量放大成等量 DB 查询）。状态陈旧度
+	// 上限为 pvpPartCacheTTL，对越权校验足够（参与方 chatID 撮合后不变）。
+	pvpPartMu    sync.Mutex
+	pvpPartCache map[uint64]pvpPartCacheEntry
 }
+
+// pvpPartCacheEntry 缓存项；part 为 nil 表示"已确认房间不存在"，同样缓存以挡住
+// 对不存在 room_id 的枚举刷查。
+type pvpPartCacheEntry struct {
+	part    *service.PVPRoomParticipants
+	expires time.Time
+}
+
+// pvpPartCacheTTL 参与方缓存有效期，决定房间状态变更（结算/取消）的最大可见延迟。
+const pvpPartCacheTTL = 5 * time.Second
 
 func NewHub(redis *rdb.Client, friendSvc *service.FriendService, identitySvc *service.IdentityService, messageReadSvc *service.MessageReadService) *Hub {
 	return &Hub{
@@ -75,7 +122,48 @@ func NewHub(redis *rdb.Client, friendSvc *service.FriendService, identitySvc *se
 		identitySvc:    identitySvc,
 		messageReadSvc: messageReadSvc,
 		pvpLobby:       make(map[string]*service.LobbyUserProfile),
+		pvpPartCache:   make(map[uint64]pvpPartCacheEntry),
 	}
+}
+
+// getRoomParticipants 带短 TTL 缓存地查询 PVP 房间参与方，供 WS 越权校验使用。
+// 命中缓存时不打 DB；未命中时用带超时的 context 查询（避免慢/挂死的 DB 阻塞
+// 该连接的读循环），并顺带清理过期项防止 map 无界增长。
+func (h *Hub) getRoomParticipants(roomID uint64) (*service.PVPRoomParticipants, error) {
+	now := time.Now()
+
+	h.pvpPartMu.Lock()
+	if e, ok := h.pvpPartCache[roomID]; ok && now.Before(e.expires) {
+		part := e.part
+		h.pvpPartMu.Unlock()
+		return part, nil
+	}
+	h.pvpPartMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	part, err := h.ironFistSvc.GetPVPRoomParticipants(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+
+	// 不缓存 matching：这是个会很快翻转成 matched 的过渡态，若缓存住会导致撮合
+	// 完成后最多一个 TTL 内 from 的合法 action 被当作"未 matched"丢弃（永久丢失，
+	// 重连补不回），造成开局 desync。其它状态（matched/settled/cancelled）与 nil
+	// 都相对稳定，缓存其陈旧度可接受。
+	if part != nil && part.Status == "matching" {
+		return part, nil
+	}
+
+	h.pvpPartMu.Lock()
+	for id, e := range h.pvpPartCache {
+		if now.After(e.expires) {
+			delete(h.pvpPartCache, id)
+		}
+	}
+	h.pvpPartCache[roomID] = pvpPartCacheEntry{part: part, expires: now.Add(pvpPartCacheTTL)}
+	h.pvpPartMu.Unlock()
+	return part, nil
 }
 
 // SetPushService 注入推送服务（在 main.go 中 hub 创建后调用）
@@ -971,6 +1059,59 @@ func (h *Hub) handleIronFistAction(from *Client, payload json.RawMessage) {
 		return
 	}
 
+	// 限流：单连接固定窗口（1s）内最多 ifActionMaxPerSec 个 action，挡住合法
+	// 参与方刷消息（叠加下游 Redis RPUSH + 中继的放大效应）。超限静默丢弃。
+	if !from.ifActionLimiter.allow(time.Now(), ifActionMaxPerSec) {
+		log.Printf("[ws] ironfist_action rate limited from %s", from.ChatID)
+		return
+	}
+
+	// 越权校验：from 必须是该房间的参与方（玩家 A 或 B），且房间处于 matched
+	// 状态（结算后不再允许注入）；同时 p.To 必须等于对手 chatID，防止参与方向
+	// 任意非对手用户投递中继消息。
+	if h.ironFistSvc == nil {
+		log.Printf("[ws] ironfist_action: ironfist service unavailable, reject from %s", from.ChatID)
+		return
+	}
+	roomID, err := strconv.ParseUint(p.RoomID, 10, 64)
+	if err != nil {
+		log.Printf("[ws] ironfist_action invalid room_id %q from %s", p.RoomID, from.ChatID)
+		return
+	}
+	part, err := h.getRoomParticipants(roomID)
+	if err != nil {
+		log.Printf("[ws] ironfist_action GetPVPRoomParticipants err: %v", err)
+		return
+	}
+	if part == nil {
+		log.Printf("[ws] ironfist_action: room %d not found", roomID)
+		return
+	}
+	if part.Status != "matched" {
+		log.Printf("[ws] ironfist_action: room %d status=%s, expected matched", roomID, part.Status)
+		return
+	}
+	// 确认 from 是参与方并计算对手 chatID（用于校验 p.To）
+	var opponentChatID string
+	switch from.ChatID {
+	case part.AChatID:
+		opponentChatID = part.BChatID
+	case part.BChatID:
+		opponentChatID = part.AChatID
+	default:
+		log.Printf("[ws] ironfist_action: %s not a participant of room %d", from.ChatID, roomID)
+		return
+	}
+	if opponentChatID == "" {
+		log.Printf("[ws] ironfist_action: room %d has no opponent yet", roomID)
+		return
+	}
+	if p.To != opponentChatID {
+		log.Printf("[ws] ironfist_action: %s tried to relay to %s, opponent is %s",
+			from.ChatID, p.To, opponentChatID)
+		return
+	}
+
 	// 存储项含 from，便于客户端重放时区分双方动作
 	entry := map[string]interface{}{
 		"round":  p.Round,
@@ -1021,6 +1162,43 @@ func (h *Hub) handleIronFistReconnect(from *Client, payload json.RawMessage) {
 	}
 	if err := json.Unmarshal(payload, &p); err != nil || p.RoomID == "" {
 		log.Printf("[ws] invalid ironfist_reconnect from %s", from.ChatID)
+		return
+	}
+
+	// 限流：reconnect 每次都做一次全量 LRANGE，限制单连接刷取频率。超限静默丢弃。
+	if !from.ifReconnectLimiter.allow(time.Now(), ifReconnectMaxPerSec) {
+		log.Printf("[ws] ironfist_reconnect rate limited from %s", from.ChatID)
+		return
+	}
+
+	// 越权校验：from 必须是该房间的参与方（玩家 A 或 B），且房间处于 matched
+	// 或 settled 状态（matching 阶段无可重放动作；cancelled 不应重放）。否则任意
+	// 用户可通过枚举自增 room_id 拉取他人对局完整动作历史。
+	if h.ironFistSvc == nil {
+		log.Printf("[ws] ironfist_reconnect: ironfist service unavailable, reject from %s", from.ChatID)
+		return
+	}
+	roomID, err := strconv.ParseUint(p.RoomID, 10, 64)
+	if err != nil {
+		log.Printf("[ws] ironfist_reconnect invalid room_id %q from %s", p.RoomID, from.ChatID)
+		return
+	}
+	part, err := h.getRoomParticipants(roomID)
+	if err != nil {
+		log.Printf("[ws] ironfist_reconnect GetPVPRoomParticipants err: %v", err)
+		return
+	}
+	if part == nil {
+		log.Printf("[ws] ironfist_reconnect: room %d not found", roomID)
+		return
+	}
+	if part.Status != "matched" && part.Status != "settled" {
+		log.Printf("[ws] ironfist_reconnect: room %d status=%s, expected matched/settled",
+			roomID, part.Status)
+		return
+	}
+	if from.ChatID != part.AChatID && from.ChatID != part.BChatID {
+		log.Printf("[ws] ironfist_reconnect: %s not a participant of room %d", from.ChatID, roomID)
 		return
 	}
 

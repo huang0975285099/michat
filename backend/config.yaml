@@ -35,4 +35,4 @@ version:
   notes: ""
 
 allowed_origins:
-  - "*"
+  - "https://yb.yzs88.com"

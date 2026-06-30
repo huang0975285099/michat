@@ -713,6 +713,43 @@ func (s *IronFistService) GetPVPQueueStatus(ctx context.Context, userID uint64) 
 	}, nil
 }
 
+// PVPRoomParticipants 房间参与方信息，供 WS 层做越权校验
+type PVPRoomParticipants struct {
+	Status  string // matching / matched / settled / cancelled
+	AChatID string // player_a_chat_id（NOT NULL，必有值）
+	BChatID string // player_b_chat_id（matched 前为空）
+}
+
+// GetPVPRoomParticipants 查询指定 PVP 房间的状态与双方 chatID。
+// 用于 WS 层 ironfist_action / ironfist_reconnect 防越权：
+//   - 校验 from 是否为参与方
+//   - 校验 p.To 是否为对手 chatID
+//   - 校验状态为 matched（结算后不再允许 action / reconnect）
+//
+// 房间不存在时返回 (nil, nil)。
+func (s *IronFistService) GetPVPRoomParticipants(ctx context.Context, roomID uint64) (*PVPRoomParticipants, error) {
+	var (
+		status  string
+		aChatID string
+		bChatID sql.NullString
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT status, player_a_chat_id, player_b_chat_id
+		FROM ironfist_pvp_rooms WHERE id = ?
+	`, roomID).Scan(&status, &aChatID, &bChatID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	p := &PVPRoomParticipants{Status: status, AChatID: aChatID}
+	if bChatID.Valid {
+		p.BChatID = bChatID.String
+	}
+	return p, nil
+}
+
 // CancelPVPQueue 取消撮合（用户主动取消或断线清理）：
 // 仅 'matching' 状态可取消，全额退回质押；其他状态视为已无可取消队列。
 // 通过 chatID 取消以支持 Hub.Unregister 调用；返回取消的 roomID（0 表示无可取消）。
