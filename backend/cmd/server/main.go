@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -295,7 +294,7 @@ func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
 		} else if _, ok := originSet[origin]; ok {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Vary", "Origin")
-		} else if strings.HasPrefix(origin, "file://") || strings.HasPrefix(origin, "capacitor://") || strings.HasPrefix(origin, "https://localhost") {
+		} else if handler.IsLocalDevOrigin(origin) {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Vary", "Origin")
 		}

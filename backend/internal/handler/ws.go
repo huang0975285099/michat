@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -13,6 +14,27 @@ import (
 	"e2eechat/internal/service"
 	"e2eechat/internal/ws"
 )
+
+// IsLocalDevOrigin 判断 origin 是否为应始终放行的本地开发 / 原生壳来源：
+//   - file:// / capacitor://（移动端原生壳，无标准 http origin）
+//   - 任意端口的 http(s)://localhost、127.0.0.1、[::1]（本地调试）
+//
+// 用精确 host 比对而非前缀匹配，避免 https://localhost.evil.com 之类的绕过。
+// CheckOrigin 与 corsMiddleware 共用此判断。
+func IsLocalDevOrigin(origin string) bool {
+	if strings.HasPrefix(origin, "file://") || strings.HasPrefix(origin, "capacitor://") {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	switch u.Hostname() { // Hostname() 已去掉端口与 IPv6 方括号
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
 
 type WSHandler struct {
 	hub            *ws.Hub
@@ -45,7 +67,7 @@ func (h *WSHandler) upgrader() websocket.Upgrader {
 			if _, ok := h.allowedOrigins[origin]; ok {
 				return true
 			}
-			return strings.HasPrefix(origin, "file://") || strings.HasPrefix(origin, "capacitor://") || strings.HasPrefix(origin, "https://localhost")
+			return IsLocalDevOrigin(origin)
 		},
 	}
 }
