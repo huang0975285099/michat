@@ -253,7 +253,6 @@
                     </div>
                     <div class="reveal">
                         <div class="rv-side rv-side--me">
-                            <!-- <span class="rv-label">我方出招</span> -->
                             <span class="rv-move">
                                 <span class="rv-ic">{{
                                     actionMeta[revealMy]?.icon
@@ -261,9 +260,7 @@
                                 >{{ actionMeta[revealMy]?.name }}
                             </span>
                         </div>
-                        <!-- <div class="rv-vs">VS</div> -->
                         <div class="rv-side rv-side--opp">
-                            <!-- <span class="rv-label">对手出招</span> -->
                             <span v-if="revealOpp" class="rv-move">
                                 <span class="rv-ic">{{
                                     actionMeta[revealOpp]?.icon
@@ -1825,12 +1822,22 @@ function goHome() {
     flex: 1;
     min-width: 0;
     text-align: center;
+}
+.rv-side--me {
     /* 60px at max-width(530px) ≈ 11.5%；窄屏按比例收缩，最低 8px */
-    padding: 10px min(60px, 11.5%) 0 min(60px, 11.5%);
+    /* padding: 10px min(60px, 11.5%) 0 min(60px, 11.5%); */
+        padding-right: 7%;
+    padding-top: 8px;
+}
+.rv-side--opp {
+    /* 60px at max-width(530px) ≈ 11.5%；窄屏按比例收缩，最低 8px */
+    /* padding: 10px min(60px, 11.5%) 0 min(60px, 11.5%); */
+        padding-left: 7%;
+    padding-top: 8px;
 }
 .rv-move {
     /* 最大 24px，窄屏按 vw 缩小，最小 13px */
-    font-size: clamp(13px, 4.5vw, 24px);
+    font-size: clamp(14px, 4.5vw, 26px);
     font-weight: 900;
     color: #fff;
     text-align: center;
