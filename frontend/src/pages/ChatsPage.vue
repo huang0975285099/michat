@@ -73,6 +73,7 @@ import { computed, ref, onActivated, onDeactivated } from "vue";
 import { useRouter } from "vue-router";
 import { useQuasar } from "quasar";
 import { useChatStore } from "src/stores/chat";
+import { useIdentityStore } from "src/stores/identity";
 import { friendApi } from "src/services/api";
 import { on, off } from "src/services/websocket";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
@@ -80,9 +81,13 @@ import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
 const $q = useQuasar();
 const router = useRouter();
 const chatStore = useChatStore();
+const identity = useIdentityStore();
 const friends = ref([]);
 const friendMap = ref({}); // { chatId: friend } 用于快速查找
 const onlineMap = ref({}); // { chatId: boolean }
+// 本页 getFriends 是否已返回。未返回前不判定「已注销」，改用 identity 的启动期缓存
+// 显示昵称，避免首帧 friendMap 为空导致整列表闪现 chatID + 已注销 徽章。
+const friendsLoaded = ref(false);
 
 const menuChat = ref(null);
 
@@ -98,6 +103,7 @@ onActivated(async () => {
         friendMap.value[f.chat_id] = f;
         onlineMap.value[f.chat_id] = !!f.online;
     }
+    friendsLoaded.value = true;
     on("status", handleStatus);
 });
 
@@ -140,9 +146,12 @@ const recentChats = computed(() => {
 
         result.push({
             chatId,
-            nickname: friend ? friend.nickname : chatId,
-            deregistered: !friend,
-            pubkey: friend ? friend.public_key : "",
+            // 优先用本页最新的好友数据；未加载时回退到 identity 启动期缓存的昵称/公钥，
+            // 使首帧即显示正确昵称而非 chatID。
+            nickname: friend ? friend.nickname : identity.getFriendName(chatId),
+            // 仅在本页 getFriends 返回后才判定「已注销」，避免加载期误标。
+            deregistered: friendsLoaded.value && !friend,
+            pubkey: friend ? friend.public_key : identity.getFriendPubKey(chatId) || "",
             lastMessage: last?.text || "点击开始聊天",
             ts: last?.ts || 0,
             unread: unreadCount,
