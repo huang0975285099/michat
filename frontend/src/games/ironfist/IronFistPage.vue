@@ -9,8 +9,10 @@
             @open-achievements="view = 'achievements'"
             @start-pve="startPve"
             @open-pvp="view = 'pvp'"
+            @open-fist="view = 'fist'"
             @invite="startInvite"
         />
+        <IronFistFist v-else-if="view === 'fist'" @back="view = 'lobby'" />
         <IronFistLedger v-else-if="view === 'ledger'" @back="view = 'lobby'" />
         <IronFistRecords v-else-if="view === 'records'" @back="view = 'lobby'" />
         <IronFistAchievements
@@ -369,6 +371,7 @@ import { useFistStore } from "src/stores/fist";
 import { ironfistApi } from "src/services/api";
 import { ACHIEVEMENT_MAP } from "./game/ironfistMeta";
 import IronFistLobby from "./components/IronFistLobby.vue";
+import IronFistFist from "./components/IronFistFist.vue";
 import IronFistLedger from "./components/IronFistLedger.vue";
 import IronFistRecords from "./components/IronFistRecords.vue";
 import IronFistAchievements from "./components/IronFistAchievements.vue";

@@ -13,7 +13,15 @@
             <div class="text-h6 q-ml-xs">铁拳3D</div>
             <q-space />
             <div
+                v-if="region === 'intl'"
                 class="text-caption text-grey-5 cursor-pointer rules-link"
+                @click="$emit('open-fist')"
+            >
+                <q-icon name="info_outline" size="15px" />
+                <span class="q-ml-xs">$fist</span>
+            </div>
+            <div
+                class="text-caption text-grey-5 cursor-pointer rules-link  q-ml-xl"
                 @click="showRules = true"
             >
                 <q-icon name="help_outline" size="15px" />
@@ -229,6 +237,7 @@ defineEmits([
     "open-achievements",
     "start-pve",
     "open-pvp",
+    "open-fist",
     "invite",
 ]);
 
