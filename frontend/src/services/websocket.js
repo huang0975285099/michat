@@ -13,6 +13,28 @@ const listeners = new Map() // type → Set<callback>
 const PENDING_QUEUE_KEY = 'ws_pending_queue'  // 已读回执等关键消息的持久化队列
 const pendingQueue = loadPendingQueue()        // 断连期间缓存的消息（跨刷新保留）
 
+// 入站早到缓冲：冷启动时后端在认证成功后会立即 flush 离线消息，而聊天监听器要等
+// MainLayout 挂载（onMounted → startListening）才注册。若消息先到、监听器还没注册，
+// 直接丢弃会导致离线消息永久丢失（后端已从 Redis 删除队列）。故对这类需要补投的
+// 类型先暂存，待对应 on(type) 注册时回放。仅缓冲会进离线队列/需补投的类型，
+// 避免缓冲 status、游戏动作等高频瞬时事件。
+const BUFFERED_TYPES = new Set(['message', 'read_receipt', 'recall'])
+const EARLY_BUFFER_MAX = 500
+const earlyBuffer = [] // [{ type, payload }] 到达时尚无监听器的消息
+
+function dispatchMessage(type, payload) {
+  const cbs = listeners.get(type)
+  if (cbs && cbs.size) {
+    cbs.forEach((cb) => cb(payload))
+    return
+  }
+  // 尚无监听器：仅对需补投的类型入缓冲，等监听器注册后回放
+  if (BUFFERED_TYPES.has(type)) {
+    if (earlyBuffer.length >= EARLY_BUFFER_MAX) earlyBuffer.shift()
+    earlyBuffer.push({ type, payload })
+  }
+}
+
 function loadPendingQueue() {
   try {
     const raw = localStorage.getItem(PENDING_QUEUE_KEY)
@@ -35,6 +57,8 @@ function savePendingQueue() {
 export function clearPendingQueue() {
   pendingQueue.length = 0
   savePendingQueue()
+  // 一并清空入站早到缓冲：否则旧身份未消费的离线消息可能在新身份注册监听器时被回放
+  earlyBuffer.length = 0
 }
 
 // 响应式连接状态，供 UI 监听
@@ -98,8 +122,7 @@ export function connect() {
           return
         }
 
-        const cbs = listeners.get(msg.type)
-        if (cbs) cbs.forEach((cb) => cb(msg.payload))
+        dispatchMessage(msg.type, msg.payload)
       } catch (e) {
         console.error('[ws] parse error', e)
       }
@@ -216,6 +239,16 @@ function flushPendingQueue() {
 export function on(type, callback) {
   if (!listeners.has(type)) listeners.set(type, new Set())
   listeners.get(type).add(callback)
+  // 回放该类型在监听器注册前到达并暂存的消息（离线消息冷启动补投）
+  if (earlyBuffer.length) {
+    for (let i = 0; i < earlyBuffer.length; ) {
+      if (earlyBuffer[i].type === type) {
+        callback(earlyBuffer.splice(i, 1)[0].payload)
+      } else {
+        i++
+      }
+    }
+  }
 }
 
 /**

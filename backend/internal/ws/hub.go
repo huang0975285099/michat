@@ -48,6 +48,13 @@ type Client struct {
 	ChatID string
 	UserID uint64 // 用于查询好友列表
 
+	// closed 在该连接被新连接抢占时关闭，通知 writePump 停止向可能已半死的旧连接
+	// 写入并退出（退出时把 send 缓冲里未发送的消息回收进离线队列）。用 closeOnce
+	// 保证幂等。不直接 close(send)：那样会让并发的生产者 c.send<- 触发 panic，且缓冲
+	// 中未发送的消息会随连接销毁而永久丢失。
+	closed    chan struct{}
+	closeOnce sync.Once
+
 	// 消息限流状态：固定窗口计数。仅在该连接自身的 readPump goroutine 内访问
 	// （dispatch 同步执行），故无需加锁。
 	msgLimiter         fixedWindow // 所有入站消息的总闸
@@ -79,6 +86,12 @@ func (w *fixedWindow) allow(now time.Time, max int) bool {
 func InitClient(c *Client, conn *websocket.Conn, send chan []byte) {
 	c.conn = conn
 	c.send = send
+	c.closed = make(chan struct{})
+}
+
+// signalClose 通知该连接的 writePump 退出（被新连接抢占时用）。幂等，可重复调用。
+func (c *Client) signalClose() {
+	c.closeOnce.Do(func() { close(c.closed) })
 }
 
 // 单连接每秒允许的消息上限（固定窗口）。
@@ -183,9 +196,10 @@ func (h *Hub) SetIronFistService(svc *service.IronFistService) {
 // Register 注册客户端，标记在线，通知好友
 func (h *Hub) Register(c *Client) {
 	h.mu.Lock()
-	// 若同一 chatID 已有连接，关闭旧连接
+	// 若同一 chatID 已有连接，通知旧连接退出（不直接 close(send)，避免生产者 panic
+	// 并让旧连接的 writePump 在退出时把缓冲里未发送的消息回收进离线队列）
 	if old, ok := h.clients[c.ChatID]; ok {
-		close(old.send)
+		old.signalClose()
 	}
 	h.clients[c.ChatID] = c
 	h.mu.Unlock()
@@ -320,8 +334,25 @@ func (h *Hub) FlushOffline(c *Client) {
 		return
 	}
 	h.redis.Del(ctx, key)
-	for _, m := range msgs {
-		c.send <- []byte(m)
+	for i, m := range msgs {
+		select {
+		case c.send <- []byte(m):
+		case <-c.closed:
+			// 本连接在 flush 途中就被更新的连接抢占：把尚未入队的剩余离线消息（含当前
+			// 这条）原样退回离线队列，交给下一条连接补投，避免这里阻塞在满缓冲上死等。
+			// LPUSH key a b c 会得到 [c b a]，故按逆序传入，使剩余消息以原有先后顺序
+			// 排在队列最前，下次连接优先补投。
+			rest := msgs[i:]
+			remaining := make([]interface{}, 0, len(rest))
+			for j := len(rest) - 1; j >= 0; j-- {
+				remaining = append(remaining, rest[j])
+			}
+			pipe := h.redis.Pipeline()
+			pipe.LPush(ctx, key, remaining...)
+			pipe.Expire(ctx, key, pkgredis.OfflineMsgTTL)
+			pipe.Exec(ctx)
+			return
+		}
 	}
 }
 
@@ -335,9 +366,13 @@ func (h *Hub) storeOffline(chatID string, msg []byte) {
 // ServeClient 启动读/写 goroutine
 func (h *Hub) ServeClient(c *Client) {
 	h.Register(c)
+
+	// 先启动 writePump 再 flush 离线消息：FlushOffline 直接写 c.send，若离线消息条数
+	// 超过发送通道缓冲（256），而 writePump 尚未启动来消费，c.send<- 会永久阻塞导致
+	// 该连接死锁、彻底收不到消息。writePump 先跑起来即可边写边消费，仅退化为背压。
+	go c.writePump(h)
 	h.FlushOffline(c)
 
-	go c.writePump()
 	c.readPump(h) // 阻塞直到断开
 	h.Unregister(c)
 }
@@ -376,11 +411,14 @@ func (c *Client) readPump(h *Hub) {
 }
 
 // writePump 向客户端发送消息
-func (c *Client) writePump() {
+func (c *Client) writePump(h *Hub) {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
+		// 退出时把 send 缓冲里尚未写出的消息回收进离线队列，避免半死连接/被抢占时
+		// 缓冲中的消息随连接销毁而永久丢失。
+		h.requeueUndelivered(c)
 	}()
 	for {
 		select {
@@ -393,6 +431,12 @@ func (c *Client) writePump() {
 			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				return
 			}
+		case <-c.closed:
+			// 被新连接抢占：停止向这条（可能已半死）连接写，礼貌发个关闭帧后退出，
+			// 缓冲中未发送的消息由 defer 的 requeueUndelivered 回收。
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+			return
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
@@ -400,6 +444,49 @@ func (c *Client) writePump() {
 			}
 		}
 	}
+}
+
+// requeueUndelivered 非阻塞地抽干 send 缓冲，把其中尚未写出的「离线可存储」消息按序
+// 回收进离线队列。每个连接仅有一个 writePump，故本函数每连接至多执行一次，不会重复回收。
+// 只回收 message/read_receipt：这两类才是对方离线时需要补投的；status/ack/信令/游戏/
+// 文件块等瞬时消息即便还在缓冲里，也直接丢弃——否则重连后重放会造成幻象来电、残留游戏
+// 状态等。非可存储类型仍会被抽出通道（丢弃），不留在缓冲里。
+// 注：极小概率下，生产者在本函数抽干后仍可能向 send 写入（抢占的固有竞态），该消息会
+// 滞留缓冲；此窗口远小于原先「半死连接整条缓冲丢失」的缺口，且不会 panic。
+func (h *Hub) requeueUndelivered(c *Client) {
+	var pending []interface{}
+	for draining := true; draining; {
+		select {
+		case msg, ok := <-c.send:
+			if !ok {
+				draining = false
+			} else if offlineStorable(msg) {
+				pending = append(pending, msg)
+			}
+		default:
+			draining = false
+		}
+	}
+	if len(pending) == 0 {
+		return
+	}
+	ctx := context.Background()
+	key := pkgredis.OfflineKey(c.ChatID)
+	h.redis.RPush(ctx, key, pending...)
+	h.redis.Expire(ctx, key, pkgredis.OfflineMsgTTL)
+}
+
+// offlineStorable 判断一条已序列化的出站消息是否属于「离线可存储」类型。仅聊天消息与
+// 已读回执需要在对方离线时补投，与 handleChatMessage / handleRead 里走 Send→storeOffline
+// 的类型保持一致。解析失败按不可存储处理。
+func offlineStorable(msg []byte) bool {
+	var m struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(msg, &m); err != nil {
+		return false
+	}
+	return m.Type == "message" || m.Type == "read_receipt"
 }
 
 // dispatch 路由消息

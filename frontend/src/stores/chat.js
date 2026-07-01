@@ -441,6 +441,20 @@ export const useChatStore = defineStore('chat', () => {
 
   // 消息加密密钥（用于加密 IndexedDB 存储）
   let messageEncryptKey = null
+  // 单例化首次密钥初始化：并发调用共享同一个 Promise，避免各自生成不同的密钥。
+  // 否则冷启动时多条离线消息并发进入 addMessage，会各自走「无密钥→生成新密钥」分支
+  // 产生分叉，最后一把落盘，先前用其它密钥加密的消息重载时解密失败（[解密失败]）。
+  let messageKeyPromise = null
+
+  async function ensureMessageKey() {
+    if (messageEncryptKey) return messageEncryptKey
+    if (!messageKeyPromise) {
+      messageKeyPromise = getOrCreateMessageEncryptKey()
+        .then((k) => { messageEncryptKey = k; return k })
+        .catch((e) => { messageKeyPromise = null; throw e })  // 失败可重试
+    }
+    return messageKeyPromise
+  }
 
   function ensureThread(chatId) {
     if (!messages.value[chatId]) messages.value[chatId] = []
@@ -473,9 +487,7 @@ export const useChatStore = defineStore('chat', () => {
 
     // 加密存储到 IndexedDB
     try {
-      if (!messageEncryptKey) {
-        messageEncryptKey = await getOrCreateMessageEncryptKey()
-      }
+      await ensureMessageKey()
       const encryptedText = await encryptMessageText(msg.text, messageEncryptKey)
       await dbAddMessage({
         id: msg.id,
@@ -506,9 +518,7 @@ export const useChatStore = defineStore('chat', () => {
   async function loadMessages(chatId) {
     try {
       // 初始化加密密钥
-      if (!messageEncryptKey) {
-        messageEncryptKey = await getOrCreateMessageEncryptKey()
-      }
+      await ensureMessageKey()
 
       // 保留内存中已有的 blob URL（切换聊天时 store 单例仍持有有效 URL）
       const existingUrls = {}
@@ -548,6 +558,13 @@ export const useChatStore = defineStore('chat', () => {
         }
       }))
 
+      // 合并内存里已有、但 DB 快照没有的消息（按 id 去重），避免加载期间到达的消息被
+      // 整体覆盖清掉。详见 loadAllMessages 里的同类修复说明。
+      const ids = new Set(decryptedMsgs.map((m) => m.id))
+      for (const m of messages.value[chatId] || []) {
+        if (!ids.has(m.id)) decryptedMsgs.push(m)
+      }
+
       decryptedMsgs.sort((a, b) => a.ts - b.ts)
       messages.value[chatId] = decryptedMsgs
     } catch (e) {
@@ -564,9 +581,7 @@ export const useChatStore = defineStore('chat', () => {
   async function loadAllMessages() {
     try {
       // 初始化加密密钥
-      if (!messageEncryptKey) {
-        messageEncryptKey = await getOrCreateMessageEncryptKey()
-      }
+      await ensureMessageKey()
 
       // 保留内存中已有的 blob URL
       const existingUrls = {}
@@ -595,6 +610,22 @@ export const useChatStore = defineStore('chat', () => {
         } catch (e) {
           console.warn('[chat] decrypt message failed:', m.id, e)
           grouped[cid].push({ ...m, text: '[解密失败]' })
+        }
+      }
+
+      // 合并内存中已有、但 DB 快照里还没有的消息（按 id 去重）。
+      // 关键修复：冷启动时 dbGetAllMessages 读到的是「读那一刻」的 DB 快照，若离线消息
+      // 在「读 DB」之后、「赋值 messages.value」之前才由 addMessage 到达并入库，直接
+      // 整体覆盖会把这些刚到达的消息从内存清掉（DB 里其实有，故切 tab 重载才出现）。
+      // 改为合并保留：内存里有而快照没有的消息补进 grouped。撤回/焚毁会同时清内存与
+      // DB，故不会复活已删除的消息。
+      for (const cid in messages.value) {
+        const ids = new Set((grouped[cid] || []).map((m) => m.id))
+        for (const m of messages.value[cid]) {
+          if (!ids.has(m.id)) {
+            if (!grouped[cid]) grouped[cid] = []
+            grouped[cid].push(m)
+          }
         }
       }
 
@@ -663,7 +694,7 @@ export const useChatStore = defineStore('chat', () => {
    */
   async function persistFileBlob(chatId, msgId, arrayBuffer, filetype) {
     try {
-      if (!messageEncryptKey) messageEncryptKey = await getOrCreateMessageEncryptKey()
+      await ensureMessageKey()
       const { iv, ciphertext } = await encryptFileBytes(arrayBuffer, messageEncryptKey)
       await dbPutFile({ id: msgId, chatId, iv, ciphertext, filetype })
     } catch (e) {
@@ -699,7 +730,7 @@ export const useChatStore = defineStore('chat', () => {
     const fullMsg = { ...msg, type: 'file', read: false, burnAt: null }
     messages.value[chatId].push(fullMsg)
     try {
-      if (!messageEncryptKey) messageEncryptKey = await getOrCreateMessageEncryptKey()
+      await ensureMessageKey()
       const metaText = JSON.stringify({ filename: msg.filename, filesize: msg.filesize, filetype: msg.filetype })
       const encryptedText = await encryptMessageText(metaText, messageEncryptKey)
       await dbAddMessage({

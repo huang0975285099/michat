@@ -28,7 +28,7 @@
                 <div class="mini-name">
                     {{ fistStore.balance.toLocaleString() }}
                 </div>
-                <div class="mini-sub">$FIST · 明细</div>
+                <div class="mini-sub">{{ currency }} · 明细</div>
             </div>
             <div class="mini-card" @click="$emit('open-records')">
                 <div class="mini-emoji">📜</div>
@@ -51,7 +51,7 @@
                     人机对战
                     <span class="mode-tag mode-tag--earn">PVE</span>
                 </div>
-                <div class="mode-desc">每场获胜奖励 500 $FIST，每天最多 10 场</div>
+                <div class="mode-desc">每场获胜奖励 500 {{ currency }}，每天最多 10 场</div>
                 <!-- 每日进度条：满 10 场额外奖励 1000 $FIST -->
                 <div class="pve-progress">
                     <div class="pve-progress-bar">
@@ -73,7 +73,7 @@
                             >🎉 满勤 +1000 ✓</span
                         >
                         <span v-else class="pve-progress-hint"
-                            >满 10 场 +1000 $FIST</span
+                            >满 10 场 +1000 {{ currency }}</span
                         >
                     </div>
                 </div>
@@ -89,7 +89,7 @@
                     <span class="mode-tag mode-tag--soon">后续开放</span>
                 </div>
                 <div class="mode-desc">
-                    黄金 100 · 铂金 1000 · 钻石 10000 $FIST 质押对战
+                    黄金 100 · 铂金 1000 · 钻石 10000 {{ currency }} 质押对战
                 </div>
             </div>
             <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
@@ -105,7 +105,7 @@
                     好友对战
                     <span class="mode-tag mode-tag--fun">娱乐</span>
                 </div>
-                <div class="mode-desc">实时 1v1 邀请在线好友，不消耗 $FIST</div>
+                <div class="mode-desc">实时 1v1 邀请在线好友，不消耗 {{ currency }}</div>
             </div>
             <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
         </div>
@@ -163,6 +163,28 @@
             </q-card>
         </q-dialog>
 
+        <!-- 地区选择弹窗（首次进入，persistent 不允许点背景关闭） -->
+        <q-dialog v-model="showRegionDialog" persistent>
+            <q-card class="region-dialog">
+                <q-card-section class="text-center q-pt-lg">
+                    <div class="region-title">🌏 选择版本</div>
+                    <div class="region-sub">首次选择后将自动记住，可在设置中更改</div>
+                </q-card-section>
+                <q-card-section class="region-options">
+                    <button class="region-btn region-btn--cn" @click="selectRegion('cn')">
+                        <span class="region-flag">🎮</span>
+                        <span class="region-name">中国大陆版</span>
+                        <span class="region-hint">使用 “积分” 对战与奖励</span>
+                    </button>
+                    <button class="region-btn region-btn--intl" @click="selectRegion('intl')">
+                        <span class="region-flag">🌐</span>
+                        <span class="region-name">国际版</span>
+                        <span class="region-hint">使用 “$FIST” 对战与奖励</span>
+                    </button>
+                </q-card-section>
+            </q-card>
+        </q-dialog>
+
         <!-- 玩法弹窗 -->
         <q-dialog v-model="showRules" position="bottom">
             <q-card class="rules-dialog">
@@ -198,6 +220,7 @@ import { ref, computed, onMounted } from "vue";
 import { useFistStore } from "src/stores/fist";
 import { friendApi } from "src/services/api";
 import { ACTIONS, ACTION_META } from "../game/GameConstants.js";
+import { useRegion } from "../game/useRegion.js";
 
 defineEmits([
     "home",
@@ -210,6 +233,14 @@ defineEmits([
 ]);
 
 const fistStore = useFistStore();
+
+const { region, currency, setRegion } = useRegion();
+const showRegionDialog = ref(false);
+
+function selectRegion(r) {
+    setRegion(r);
+    showRegionDialog.value = false;
+}
 
 const showRules = ref(false);
 const showFriends = ref(false);
@@ -239,6 +270,9 @@ async function loadFriends() {
 onMounted(() => {
     fistStore.fetchAccount();
     loadFriends();
+    if (!region.value) {
+        showRegionDialog.value = true;
+    }
 });
 </script>
 
@@ -399,6 +433,66 @@ onMounted(() => {
 .pve-progress-done {
     color: #6ee7a0;
     font-weight: 700;
+}
+
+/* 地区选择弹窗 */
+.region-dialog {
+    background: linear-gradient(160deg, #1a1635, #0e0c22);
+    color: #fff;
+    border-radius: 20px;
+    width: min(340px, 92vw);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.region-title {
+    font-size: 20px;
+    font-weight: 900;
+    letter-spacing: 0.04em;
+}
+.region-sub {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.45);
+    margin-top: 6px;
+}
+.region-options {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px 20px 24px;
+}
+.region-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 18px 12px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    cursor: pointer;
+    color: #fff;
+    transition: transform 0.12s, box-shadow 0.12s;
+}
+.region-btn:active {
+    transform: scale(0.97);
+}
+.region-btn--cn {
+    background: linear-gradient(135deg, #6e2f2f, #a03f3f);
+    box-shadow: 0 4px 18px rgba(160, 63, 63, 0.35);
+}
+.region-btn--intl {
+    background: linear-gradient(135deg, #2f4e6e, #3f6ea0);
+    box-shadow: 0 4px 18px rgba(63, 110, 160, 0.35);
+}
+.region-flag {
+    font-size: 32px;
+    line-height: 1;
+}
+.region-name {
+    font-size: 16px;
+    font-weight: 800;
+}
+.region-hint {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.6);
 }
 
 /* 玩法弹窗 */

@@ -12,7 +12,7 @@
       <div class="text-h6 q-ml-sm">匹配对战</div>
       <q-space />
       <q-chip dense color="amber-9" text-color="white" class="fist-chip">
-        ⚡ {{ fistStore.balance.toLocaleString() }} $FIST
+        ⚡ {{ fistStore.balance.toLocaleString() }} {{ currency }}
       </q-chip>
     </div>
 
@@ -76,7 +76,7 @@
             <div class="profile-stat-num">
               {{ (profileData?.fist_balance || 0).toLocaleString() }}
             </div>
-            <div class="profile-stat-label">$FIST 余额</div>
+            <div class="profile-stat-label">{{ currency }} 余额</div>
           </div>
           <div class="profile-stat">
             <div class="profile-stat-num">
@@ -105,7 +105,7 @@
         <div class="tier-stake-amount">
           {{ t.stake.toLocaleString() }}
         </div>
-        <div class="tier-stake-unit">$FIST / 局</div>
+        <div class="tier-stake-unit">{{ currency }} / 局</div>
       </div>
     </div>
 
@@ -118,7 +118,7 @@
             <div class="match-title">正在寻找对手…</div>
             <div class="match-sub">
               {{ matchTier?.name }} · 质押
-              {{ matchTier?.stake.toLocaleString() }} $FIST
+              {{ matchTier?.stake.toLocaleString() }} {{ currency }}
             </div>
             <q-btn
               flat
@@ -149,6 +149,7 @@
 import { ref, onMounted, onUnmounted } from "vue";
 import { useFistStore } from "src/stores/fist";
 import { useIdentityStore } from "src/stores/identity";
+import { useRegion } from "../game/useRegion.js";
 import {
   on as wsOn,
   off as wsOff,
@@ -162,6 +163,7 @@ const emit = defineEmits(["back", "matched"]);
 
 const fistStore = useFistStore();
 const identityStore = useIdentityStore();
+const { currency } = useRegion();
 
 const matchState = ref("idle"); // idle | searching | error
 const matchTier = ref(null);
@@ -298,7 +300,7 @@ async function startMatch(tier) {
     const status = e?.response?.status;
     const msg = e?.response?.data?.error;
     if (status === 402) {
-      matchError.value = "$FIST 余额不足，无法质押";
+      matchError.value = `${currency.value} 余额不足，无法质押`;
     } else if (status === 400) {
       matchError.value = msg || "档位无效";
     } else if (status === 409) {

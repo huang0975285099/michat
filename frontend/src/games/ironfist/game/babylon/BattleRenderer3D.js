@@ -394,6 +394,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
   // 节拍（回合窗口≈2200ms）
   const HITSTOP_MS = 95    // 顿帧时长
   const RESET_MS = 2000    // 回到 idle（窗口内、避免拦腰打断出招）
+  const DRAW_CUE_MS = 1100 // 判定平局：收招对峙演出的起手时刻（≈末回合拳打实之后）
   const REACH = 0.95       // 单方进攻：冲到离对手这么近
   const CENTER_GAP = 0.6   // 双方对攻：各自离场地中心这么远（防穿模）
 
@@ -424,6 +425,9 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
 
     if (!r.gameResult) {
       setTimeout(() => { me.resetToIdle(); opp.resetToIdle() }, RESET_MS)
+    } else if (!meKO && !oppKO) {
+      // 判定平局（超时/回合上限，双方仍有血）：无人倒地，收招后走"对峙判和"演出
+      setTimeout(_drawStandoff, DRAW_CUE_MS)
     }
   }
 
@@ -439,6 +443,10 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     if (r.playerDmg > 0) _impactFx(me, opp, r.playerDmg)
     if (r.opponentDmg > 0) _impactFx(opp, me, r.opponentDmg)
     _dmgText(r)
+
+    // 终局：K.O.（单杀，推近倒地方）/ DOUBLE K.O.（同归于尽，拉远冷场）横幅 + 专属镜头，
+    // 优先于普通命中/暴击演出（终结一击不再走震屏/推镜，交给终局镜头统一收尾）。
+    if (meKO || oppKO) { _finale(meKO, oppKO); return }
 
     if (big) {
       // 暴击专属演出：子弹时间 + 全屏顿亮 + 推近受击者的特写镜头
@@ -475,6 +483,172 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
       cam.radius = baseR + (zoomR - baseR) * e
       cam.target.x = baseTarget.x + (focus.x - baseTarget.x) * e + (Math.random() - 0.5) * j
       cam.target.y = baseTarget.y + (focus.y - baseTarget.y) * e + (Math.random() - 0.5) * j
+    })
+  }
+
+  // ── 终局演出 ──────────────────────────────────────────
+  // 单杀：K.O. 横幅 + 推近倒地方；双杀：DOUBLE K.O. 横幅 + 拉远全景 + 抽色冷场。
+  function _finale(meKO, oppKO) {
+    const draw = meKO && oppKO
+    _critFlash()                                    // 先接一记白闪，托住终结一击
+    me.slowMo(0.16, draw ? 1100 : 900)              // 拉长的子弹时间收尾
+    opp.slowMo(0.16, draw ? 1100 : 900)
+    if (draw) {
+      _banner('DOUBLE K.O.', 'double')
+      _koZoomOut()                                  // 缓慢拉远，交代双双倒地
+      setTimeout(_drainColor, 220)                  // 白闪落幕后再抽色——没有赢家
+    } else {
+      _banner('K.O.', 'single')
+      _koCinematic(meKO ? me : opp)                 // 推近被击倒的一方
+    }
+  }
+
+  // 终局横幅：居中大字，弹入过冲→短停→淡出；billboard 始终朝相机。
+  function _banner(text, kind = 'single') {
+    const W = 1024, H = 340
+    const dt = new BABYLON.DynamicTexture('koBanner', { width: W, height: H }, scene, false)
+    dt.hasAlpha = true
+    const ctx = dt.getContext()
+    ctx.clearRect(0, 0, W, H)
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'
+    const cx = W / 2, cy = H / 2 + 6
+    const size = kind === 'double' ? 150 : kind === 'time' ? 132 : 232
+    ctx.font = `900 italic ${size}px "Arial Black", Arial, sans-serif`
+    ctx.lineWidth = 24; ctx.strokeStyle = '#000'; ctx.strokeText(text, cx, cy)
+    if (kind === 'double') {
+      // 左蓝→右红：呼应擂台两侧阵营色，点出"同归于尽"
+      const g = ctx.createLinearGradient(cx - 420, 0, cx + 420, 0)
+      g.addColorStop(0, '#5cb3ff'); g.addColorStop(0.5, '#ffffff'); g.addColorStop(1, '#ff5a52')
+      ctx.fillStyle = g
+    } else if (kind === 'time') {
+      // 冷钢银：判定平局用中性色，区别于炽热的 K.O./DOUBLE K.O.
+      const g = ctx.createLinearGradient(0, cy - 110, 0, cy + 110)
+      g.addColorStop(0, '#f2f6ff'); g.addColorStop(1, '#9fb2c8')
+      ctx.fillStyle = g
+    } else {
+      const g = ctx.createLinearGradient(0, cy - 120, 0, cy + 120)   // 金色渐变
+      g.addColorStop(0, '#fff4c2'); g.addColorStop(1, '#ffb020')
+      ctx.fillStyle = g
+    }
+    ctx.fillText(text, cx, cy)
+    dt.update()
+
+    const mat = new BABYLON.StandardMaterial('koBannerM', scene)
+    mat.diffuseTexture = dt; mat.opacityTexture = dt
+    mat.emissiveColor = new BABYLON.Color3(1, 1, 1)
+    mat.disableLighting = true; mat.backFaceCulling = false; mat.fogEnabled = false
+    const w = kind === 'double' ? 6.6 : kind === 'time' ? 6.0 : 4.4, h = w * H / W
+    const plane = BABYLON.MeshBuilder.CreatePlane('koBannerP', { width: w, height: h }, scene)
+    plane.material = mat; plane.position.set(0, 2.35, 0)
+    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL; plane.isPickable = false
+    glow.addExcludedMesh(plane)   // 靠管线 Bloom 已够亮，避免 GlowLayer 把字糊开
+    const start = performance.now(), dur = kind === 'time' ? 1900 : 2600
+    const obs = scene.onBeforeRenderObservable.add(() => {
+      const t = performance.now() - start
+      if (t >= dur) { plane.dispose(); mat.dispose(); dt.dispose(); scene.onBeforeRenderObservable.remove(obs); return }
+      const k = t / dur
+      const s = k < 0.10 ? (k / 0.10) * 1.22                    // 弹入过冲 0→1.22→1
+        : k < 0.20 ? 1.22 - 0.22 * ((k - 0.10) / 0.10)
+          : 1
+      plane.scaling.set(s, s, s)
+      mat.alpha = k > 0.82 ? (1 - (k - 0.82) / 0.18) : 1        // 尾段淡出
+    })
+  }
+
+  // 单杀特写：快速推近倒地一方，长停后缓慢回弹（临时放宽近距限位以便贴近）。
+  function _koCinematic(victim) {
+    const baseR = cam.radius, baseLower = cam.lowerRadiusLimit
+    const baseTarget = cam.target.clone()
+    cam.lowerRadiusLimit = 2.6
+    const vx = victim.root ? victim.root.position.x : victim.home.x
+    const focus = new BABYLON.Vector3(vx, 0.85, 0)
+    const zoomR = Math.max(2.8, baseR * 0.52)
+    const start = performance.now(), inMs = 240, hold = 1500, outMs = 900, dur = inMs + hold + outMs
+    const obs = scene.onBeforeRenderObservable.add(() => {
+      const t = performance.now() - start
+      if (t >= dur) {
+        cam.radius = baseR; cam.target.copyFrom(baseTarget); cam.lowerRadiusLimit = baseLower
+        scene.onBeforeRenderObservable.remove(obs); return
+      }
+      const k = t < inMs ? t / inMs : t < inMs + hold ? 1 : 1 - (t - inMs - hold) / outMs
+      const e = k * k * (3 - 2 * k)
+      cam.radius = baseR + (zoomR - baseR) * e
+      cam.target.x = baseTarget.x + (focus.x - baseTarget.x) * e
+      cam.target.y = baseTarget.y + (focus.y - baseTarget.y) * e
+    })
+  }
+
+  // 双杀全景：缓慢拉远看双双倒地，短停后回弹（临时放宽远距限位）。
+  function _koZoomOut() {
+    const baseR = cam.radius, baseUpper = cam.upperRadiusLimit
+    const baseTarget = cam.target.clone()
+    cam.upperRadiusLimit = 14
+    const focus = new BABYLON.Vector3(0, 0.8, 0)
+    const zoomR = Math.min(13, baseR * 1.6)
+    const start = performance.now(), inMs = 700, hold = 1100, outMs = 700, dur = inMs + hold + outMs
+    const obs = scene.onBeforeRenderObservable.add(() => {
+      const t = performance.now() - start
+      if (t >= dur) {
+        cam.radius = baseR; cam.target.copyFrom(baseTarget); cam.upperRadiusLimit = baseUpper
+        scene.onBeforeRenderObservable.remove(obs); return
+      }
+      const k = t < inMs ? t / inMs : t < inMs + hold ? 1 : 1 - (t - inMs - hold) / outMs
+      const e = k * k * (3 - 2 * k)
+      cam.radius = baseR + (zoomR - baseR) * e
+      cam.target.x = baseTarget.x + (focus.x - baseTarget.x) * e
+      cam.target.y = baseTarget.y + (focus.y - baseTarget.y) * e
+    })
+  }
+
+  // 双杀冷场：短暂抽掉画面饱和度 + 压低曝光，尾段回暖——"没有赢家"的冷感。
+  function _drainColor() {
+    const ip = pipe.imageProcessing
+    const prevEnabled = ip.colorCurvesEnabled, prevCurves = ip.colorCurves
+    const cc = new BABYLON.ColorCurves()
+    ip.colorCurves = cc; ip.colorCurvesEnabled = true
+    const baseExp = ip.exposure
+    const start = performance.now(), dur = 2400
+    const obs = scene.onBeforeRenderObservable.add(() => {
+      const t = performance.now() - start
+      if (t >= dur) {
+        ip.exposure = baseExp; ip.colorCurves = prevCurves; ip.colorCurvesEnabled = prevEnabled
+        scene.onBeforeRenderObservable.remove(obs); return
+      }
+      const k = t / dur
+      const drain = k < 0.12 ? k / 0.12 : k < 0.78 ? 1 : 1 - (k - 0.78) / 0.22
+      cc.globalSaturation = -78 * drain   // 0=原色 → -78≈大幅去饱和
+      ip.exposure = baseExp * (1 - 0.16 * drain)
+    })
+  }
+
+  // 判定平局（超时/回合上限，双方仍有血）：无人倒地——双方收势举防对峙，
+  // TIME OVER 银字横幅，镜头回正到对称双人构图（势均力敌、由钟声判和的收束感）。
+  function _drawStandoff() {
+    me.playAction('defend'); opp.playAction('defend')   // 收招举防，随后各自自动回 idle
+    _banner('TIME OVER', 'time')
+    _drawTwoShot()
+  }
+
+  // 判定平局镜头：回正到对称中心、轻微拉远的双人平衡构图，短停后回弹。
+  function _drawTwoShot() {
+    const baseR = cam.radius, baseUpper = cam.upperRadiusLimit
+    const baseTarget = cam.target.clone(), baseBeta = cam.beta
+    cam.upperRadiusLimit = 12
+    const toR = Math.min(11, baseR * 1.18)
+    const toTarget = new BABYLON.Vector3(0, 1.2, 0), toBeta = 1.2
+    const start = performance.now(), inMs = 900, hold = 1200, outMs = 700, dur = inMs + hold + outMs
+    const obs = scene.onBeforeRenderObservable.add(() => {
+      const t = performance.now() - start
+      if (t >= dur) {
+        cam.radius = baseR; cam.target.copyFrom(baseTarget); cam.beta = baseBeta; cam.upperRadiusLimit = baseUpper
+        scene.onBeforeRenderObservable.remove(obs); return
+      }
+      const k = t < inMs ? t / inMs : t < inMs + hold ? 1 : 1 - (t - inMs - hold) / outMs
+      const e = k * k * (3 - 2 * k)
+      cam.radius = baseR + (toR - baseR) * e
+      cam.beta = baseBeta + (toBeta - baseBeta) * e
+      cam.target.x = baseTarget.x + (toTarget.x - baseTarget.x) * e
+      cam.target.y = baseTarget.y + (toTarget.y - baseTarget.y) * e
     })
   }
 

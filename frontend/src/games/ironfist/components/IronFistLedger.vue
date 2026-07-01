@@ -9,10 +9,10 @@
                 color="white"
                 @click="$emit('back')"
             />
-            <div class="text-h6 q-ml-sm">$FIST 明细</div>
+            <div class="text-h6 q-ml-sm">{{ currency }} 明细</div>
             <q-space />
             <q-chip dense color="amber-9" text-color="white" class="fist-chip">
-                ⚡ {{ fistStore.balance.toLocaleString() }} $FIST
+                ⚡ {{ fistStore.balance.toLocaleString() }} {{ currency }}
             </q-chip>
         </div>
 
@@ -23,7 +23,7 @@
             <q-spinner-dots color="amber-8" size="38px" />
         </div>
         <div v-else-if="!fistStore.transactions.length" class="empty-hint">
-            暂无流水记录，去人机对战赢取 $FIST 吧
+            暂无流水记录，去人机对战赢取 {{ currency }} 吧
         </div>
         <template v-else>
             <div
@@ -69,10 +69,12 @@
 import { ref, onMounted } from "vue";
 import { useFistStore } from "src/stores/fist";
 import { TX_TYPE_LABEL, fmtTime } from "../game/ironfistMeta";
+import { useRegion } from "../game/useRegion.js";
 
 defineEmits(["back"]);
 
 const fistStore = useFistStore();
+const { currency } = useRegion();
 const loading = ref(false);
 
 function txLabel(t) {

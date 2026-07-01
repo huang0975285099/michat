@@ -345,7 +345,7 @@ round_start → deciding（30秒倒计时）→ locked → resolving → waiting
 | `'draw'` | 平局 | 双方同时归零；或回合上限 HP 相同 |
 | `'doubleLose'` | 双败 | 回合上限时双方 HP 均 ≤ 5（机制 B，防极限拖延）|
 
-> `doubleLose` 在 UI 上展示为"双双力竭"，战绩按"双方各记一负"处理。
+> `doubleLose` 在 UI 上展示为"双双力竭"，**战绩按平局记入**（双方各记一平，与 `draw` 同口径；连胜清零、不计入胜负场）。
 
 ### 2. 僵局检测（防无限平局）
 

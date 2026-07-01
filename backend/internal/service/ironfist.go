@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"e2eechat/internal/model"
+	"github.com/go-sql-driver/mysql"
 )
 
 // IronFistService 铁拳对战统计与成就服务
@@ -207,8 +209,9 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 		// 双方一致的常态下与仲裁结果相符；仅在作弊/desync 导致双方都报赢、被 SettlePVP
 		// 仲裁为平局时，二者会短暂背离（统计偏向乐观）。资金以仲裁为准，统计仅展示用。
 		isWin := req.Result == "win"
-		isDraw := req.Result == "draw"
-		// "lose" 与 "doubleLose" 均计为负
+		// "doubleLose"（回合上限双方力竭）按平局计入，与 "draw" 同口径
+		isDraw := req.Result == "draw" || req.Result == "doubleLose"
+		// "lose" 计为负
 		switch req.Mode {
 		case "pvp":
 			switch {
@@ -516,13 +519,31 @@ type PVPSettleResult struct {
 	FeeTreasury  int64  `json:"fee_treasury"`  // 国库部分（MVP 仅记账）
 }
 
-// EnqueuePVP 加入 PVP 撮合队列：
-//  1. 校验档位与余额
-//  2. 尝试匹配等待中的房间（玩家 B 视角）：找到则扣质押、状态置 matched、返回对手档案
-//  3. 未匹配到则创建新房间（玩家 A 视角）：扣质押、状态置 matching、返回 queued
+// isDeadlock 判断是否为 MySQL 死锁错误（1213），用于重试决策。
+func isDeadlock(err error) bool {
+	var me *mysql.MySQLError
+	return errors.As(err, &me) && me.Number == 1213
+}
+
+// EnqueuePVP 加入 PVP 撮合队列，内部对死锁自动重试最多 3 次。
 //
 // 调用方（Handler）拿到 Status=="matched" 时需通过 Hub 向 Waiting chatID 推送匹配通知。
 func (s *IronFistService) EnqueuePVP(ctx context.Context, userID uint64, chatID, tier string) (*PVPMatchResult, error) {
+	const maxRetries = 3
+	for attempt := 0; ; attempt++ {
+		result, err := s.enqueuePVPOnce(ctx, userID, chatID, tier)
+		if err == nil || !isDeadlock(err) || attempt >= maxRetries-1 {
+			return result, err
+		}
+		time.Sleep(time.Duration(attempt+1) * 20 * time.Millisecond)
+	}
+}
+
+// enqueuePVP 加入 PVP 撮合队列（单次执行，不含重试）：
+//  1. 校验档位与余额
+//  2. 尝试匹配等待中的房间（玩家 B 视角）：找到则扣质押、状态置 matched、返回对手档案
+//  3. 未匹配到则创建新房间（玩家 A 视角）：扣质押、状态置 matching、返回 queued
+func (s *IronFistService) enqueuePVPOnce(ctx context.Context, userID uint64, chatID, tier string) (*PVPMatchResult, error) {
 	stake, ok := PVPTierStakes[tier]
 	if !ok {
 		return nil, ErrPVPInvalidTier

@@ -329,7 +329,7 @@
                         </div>
                         <!-- PvE 胜利 $FIST 奖励 -->
                         <div v-if="pveReward" class="pve-reward-badge">
-                            <span class="pve-reward-amount">+500 $FIST</span>
+                            <span class="pve-reward-amount">+500 {{ currency }}</span>
                             <span class="pve-reward-progress">
                                 今日 {{ pveReward.todayWins }} /
                                 {{ pveReward.todayMax }} 场
@@ -343,7 +343,7 @@
                             🎉 每日满勤奖励 +{{
                                 pveReward.bonusAmount.toLocaleString()
                             }}
-                            $FIST
+                            {{ currency }}
                         </div>
                         <q-btn
                             color="purple"
@@ -375,6 +375,7 @@ import IronFistAchievements from "./components/IronFistAchievements.vue";
 import IronFistPvpLobby from "./components/IronFistPvpLobby.vue";
 import HealthBar from "./components/HealthBar.vue";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
+import { useRegion } from "./game/useRegion.js";
 // 三期：Babylon.js 3D 渲染层（方案B）。props 接口与一/二期一致，可一行回退。
 // 一期 BattleArena.vue(2D-CSS) / 二期 BattleArenaPhaser.vue 仍保留备用。
 import BattleArena from "./components/BattleArena3D.vue";
@@ -393,7 +394,7 @@ defineOptions({ name: "IronFistPage" });
 
 // 结算后停留时长（ms）：展示揭示行+伤害后自动进入下一回合 / 终局进结果页。
 const ROUND_HOLD_MS = 2200;
-const END_HOLD_MS = 1900; // 平局等非倒地终局
+const END_HOLD_MS = 3200; // 判定平局（超时双方仍有血、非倒地终局）：留足"对峙判和"演出(起手≈1.1s + TIME OVER 横幅≈1.9s)
 const END_HOLD_KO_MS = 3900; // 倒地终局：留足 ko 动画(接触点≈1.1s + ko≈2.6s)播完
 
 const route = useRoute();
@@ -401,6 +402,7 @@ const router = useRouter();
 const gameStore = useGameStore();
 const identityStore = useIdentityStore();
 const fistStore = useFistStore();
+const { currency } = useRegion();
 
 // 我方昵称（无昵称时回退到 chatId，再回退到「你」）+ 头像
 const myName = computed(
@@ -700,14 +702,14 @@ async function reportMatchResult(res) {
 function showPvpSettle(s, res) {
     let txt;
     if (res === "win") {
-        txt = `🏆 胜者通吃 +${s.winner_amount} $FIST`;
+        txt = `🏆 胜者通吃 +${s.winner_amount} ${currency.value}`;
     } else if (res === "lose") {
         txt = `💫 本局失利，质押已扣除`;
     } else if (res === "draw") {
-        txt = `🤝 平局退回 ${s.refund_a || 0} $FIST`;
+        txt = `🤝 平局退回 ${s.refund_a || 0} ${currency.value}`;
     } else {
         // doubleLose：双方力竭，各退回
-        txt = `🤝 双方力竭，退回 ${s.refund_a || 0} $FIST`;
+        txt = `🤝 双方力竭，退回 ${s.refund_a || 0} ${currency.value}`;
     }
     Notify.create({
         message: txt,
