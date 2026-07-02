@@ -1252,6 +1252,126 @@ func mapPVPResult(r string, callerIsA bool) (string, error) {
 	}
 }
 
+// TreasuryStats 公开只读的 PvP 国库/销毁统计（无需鉴权，供国际站介绍页展示）
+// fee_treasury/fee_burn 目前仅为 MVP 记账口径（未真实转账/销毁），详见 SettlePVP 注释。
+type TreasuryStats struct {
+	TotalTreasury int64                `json:"total_treasury"` // 历史累计国库收入
+	TotalBurn     int64                `json:"total_burn"`     // 历史累计销毁数量
+	TotalVolume   int64                `json:"total_volume"`   // 历史累计 PvP 质押流水（双方本金合计）
+	TotalMatches  int64                `json:"total_matches"`  // 历史累计已结算场次
+	TodayTreasury int64                `json:"today_treasury"`
+	TodayBurn     int64                `json:"today_burn"`
+	TodayMatches  int64                `json:"today_matches"`
+	Daily         []TreasuryDailyPoint `json:"daily"`          // 最近 StatsDailyWindowDays 天，按日期升序
+	TierBreakdown []TierStat           `json:"tier_breakdown"` // 按档位（gold/platinum/diamond）拆分的历史累计
+}
+
+// TierStat 按 PVP 档位拆分的历史累计数据
+type TierStat struct {
+	Tier     string `json:"tier"`
+	Matches  int64  `json:"matches"`
+	Treasury int64  `json:"treasury"`
+	Burn     int64  `json:"burn"`
+	Volume   int64  `json:"volume"`
+}
+
+// TreasuryDailyPoint 按天聚合的国库/销毁数据点
+type TreasuryDailyPoint struct {
+	Date     string `json:"date"` // YYYY-MM-DD（DB 服务端会话本地时区，与 settled_at 写入侧一致）
+	Matches  int64  `json:"matches"`
+	Treasury int64  `json:"treasury"`
+	Burn     int64  `json:"burn"`
+	Volume   int64  `json:"volume"`
+}
+
+// GetTreasuryStats 查询全局 PvP 国库/销毁数据：历史累计 + 近期每日趋势。
+// 只统计 status='settled' 的房间（含平局/超时兜底退款场次，因平局也收 2.5% 手续费）。
+func (s *IronFistService) GetTreasuryStats(ctx context.Context) (*TreasuryStats, error) {
+	st := &TreasuryStats{}
+
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(fee_treasury), 0), COALESCE(SUM(fee_burn), 0),
+		       COALESCE(SUM(stake_amount * 2), 0), COUNT(*)
+		FROM ironfist_pvp_rooms WHERE status = 'settled'
+	`).Scan(&st.TotalTreasury, &st.TotalBurn, &st.TotalVolume, &st.TotalMatches); err != nil {
+		return nil, err
+	}
+
+	// settled_at 由 SettlePVP/SweepTimeoutPVPMatched 用 CURRENT_TIMESTAMP(3) 写入（服务端会话本地
+	// 时区），故这里用 CURDATE()/CURDATE() 而非 UTC_DATE() 比较，与写入侧保持同一时区参照，
+	// 避免服务端会话时区非 UTC 时"今日"和按天分桶系统性偏移。
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(fee_treasury), 0), COALESCE(SUM(fee_burn), 0), COUNT(*)
+		FROM ironfist_pvp_rooms
+		WHERE status = 'settled' AND DATE(settled_at) = CURDATE()
+	`).Scan(&st.TodayTreasury, &st.TodayBurn, &st.TodayMatches); err != nil {
+		return nil, err
+	}
+
+	var anchor time.Time
+	if err := s.db.QueryRowContext(ctx, `SELECT CURDATE()`).Scan(&anchor); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DATE(settled_at) AS d, COUNT(*), SUM(fee_treasury), SUM(fee_burn), SUM(stake_amount * 2)
+		FROM ironfist_pvp_rooms
+		WHERE status = 'settled' AND settled_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+		GROUP BY d
+		ORDER BY d ASC
+	`, StatsDailyWindowDays-1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byDate := make(map[string]TreasuryDailyPoint, StatsDailyWindowDays)
+	for rows.Next() {
+		var d time.Time
+		p := TreasuryDailyPoint{}
+		if err = rows.Scan(&d, &p.Matches, &p.Treasury, &p.Burn, &p.Volume); err != nil {
+			return nil, err
+		}
+		byDate[d.Format("2006-01-02")] = p
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 按锚点日期倒推 StatsDailyWindowDays 天补零，确保零活动日也有数据点（供前端画连续折线图）
+	st.Daily = make([]TreasuryDailyPoint, StatsDailyWindowDays)
+	for i := 0; i < StatsDailyWindowDays; i++ {
+		ds := anchor.AddDate(0, 0, i-(StatsDailyWindowDays-1)).Format("2006-01-02")
+		p := TreasuryDailyPoint{Date: ds}
+		if v, ok := byDate[ds]; ok {
+			p.Matches, p.Treasury, p.Burn, p.Volume = v.Matches, v.Treasury, v.Burn, v.Volume
+		}
+		st.Daily[i] = p
+	}
+
+	tierRows, err := s.db.QueryContext(ctx, `
+		SELECT tier, COUNT(*), SUM(fee_treasury), SUM(fee_burn), SUM(stake_amount * 2)
+		FROM ironfist_pvp_rooms
+		WHERE status = 'settled'
+		GROUP BY tier
+		ORDER BY FIELD(tier, 'gold', 'platinum', 'diamond')
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer tierRows.Close()
+
+	st.TierBreakdown = make([]TierStat, 0, 3)
+	for tierRows.Next() {
+		t := TierStat{}
+		if err = tierRows.Scan(&t.Tier, &t.Matches, &t.Treasury, &t.Burn, &t.Volume); err != nil {
+			return nil, err
+		}
+		st.TierBreakdown = append(st.TierBreakdown, t)
+	}
+	return st, tierRows.Err()
+}
+
 // ensureFistAccountTx 在事务内确保 fist_accounts 行存在（与 FistService.ensureAccount 等价）
 func (s *IronFistService) ensureFistAccountTx(ctx context.Context, tx *sql.Tx, userID uint64) error {
 	_, err := tx.ExecContext(ctx,

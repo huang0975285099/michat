@@ -134,6 +134,7 @@ func main() {
 
 	// IronFistHandler 需要 hub 推送 PVP 匹配通知，故在 hub 之后构造
 	ironFistHandler := handler.NewIronFistHandler(ironFistSvc, hub)
+	fistStatsHandler := handler.NewFistStatsHandler(fistSvc, ironFistSvc)
 
 	// 极光推送（AppKey 和 MasterSecret 均配置时启用）
 	if cfg.JPush.AppKey != "" && cfg.JPush.MasterSecret != "" {
@@ -184,6 +185,8 @@ func main() {
 		open.POST("/identity/reauth", identHandler.Reauth)
 		open.GET("/invite/validate", inviteHandler.Validate)
 		open.GET("/version", versionHandler.Get)
+		// $FIST 生态透明度统计（国际站介绍页用，纯聚合数据，无需鉴权）
+		open.GET("/fist/stats", fistStatsHandler.GetStats)
 
 		// 需要鉴权（按用户限流）
 		auth := api.Group("", middleware.Auth(identSvc), authRL.Limit())

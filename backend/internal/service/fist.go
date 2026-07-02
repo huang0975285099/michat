@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"e2eechat/internal/model"
 )
@@ -13,6 +14,9 @@ const (
 	PvERewardAmount     = int64(500)
 	PvEDailyMaxWins     = 10
 	PvEDailyBonusAmount = int64(1000) // 每日满 10 场额外奖励
+
+	// StatsDailyWindowDays 公开透明度统计接口（/api/fist/stats）的历史趋势窗口天数
+	StatsDailyWindowDays = 30
 )
 
 var ErrPvEDailyLimitReached = errors.New("daily PvE win limit reached")
@@ -213,4 +217,102 @@ func (s *FistService) GetTransactions(ctx context.Context, userID uint64, before
 		txs = append(txs, t)
 	}
 	return txs, rows.Err()
+}
+
+// EcosystemStats 公开只读的 $FIST 生态透明度统计（无需鉴权，供国际站介绍页展示）
+type EcosystemStats struct {
+	CirculatingBalance int64           `json:"circulating_balance"` // 当前所有用户余额总和（内部核算口径）
+	TotalPlayers       int64           `json:"total_players"`       // 已开通 $FIST 账户的用户数
+	PveTotalIssued     int64           `json:"pve_total_issued"`    // PvE 奖励历史累计发放（含每日满勤奖励）
+	PveTotalWins       int64           `json:"pve_total_wins"`      // PvE 历史累计有效胜局数
+	PveTodayIssued     int64           `json:"pve_today_issued"`
+	PveTodayWins       int64           `json:"pve_today_wins"`
+	PveDaily           []PveDailyPoint `json:"pve_daily"` // 最近 StatsDailyWindowDays 天，按日期升序
+	ActivePlayers7d    int64           `json:"active_players_7d"` // 近7天有过任意对局（pve/pvp/friend）的去重用户数
+}
+
+// PveDailyPoint 按天聚合的 PvE 发放数据点
+type PveDailyPoint struct {
+	Date   string `json:"date"` // YYYY-MM-DD（UTC）
+	Issued int64  `json:"issued"`
+	Wins   int64  `json:"wins"`
+}
+
+// GetEcosystemStats 查询全局 $FIST 生态数据：当前流通量/玩家数 + PvE 发放历史与近期趋势。
+// 全部为聚合只读查询，不含任何单个用户的可识别信息。
+func (s *FistService) GetEcosystemStats(ctx context.Context) (*EcosystemStats, error) {
+	st := &EcosystemStats{}
+
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(balance), 0), COUNT(*) FROM fist_accounts
+	`).Scan(&st.CirculatingBalance, &st.TotalPlayers); err != nil {
+		return nil, err
+	}
+
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(earned_today), 0), COALESCE(SUM(wins_count), 0)
+		FROM pve_daily_progress
+	`).Scan(&st.PveTotalIssued, &st.PveTotalWins); err != nil {
+		return nil, err
+	}
+
+	// 活跃玩家：与 total_players（已开户人数）区分，抵消"开户数被批量注册灌水"的误导
+	// ironfist_matches.created_at 由列默认值 CURRENT_TIMESTAMP(3) 写入（服务端会话本地时区），
+	// 故这里用 NOW() 而非 UTC_TIMESTAMP() 比较，避免时区错位（服务端会话时区非 UTC 时会偏移）。
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT user_id) FROM ironfist_matches
+		WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+	`).Scan(&st.ActivePlayers7d); err != nil {
+		return nil, err
+	}
+
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(earned_today), 0), COALESCE(SUM(wins_count), 0)
+		FROM pve_daily_progress WHERE date = UTC_DATE()
+	`).Scan(&st.PveTodayIssued, &st.PveTodayWins); err != nil {
+		return nil, err
+	}
+
+	// pve_daily_progress.date 由 ClaimPvEReward 显式用 UTC_DATE() 写入，锚点用 UTC_DATE() 与写入侧一致。
+	var anchor time.Time
+	if err := s.db.QueryRowContext(ctx, `SELECT UTC_DATE()`).Scan(&anchor); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT date, SUM(earned_today), SUM(wins_count)
+		FROM pve_daily_progress
+		WHERE date >= DATE_SUB(UTC_DATE(), INTERVAL ? DAY)
+		GROUP BY date
+		ORDER BY date ASC
+	`, StatsDailyWindowDays-1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byDate := make(map[string]PveDailyPoint, StatsDailyWindowDays)
+	for rows.Next() {
+		var d time.Time
+		p := PveDailyPoint{}
+		if err = rows.Scan(&d, &p.Issued, &p.Wins); err != nil {
+			return nil, err
+		}
+		byDate[d.Format("2006-01-02")] = p
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 按锚点日期倒推 StatsDailyWindowDays 天补零，确保零活动日也有数据点（供前端画连续折线图）
+	st.PveDaily = make([]PveDailyPoint, StatsDailyWindowDays)
+	for i := 0; i < StatsDailyWindowDays; i++ {
+		ds := anchor.AddDate(0, 0, i-(StatsDailyWindowDays-1)).Format("2006-01-02")
+		p := PveDailyPoint{Date: ds}
+		if v, ok := byDate[ds]; ok {
+			p.Issued, p.Wins = v.Issued, v.Wins
+		}
+		st.PveDaily[i] = p
+	}
+	return st, nil
 }
