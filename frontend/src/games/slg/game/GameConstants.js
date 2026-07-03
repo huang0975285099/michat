@@ -263,28 +263,31 @@ export const TILE_GUARDS = {
   4:  { teams: 2, pool: 'tier4',  guardLv: 7 },    // 2000（1000×2）
   5:  { teams: 3, pool: 'tier5',  guardLv: 9 },    // 3000（1000×3）
   6:  { teams: 3, pool: 'common', guardLv: 11 },   // 4200（1400×3）
-  7:  { teams: 4, pool: 'common', guardLv: 12 },   // 5600（1400×4）
-  8:  { teams: 4, pool: 'rare',   guardLv: 14 },   // 7200（1800×4）
-  9:  { teams: 5, pool: 'elite',  guardLv: 16 },   // 9000（1800×5）
+  7:  { teams: 4, pool: 'common', guardLv: 13 },   // 5600（1400×4）
+  8:  { teams: 4, pool: 'rare',   guardLv: 15 },   // 7200（1800×4）
+  9:  { teams: 5, pool: 'elite',  guardLv: 17 },   // 9000（1800×5）
   10: { teams: 4, pool: 'legend', guardLv: 20 },   // 11000（2750×4，legend 池仅 4 名，teams 不得超过池大小）
 }
 // NPC 城池分 5 级（等级如何分配到地图上的具体城池由地图生成逻辑决定，这里只定义每级的规格）：
-// 固定 4 队守将（teams:4，legend 池仅 4 名，teams 不得超过池大小），1~3 级按 9 级地规格折算属性
-// （guardLv:16），4~5 级按 10 级地规格（guardLv:20）；掠夺收益 loot 按总兵力比例（相对 1 级 10000 兵）等比放大。
+// pool 按等级递进 basic→common→rare→elite→legend（与 TILE_GUARDS 高级地同档同 guardLv，数值口径一致）。
+// 1~4 级 teams:5，守将从对应池里随机抽 5 名（每座城池各不相同，"随机不固定武将"）；
+// 5 级 teams:4 —— legend 池正好 4 名，抽满即固定住这 4 名传说武将（"固定武将"，不是随机凑巧）。
+// 掠夺收益 loot 按总兵力比例（相对 1 级 10000 兵）等比放大。
 export const NPC_CITY_MAX_LEVEL = 5
 export const NPC_CITY_LEVELS = {
-  1: { garrison: 10000, teams: 4, pool: 'legend', guardLv: 16, loot: { coin: 2000, grain: 5000,  wood: 3000,  iron: 3000,  stone: 3000 } },
-  2: { garrison: 12500, teams: 4, pool: 'legend', guardLv: 16, loot: { coin: 2500, grain: 6250,  wood: 3750,  iron: 3750,  stone: 3750 } },
-  3: { garrison: 25000, teams: 4, pool: 'legend', guardLv: 16, loot: { coin: 5000, grain: 12500, wood: 7500,  iron: 7500,  stone: 7500 } },
-  4: { garrison: 30000, teams: 4, pool: 'legend', guardLv: 20, loot: { coin: 6000, grain: 15000, wood: 9000,  iron: 9000,  stone: 9000 } },
+  1: { garrison: 10000, teams: 5, pool: 'basic',  guardLv: 12, loot: { coin: 2000, grain: 5000,  wood: 3000,  iron: 3000,  stone: 3000 } },
+  2: { garrison: 12500, teams: 5, pool: 'common', guardLv: 14, loot: { coin: 2500, grain: 6250,  wood: 3750,  iron: 3750,  stone: 3750 } },
+  3: { garrison: 25000, teams: 5, pool: 'rare',   guardLv: 16, loot: { coin: 5000, grain: 12500, wood: 7500,  iron: 7500,  stone: 7500 } },
+  4: { garrison: 30000, teams: 5, pool: 'elite',  guardLv: 18, loot: { coin: 6000, grain: 15000, wood: 9000,  iron: 9000,  stone: 9000 } },
   5: { garrison: 40000, teams: 4, pool: 'legend', guardLv: 20, loot: { coin: 8000, grain: 20000, wood: 12000, iron: 12000, stone: 12000 } },
 }
 // NPC 城池在地图上的等级分布：1 级（最弱）5 座、2 级 4 座、3 级 3 座、4 级 2 座、5 级（最强）1 座，
 // 共 15 座，弱到强梯度分布，由地图生成逻辑按此计数随机放置各等级城池。
 export const NPC_CITY_LEVEL_COUNTS = { 1: 5, 2: 4, 3: 3, 4: 2, 5: 1 }
 
-/** 取守将候选池（'tierN' → 守将池对应档；品质名 → 抽卡池对应品质档） */
+/** 取守将候选池（'basic' → 守将池全档不分 tier；'tierN' → 守将池对应档；品质名 → 抽卡池对应品质档） */
 export function guardPoolOf(pool) {
+  if (pool === 'basic') return GARRISON_GENERALS
   if (pool.startsWith('tier')) {
     const tier = Number(pool.slice(4))
     return GARRISON_GENERALS.filter(g => g.tier === tier)

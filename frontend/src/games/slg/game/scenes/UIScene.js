@@ -853,14 +853,12 @@ export class UIScene extends Phaser.Scene {
     battles.forEach((b, bi) => {
       const q = GENERAL_QUALITY[b.enemy.quality] || GENERAL_QUALITY.common
       const ti = TROOP_TYPES[b.enemy.troopType]
-      const oc = { win: '✓胜', draw: '平', lose: '✗败' }[b.outcome]
       const troopName = ti ? `${ti.icon} ` : ''
-      // 敌将卡：第一行 名称+兵种+等级（品质色）+ 先手/胜负；第二行 武/防/速/智（含等级加成）
+      // 敌将卡：第一行 名称+兵种+等级（品质色）；第二行 武/防/速/智（含等级加成）。
+      // 先手/胜负不再在此重复（先手见下方准备回合，胜负见右上角总结）。
       rows.push({ x: 0, y: y + 2,
         text: `第${bi + 1}阵  ${troopName}${b.enemy.name} Lv.${b.enemy.lv}`,
         size: 12, color: q.color, bold: true, origin: 0 })
-      rows.push({ right: true, y: y + 2, text: `${b.first === 'atk' ? '我方先手' : '敌方先手'} · ${oc}`,
-        size: 10, color: '#9e9e9e', origin: 1 })
       rows.push({ x: 10, y: y + 20,
         text: `武${b.enemy.atk ?? '?'} · 防${b.enemy.def ?? '?'} · 速${b.enemy.spd ?? '?'} · 智${b.enemy.int ?? '?'}`,
         size: 10, color: '#9e9e9e', origin: 0 })
@@ -872,10 +870,10 @@ export class UIScene extends Phaser.Scene {
         const sv = (base, eff) => base === eff ? `${base}` : `${base}→${eff}`
         rows.push({ x: 10, y, text: '【准备回合】', size: 11, color: '#ffd54f', bold: true, origin: 0 })
         y += 15
-        rows.push({ x: 16, y, text: `我方  武${sv(p.our.atk, p.our.atkEff)} 防${sv(p.our.def, p.our.defEff)} 速${sv(p.our.spd, p.our.spdEff)} · 兵${p.our.troops}`,
+        rows.push({ x: 16, y, text: `我方  武${sv(p.our.atk, p.our.atkEff)} 防${sv(p.our.def, p.our.defEff)} 速${sv(p.our.spd, p.our.spdEff)} 智${sv(p.our.int ?? '?', p.our.intEff ?? p.our.int ?? '?')} · 兵${p.our.troops}`,
           size: 10, color: '#a5d6a7', origin: 0 })
         y += 15
-        rows.push({ x: 16, y, text: `守军  武${sv(p.foe.atk, p.foe.atkEff)} 防${sv(p.foe.def, p.foe.defEff)} 速${sv(p.foe.spd, p.foe.spdEff)} · 兵${p.foe.troops}`,
+        rows.push({ x: 16, y, text: `守军  武${sv(p.foe.atk, p.foe.atkEff)} 防${sv(p.foe.def, p.foe.defEff)} 速${sv(p.foe.spd, p.foe.spdEff)} 智${p.foe.int ?? '?'} · 兵${p.foe.troops}`,
           size: 10, color: '#ef9a9a', origin: 0 })
         y += 15
         rows.push({ x: 16, y,

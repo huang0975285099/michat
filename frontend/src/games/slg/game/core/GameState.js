@@ -492,18 +492,21 @@ export class GameState extends Emitter {
       // 准备回合数据：双方「属性（基础，卡面口径）」→「实战（叠加各类加成后）」
       const atkAttr = gens.reduce((s, g, i) => s + shares[i] * g.atk, 0)
       const defAttr = gens.reduce((s, g, i) => s + shares[i] * g.def, 0)
+      const intAttr = gens.reduce((s, g, i) => s + shares[i] * g.int, 0)
       const spdAttrArmy = Math.min(...gens.map(g => g.spd))
       const prep = {
         our: {
           atk: Math.round(atkAttr), atkEff: Math.round(armyAtk),
           def: Math.round(defAttr), defEff: Math.round(armyDef),
           spd: Math.round(spdAttrArmy), spdEff: Math.round(armySpd),
+          int: Math.round(intAttr), intEff: Math.round(armyInt),
           troops: r.atkStart,
         },
         foe: {
           atk: Math.round(gAtkAttr), atkEff: Math.round(gAtkAttr * defCounter),
           def: Math.round(gDefAttr), defEff: Math.round(gDefAttr),
           spd: Math.round(gSpdAttr), spdEff: Math.round(guardSpd),
+          int: Math.round(gIntAttr), intEff: Math.round(gIntAttr),
           troops: r.defStart,
         },
       }
