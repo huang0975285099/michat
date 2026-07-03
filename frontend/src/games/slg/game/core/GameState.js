@@ -679,7 +679,7 @@ export class GameState extends Emitter {
       }
     }
     const data = {
-      v: 5, seed: this.seed, savedAt: Date.now(), now: this.now,
+      v: 6, seed: this.seed, savedAt: Date.now(), now: this.now,
       res: this.res, cityLv: this.cityLv,
       freeRecruits: this.freeRecruits,
       buildings: { ...this.buildings },
@@ -710,7 +710,8 @@ export class GameState extends Emitter {
   static load() {
     let data
     try { data = JSON.parse(localStorage.getItem(SAVE_KEY)) } catch { return null }
-    if (!data || ![1, 2, 3, 4, 5].includes(data.v)) return null
+    // 地图生成器已重构，旧存档（v1~v5）的 seed 会生成不一致地图，直接开始新局
+    if (!data || data.v !== 6) return null
 
     const gs = new GameState(data.seed)
     gs.now = data.now || 0
