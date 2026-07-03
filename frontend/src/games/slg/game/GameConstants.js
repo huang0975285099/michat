@@ -5,6 +5,8 @@
 export const MAP_W = 48          // 地图宽（格）
 export const MAP_H = 48          // 地图高（格）
 export const TILE_SIZE = 48      // 单格像素
+// 铜矿地占比：地貌平滑后按此概率把陆地随机改为铜矿（散点式矿脉，见 MapGenerator 步骤 2.5）
+export const COPPER_TILE_RATE = 0.04
 
 // 时间加速：1 真实秒 = 60 游戏秒（游戏内 1 小时 ≈ 真实 1 分钟）
 export const TIME_SCALE = 60
@@ -28,6 +30,9 @@ export const TILE_TYPES = {
   forest:   { name: '森林', res: 'wood',  color: 0x4e7a3b, passable: true },
   hill:     { name: '丘陵', res: 'stone', color: 0xa89a7e, passable: true },
   mountain: { name: '山地', res: 'iron',  color: 0x8a8078, passable: true },
+  // 铜矿地：产铜币（res:'coin'）。铜币基础人人有份（level*COIN_YIELD_PER_LEVEL=20），铜矿地再叠加
+  // level*BASE_YIELD_PER_LEVEL=100，合计每级 120 铜币 —— 约普通地 6 倍的铜矿产出速度。
+  copper:   { name: '铜矿', res: 'coin',  color: 0xd07b3a, passable: true },
   lake:     { name: '湖泊', res: null,    color: 0x5a9bc9, passable: false },
   npcCity:  { name: '城池', res: 'all',   color: 0xb05a44, passable: true },
 }
@@ -46,11 +51,13 @@ export const BASE_YIELD_PER_LEVEL = 100
 // 铜币：所有领地统一按 level * 20 / 小时 产出
 export const COIN_YIELD_PER_LEVEL = 20
 
-// 地块守军总兵力：lv → l*(l+1)/2 * 100（lv1=100 … lv5=1500 … lv10=5500）；NPC 城池固定 3000。
+// 地块守军总兵力：lv → l*(l+1)/2 * 200（lv1=200 … lv5=3000 … lv10=11000）；
+// NPC 城池按城池等级（1~5）查 NPC_CITY_LEVELS，与普通地块等级是两套独立编号。
 // 多队地块（见 TILE_GUARDS.teams）由各队均分。
+export const GARRISON_BASE_PER_LEVEL = 200
 export function garrisonOf(level, type) {
-  if (type === 'npcCity') return 3000
-  return (level * (level + 1) / 2) * 100
+  if (type === 'npcCity') return NPC_CITY_LEVELS[level]?.garrison ?? NPC_CITY_LEVELS[NPC_CITY_MAX_LEVEL].garrison
+  return (level * (level + 1) / 2) * GARRISON_BASE_PER_LEVEL
 }
 
 // ── 主城 ────────────────────────────────────────────────────────────────────
@@ -138,114 +145,110 @@ export const AWAKEN_SPD = 3
 // 参照《三国志》系列（Koei 历代综合评价，非某单一版本）的五维：统率/武力/智力/政治/魅力（0~100），
 // 换算为本游戏字段：atk=武力  def=统率  int=智力（新增，供后续玩法/展示用，暂不参与战斗结算）
 //   spd = round((政治+魅力)/2)  —— 谋主/主公类角色政治魅力高，出手快但攻防偏低，形成「快而脆」的差异化定位。
-// 品质/tier 按综合战力评分 score=atk*0.5+def*0.35+spd*0.15（武力权重最高，速度权重最低）由高到低排序取段，
-// 分段人数维持原结构不变（传说4/精英8/稀有12/普通16；守将 tier5~1 各8/8/4/4/4）以保持抽卡概率与守军强度曲线，
-// 但不再保证魏蜀吴群人数均分——评分才是唯一入档依据，因此谋士型武将（如诸葛亮、司马懿）战力评分低于纯武将，
-// 可能被排到比其历史知名度更低的档位，这是刻意保留的历史真实感，而非疏漏。
+// 品质/tier 分档规则（每档同时满足两条约束）：
+//   1) 阵营 魏/蜀/吴/群 各占 1/4（传说各1、精英各2、稀有各3、普通各4；守将 tier5/4 各占2，tier3/2/1 各占1）
+//   2) 兵种 枪/盾/弓/骑 各占 1/4（同上比例）
+//   在满足这两条约束的前提下，用最小费用流在候选池中求「综合战力评分 score=atk*0.5+def*0.35+spd*0.15
+//   （武力权重最高、速度权重最低）总和最大」的分档方案，档位从高到低依次求解（传说优先取最优组合，
+//   精英/稀有/普通依次从剩余武将中再求最优，守将 tier5→tier1 同理）。
+//   由于双重约束，个别评分很高的武将（如战力分全池最高的关羽）可能因其阵营+兵种组合已被更高档
+//   占用而落到次一档，这是均分约束下的数学最优解，而非评分错误。
+//   兵种原始总数无法被 4 整除（招募池骑12/盾8，守将池弓8/枪8/骑6/盾6），故对少量人物的兵种做了
+//   贴合人设的修正以补齐缺口：曹操、司马懿（统帅/谋主，坐镇中军）由骑兵改盾兵；
+//   张任（惯用伏击）由弓改骑兵，王平（以防守著称）由枪改盾兵。
 
-// 旧版开局固定三武将模板（新开局已不再自动持有，仅保留供旧存档 findGeneralTemplate 查找）。
-// findGeneralTemplate 优先匹配本表，故此处数值需与 RECRUITABLE_GENERALS 同 id 条目保持一致。
-// troopType 固定（率土式，武将自带兵种）。
-export const STARTER_GENERALS = [
-  // 魏：许褚（高攻枪兵）
-  { id: 'xuchu',   name: '许褚', quality: 'common', faction: 'wei', troopType: 'spear',  atk: 96, def: 65, int: 25, spd: 26 },
-  // 蜀：魏延（均衡枪兵）
-  { id: 'weiyi',   name: '魏延', quality: 'rare',   faction: 'shu', troopType: 'spear',  atk: 90, def: 83, int: 58, spd: 48 },
-  // 吴：周泰（高防盾兵）
-  { id: 'zhoutai', name: '周泰', quality: 'rare',   faction: 'wu',  troopType: 'shield', atk: 91, def: 75, int: 32, spd: 43 },
-];
 // 可招募武将池（按品质分档，抽卡先 roll 品质再从该档随机取一名）
 export const RECRUITABLE_GENERALS = [
-  // === Legend (传说) - 4个，评分最高的纯武力/统率型猛将 ===
-  { id: 'guanyu',     name: '关羽',   quality: 'legend', faction: 'shu', troopType: 'cavalry', atk: 97, def: 90, int: 75, spd: 79 },
-  { id: 'zhaoyun',    name: '赵云',   quality: 'legend', faction: 'shu', troopType: 'cavalry', atk: 96, def: 91, int: 76, spd: 79 },
-  { id: 'zhangliao',  name: '张辽',   quality: 'legend', faction: 'wei', troopType: 'cavalry', atk: 91, def: 92, int: 76, spd: 75 },
+  // === Legend (传说) - 4个（阵营/兵种各占1）===
   { id: 'jiangwei',   name: '姜维',   quality: 'legend', faction: 'shu', troopType: 'bow',     atk: 89, def: 89, int: 92, spd: 73 },
+  { id: 'zhanghe',    name: '张郃',   quality: 'legend', faction: 'qun', troopType: 'cavalry', atk: 89, def: 88, int: 77, spd: 64 },
+  { id: 'xuhuang',    name: '徐晃',   quality: 'legend', faction: 'wei', troopType: 'spear',   atk: 90, def: 86, int: 65, spd: 62 },
+  { id: 'caoren',     name: '曹仁',   quality: 'legend', faction: 'wu',  troopType: 'shield',  atk: 83, def: 85, int: 58, spd: 63 },
 
-  // === Elite (精英) - 8个 ===
-  { id: 'zhanghe',    name: '张郃',   quality: 'elite', faction: 'qun', troopType: 'cavalry', atk: 89, def: 88, int: 77, spd: 64 },
-  { id: 'machao',     name: '马超',   quality: 'elite', faction: 'wei', troopType: 'cavalry', atk: 97, def: 82, int: 33, spd: 48 },
-  { id: 'xuhuang',    name: '徐晃',   quality: 'elite', faction: 'wei', troopType: 'spear',   atk: 90, def: 86, int: 65, spd: 62 },
-  { id: 'taishici',   name: '太史慈', quality: 'elite', faction: 'wu',  troopType: 'bow',     atk: 91, def: 84, int: 56, spd: 61 },
-  { id: 'caocao',     name: '曹操',   quality: 'elite', faction: 'wei', troopType: 'cavalry', atk: 72, def: 96, int: 91, spd: 96 },
-  { id: 'huangzhong', name: '黄忠',   quality: 'elite', faction: 'shu', troopType: 'bow',     atk: 95, def: 78, int: 57, spd: 54 },
-  { id: 'pangde',     name: '庞德',   quality: 'elite', faction: 'wei', troopType: 'spear',   atk: 94, def: 78, int: 56, spd: 53 },
-  { id: 'zhouyu',     name: '周瑜',   quality: 'elite', faction: 'wu',  troopType: 'bow',     atk: 71, def: 96, int: 95, spd: 86 },
+  // === Elite (精英) - 8个（阵营/兵种各占2）===
+  { id: 'guanyu',     name: '关羽',   quality: 'elite', faction: 'shu', troopType: 'cavalry', atk: 97,  def: 90, int: 75, spd: 79 },
+  { id: 'taishici',   name: '太史慈', quality: 'elite', faction: 'wu',  troopType: 'bow',     atk: 91,  def: 84, int: 56, spd: 61 },
+  { id: 'caocao',     name: '曹操',   quality: 'elite', faction: 'wei', troopType: 'shield',  atk: 72,  def: 96, int: 91, spd: 96 },
+  { id: 'huangzhong', name: '黄忠',   quality: 'elite', faction: 'shu', troopType: 'bow',     atk: 95,  def: 78, int: 57, spd: 54 },
+  { id: 'pangde',     name: '庞德',   quality: 'elite', faction: 'wei', troopType: 'spear',   atk: 94,  def: 78, int: 56, spd: 53 },
+  { id: 'lvbu',       name: '吕布',   quality: 'elite', faction: 'qun', troopType: 'cavalry', atk: 100, def: 78, int: 26, spd: 31 },
+  { id: 'zhoutai',    name: '周泰',   quality: 'elite', faction: 'wu',  troopType: 'shield',  atk: 91,  def: 75, int: 32, spd: 43 },
+  { id: 'yanliang',   name: '颜良',   quality: 'elite', faction: 'qun', troopType: 'spear',   atk: 94,  def: 70, int: 32, spd: 34 },
 
-  // === Rare (稀有) - 12个 ===
-  { id: 'zhangfei',   name: '张飞',   quality: 'rare', faction: 'shu', troopType: 'spear',   atk: 98,  def: 78, int: 30, spd: 38 },
-  { id: 'lvbu',       name: '吕布',   quality: 'rare', faction: 'qun', troopType: 'cavalry', atk: 100, def: 78, int: 26, spd: 31 },
-  { id: 'weiyi',      name: '魏延',   quality: 'rare', faction: 'shu', troopType: 'spear',   atk: 90,  def: 83, int: 58, spd: 48 },
-  { id: 'ganning',    name: '甘宁',   quality: 'rare', faction: 'wu',  troopType: 'bow',     atk: 93,  def: 78, int: 55, spd: 47 },
-  { id: 'caoren',     name: '曹仁',   quality: 'rare', faction: 'wu',  troopType: 'shield',  atk: 83,  def: 85, int: 58, spd: 63 },
-  { id: 'zhoutai',    name: '周泰',   quality: 'rare', faction: 'wu',  troopType: 'shield',  atk: 91,  def: 75, int: 32, spd: 43 },
-  { id: 'yuwen',      name: '于禁',   quality: 'rare', faction: 'wei', troopType: 'spear',   atk: 83,  def: 82, int: 62, spd: 50 },
-  { id: 'liubei',     name: '刘备',   quality: 'rare', faction: 'shu', troopType: 'spear',   atk: 73,  def: 79, int: 76, spd: 90 },
-  { id: 'xusheng',    name: '徐盛',   quality: 'rare', faction: 'wu',  troopType: 'bow',     atk: 84,  def: 79, int: 58, spd: 53 },
-  { id: 'sunquan',    name: '孙权',   quality: 'rare', faction: 'wu',  troopType: 'shield',  atk: 70,  def: 83, int: 80, spd: 90 },
-  { id: 'dingfeng',   name: '丁奉',   quality: 'rare', faction: 'wu',  troopType: 'bow',     atk: 85,  def: 76, int: 62, spd: 52 },
-  { id: 'yanliang',   name: '颜良',   quality: 'rare', faction: 'qun', troopType: 'spear',   atk: 94,  def: 70, int: 32, spd: 34 },
+  // === Rare (稀有) - 12个（阵营/兵种各占3）===
+  { id: 'zhaoyun',    name: '赵云',   quality: 'rare', faction: 'shu', troopType: 'cavalry', atk: 96, def: 91, int: 76, spd: 79 },
+  { id: 'zhangliao',  name: '张辽',   quality: 'rare', faction: 'wei', troopType: 'cavalry', atk: 91, def: 92, int: 76, spd: 75 },
+  { id: 'zhouyu',     name: '周瑜',   quality: 'rare', faction: 'wu',  troopType: 'bow',     atk: 71, def: 96, int: 95, spd: 86 },
+  { id: 'zhangfei',   name: '张飞',   quality: 'rare', faction: 'shu', troopType: 'spear',   atk: 98, def: 78, int: 30, spd: 38 },
+  { id: 'weiyi',      name: '魏延',   quality: 'rare', faction: 'shu', troopType: 'spear',   atk: 90, def: 83, int: 58, spd: 48 },
+  { id: 'ganning',    name: '甘宁',   quality: 'rare', faction: 'wu',  troopType: 'bow',     atk: 93, def: 78, int: 55, spd: 47 },
+  { id: 'yuwen',      name: '于禁',   quality: 'rare', faction: 'wei', troopType: 'spear',   atk: 83, def: 82, int: 62, spd: 50 },
+  { id: 'sunquan',    name: '孙权',   quality: 'rare', faction: 'wu',  troopType: 'shield',  atk: 70, def: 83, int: 80, spd: 90 },
+  { id: 'wenchou',    name: '文丑',   quality: 'rare', faction: 'qun', troopType: 'cavalry', atk: 93, def: 69, int: 24, spd: 28 },
+  { id: 'caoxiu',     name: '曹休',   quality: 'rare', faction: 'wei', troopType: 'shield',  atk: 79, def: 76, int: 58, spd: 57 },
+  { id: 'wutugu',     name: '兀突骨', quality: 'rare', faction: 'qun', troopType: 'shield',  atk: 88, def: 60, int: 15, spd: 23 },
+  { id: 'zhangjiao',  name: '张角',   quality: 'rare', faction: 'qun', troopType: 'bow',     atk: 56, def: 77, int: 90, spd: 77 },
 
-  // === Common (普通) - 16个 ===
-  { id: 'dianwei',    name: '典韦',   quality: 'common', faction: 'wei', troopType: 'spear',   atk: 96, def: 68, int: 30,  spd: 26 },
-  { id: 'wenchou',    name: '文丑',   quality: 'common', faction: 'qun', troopType: 'cavalry', atk: 93, def: 69, int: 24,  spd: 28 },
-  { id: 'zhuran',     name: '朱然',   quality: 'common', faction: 'wu',  troopType: 'shield',  atk: 78, def: 78, int: 65,  spd: 56 },
-  { id: 'xuchu',      name: '许褚',   quality: 'common', faction: 'wei', troopType: 'spear',   atk: 96, def: 65, int: 25,  spd: 26 },
-  { id: 'caoxiu',     name: '曹休',   quality: 'common', faction: 'wei', troopType: 'shield',  atk: 79, def: 76, int: 58,  spd: 57 },
-  { id: 'madai',      name: '马岱',   quality: 'common', faction: 'shu', troopType: 'cavalry', atk: 83, def: 75, int: 52,  spd: 43 },
-  { id: 'guanxing',   name: '关兴',   quality: 'common', faction: 'shu', troopType: 'cavalry', atk: 83, def: 71, int: 48,  spd: 48 },
-  { id: 'huaxiong',   name: '华雄',   quality: 'common', faction: 'qun', troopType: 'cavalry', atk: 90, def: 67, int: 34,  spd: 30 },
-  { id: 'simayi',     name: '司马懿', quality: 'common', faction: 'wei', troopType: 'cavalry', atk: 54, def: 91, int: 97,  spd: 83 },
-  { id: 'wutugu',     name: '兀突骨', quality: 'common', faction: 'qun', troopType: 'shield',  atk: 88, def: 60, int: 15,  spd: 23 },
-  { id: 'lusu',       name: '鲁肃',   quality: 'common', faction: 'wu',  troopType: 'shield',  atk: 55, def: 80, int: 88,  spd: 85 },
-  { id: 'jiling',     name: '纪灵',   quality: 'common', faction: 'qun', troopType: 'spear',   atk: 80, def: 62, int: 40,  spd: 38 },
-  { id: 'zhangjiao',  name: '张角',   quality: 'common', faction: 'qun', troopType: 'bow',     atk: 56, def: 77, int: 90,  spd: 77 },
-  { id: 'zhugeliang', name: '诸葛亮', quality: 'common', faction: 'shu', troopType: 'bow',     atk: 38, def: 92, int: 100, spd: 94 },
-  { id: 'diaochan',   name: '貂蝉',   quality: 'common', faction: 'qun', troopType: 'bow',     atk: 20, def: 10, int: 66,  spd: 69 },
-  { id: 'huatuo',     name: '华佗',   quality: 'common', faction: 'qun', troopType: 'shield',  atk: 6,  def: 10, int: 94,  spd: 45 },
+  // === Common (普通) - 16个（阵营/兵种各占4）===
+  { id: 'machao',     name: '马超',   quality: 'common', faction: 'wei', troopType: 'cavalry', atk: 97,  def: 82, int: 33,  spd: 48 },
+  { id: 'liubei',     name: '刘备',   quality: 'common', faction: 'shu', troopType: 'spear',   atk: 73,  def: 79, int: 76,  spd: 90 },
+  { id: 'xusheng',    name: '徐盛',   quality: 'common', faction: 'wu',  troopType: 'bow',     atk: 84,  def: 79, int: 58,  spd: 53 },
+  { id: 'dingfeng',   name: '丁奉',   quality: 'common', faction: 'wu',  troopType: 'bow',     atk: 85,  def: 76, int: 62,  spd: 52 },
+  { id: 'dianwei',    name: '典韦',   quality: 'common', faction: 'wei', troopType: 'spear',   atk: 96,  def: 68, int: 30,  spd: 26 },
+  { id: 'zhuran',     name: '朱然',   quality: 'common', faction: 'wu',  troopType: 'shield',  atk: 78,  def: 78, int: 65,  spd: 56 },
+  { id: 'xuchu',      name: '许褚',   quality: 'common', faction: 'wei', troopType: 'spear',   atk: 96,  def: 65, int: 25,  spd: 26 },
+  { id: 'madai',      name: '马岱',   quality: 'common', faction: 'shu', troopType: 'cavalry', atk: 83,  def: 75, int: 52,  spd: 43 },
+  { id: 'guanxing',   name: '关兴',   quality: 'common', faction: 'shu', troopType: 'cavalry', atk: 83,  def: 71, int: 48,  spd: 48 },
+  { id: 'huaxiong',   name: '华雄',   quality: 'common', faction: 'qun', troopType: 'cavalry', atk: 90,  def: 67, int: 34,  spd: 30 },
+  { id: 'simayi',     name: '司马懿', quality: 'common', faction: 'wei', troopType: 'shield',  atk: 54,  def: 91, int: 97,  spd: 83 },
+  { id: 'lusu',       name: '鲁肃',   quality: 'common', faction: 'wu',  troopType: 'shield',  atk: 55,  def: 80, int: 88,  spd: 85 },
+  { id: 'jiling',     name: '纪灵',   quality: 'common', faction: 'qun', troopType: 'spear',   atk: 80,  def: 62, int: 40,  spd: 38 },
+  { id: 'zhugeliang', name: '诸葛亮', quality: 'common', faction: 'shu', troopType: 'bow',     atk: 38,  def: 92, int: 100, spd: 94 },
+  { id: 'diaochan',   name: '貂蝉',   quality: 'common', faction: 'qun', troopType: 'bow',     atk: 20,  def: 10, int: 66,  spd: 69 },
+  { id: 'huatuo',     name: '华佗',   quality: 'common', faction: 'qun', troopType: 'shield',  atk: 6,   def: 10, int: 94,  spd: 45 },
 ];
 
 // ── 守将池（仅守地用，不进抽卡池）───────────────────────────────────────────
 // tier = 守卫的地块等级（1~5）。6 级及以上地块直接从 RECRUITABLE_GENERALS 按品质取。
 // 数值来源与分档方法同上（见「武将数值来源」注释），quality 统一为 basic。
 export const GARRISON_GENERALS = [
-  // === tier 5 (5级守将) - 8个 ===
+  // === tier 5 (5级守将) - 8个（阵营/兵种各占2）===
   { id: 'huanggai',   name: '黄盖', tier: 5, quality: 'basic', faction: 'wu',  troopType: 'bow',     atk: 84, def: 79, int: 65, spd: 60 },
   { id: 'gaoshun',    name: '高顺', tier: 5, quality: 'basic', faction: 'qun', troopType: 'spear',   atk: 84, def: 82, int: 55, spd: 52 },
   { id: 'guohuai',    name: '郭淮', tier: 5, quality: 'basic', faction: 'wei', troopType: 'spear',   atk: 76, def: 85, int: 78, spd: 61 },
   { id: 'caozhen',    name: '曹真', tier: 5, quality: 'basic', faction: 'wei', troopType: 'cavalry', atk: 78, def: 82, int: 65, spd: 61 },
-  { id: 'wangping',   name: '王平', tier: 5, quality: 'basic', faction: 'shu', troopType: 'spear',   atk: 75, def: 82, int: 68, spd: 53 },
+  { id: 'wangping',   name: '王平', tier: 5, quality: 'basic', faction: 'shu', troopType: 'shield',  atk: 75, def: 82, int: 68, spd: 53 },
   { id: 'hanzong',    name: '韩当', tier: 5, quality: 'basic', faction: 'wu',  troopType: 'shield',  atk: 80, def: 75, int: 48, spd: 45 },
-  { id: 'liaohua',    name: '廖化', tier: 5, quality: 'basic', faction: 'shu', troopType: 'spear',   atk: 78, def: 70, int: 52, spd: 50 },
-  { id: 'zhangyi',    name: '张翼', tier: 5, quality: 'basic', faction: 'shu', troopType: 'spear',   atk: 76, def: 72, int: 58, spd: 49 },
+  { id: 'zhangren',   name: '张任', tier: 5, quality: 'basic', faction: 'qun', troopType: 'cavalry', atk: 77, def: 68, int: 55, spd: 46 },
+  { id: 'fazheng',    name: '法正', tier: 5, quality: 'basic', faction: 'shu', troopType: 'bow',     atk: 40, def: 55, int: 92, spd: 68 },
 
-  // === tier 4 (4级守将) - 8个 ===
+  // === tier 4 (4级守将) - 8个（阵营/兵种各占2）===
+  { id: 'liaohua',    name: '廖化',   tier: 4, quality: 'basic', faction: 'shu', troopType: 'spear',   atk: 78, def: 70, int: 52, spd: 50 },
   { id: 'zhuhuan',    name: '朱桓',   tier: 4, quality: 'basic', faction: 'wu',  troopType: 'bow',     atk: 73, def: 75, int: 62, spd: 52 },
-  { id: 'zhangren',   name: '张任',   tier: 4, quality: 'basic', faction: 'qun', troopType: 'bow',     atk: 77, def: 68, int: 55, spd: 46 },
-  { id: 'panzhang',   name: '潘璋',   tier: 4, quality: 'basic', faction: 'wu',  troopType: 'spear',   atk: 79, def: 68, int: 38, spd: 35 },
   { id: 'gongsunzan', name: '公孙瓒', tier: 4, quality: 'basic', faction: 'qun', troopType: 'cavalry', atk: 72, def: 68, int: 42, spd: 47 },
-  { id: 'menghuo',    name: '孟获',   tier: 4, quality: 'basic', faction: 'qun', troopType: 'cavalry', atk: 70, def: 60, int: 35, spd: 53 },
   { id: 'wangshuang', name: '王双',   tier: 4, quality: 'basic', faction: 'wei', troopType: 'cavalry', atk: 75, def: 55, int: 30, spd: 28 },
-  { id: 'hansui',     name: '韩遂',   tier: 4, quality: 'basic', faction: 'qun', troopType: 'cavalry', atk: 60, def: 65, int: 58, spd: 50 },
   { id: 'baoshixin',  name: '鲍信',   tier: 4, quality: 'basic', faction: 'wei', troopType: 'spear',   atk: 62, def: 55, int: 45, spd: 45 },
+  { id: 'quancong',   name: '全琮',   tier: 4, quality: 'basic', faction: 'wu',  troopType: 'shield',  atk: 55, def: 58, int: 55, spd: 50 },
+  { id: 'juanshu',    name: '沮授',   tier: 4, quality: 'basic', faction: 'qun', troopType: 'bow',     atk: 35, def: 70, int: 90, spd: 69 },
+  { id: 'liuyan',     name: '刘焉',   tier: 4, quality: 'basic', faction: 'shu', troopType: 'shield',  atk: 25, def: 40, int: 58, spd: 58 },
 
-  // === tier 3 (3级守将) - 4个 ===
-  { id: 'quancong',   name: '全琮',   tier: 3, quality: 'basic', faction: 'wu',  troopType: 'shield', atk: 55, def: 58, int: 55, spd: 50 },
+  // === tier 3 (3级守将) - 4个（阵营/兵种各占1）===
+  { id: 'zhangyi',    name: '张翼',   tier: 3, quality: 'basic', faction: 'shu', troopType: 'spear',  atk: 76, def: 72, int: 58, spd: 49 },
+  { id: 'menghuo',    name: '孟获',   tier: 3, quality: 'basic', faction: 'qun', troopType: 'cavalry',atk: 70, def: 60, int: 35, spd: 53 },
   { id: 'zhugejin',   name: '诸葛瑾', tier: 3, quality: 'basic', faction: 'wu',  troopType: 'shield', atk: 35, def: 65, int: 85, spd: 82 },
-  { id: 'juanshu',    name: '沮授',   tier: 3, quality: 'basic', faction: 'qun', troopType: 'bow',    atk: 35, def: 70, int: 90, spd: 69 },
-  { id: 'zhangyang',  name: '张杨',   tier: 3, quality: 'basic', faction: 'wei', troopType: 'cavalry',atk: 58, def: 48, int: 40, spd: 42 },
+  { id: 'liuye',      name: '刘晔',   tier: 3, quality: 'basic', faction: 'wei', troopType: 'bow',    atk: 25, def: 40, int: 88, spd: 71 },
 
-  // === tier 2 (2级守将) - 4个 ===
-  { id: 'fazheng',    name: '法正',   tier: 2, quality: 'basic', faction: 'shu', troopType: 'bow',    atk: 40, def: 55, int: 92, spd: 68 },
-  { id: 'yanbaihu',   name: '严白虎', tier: 2, quality: 'basic', faction: 'wu',  troopType: 'spear',  atk: 55, def: 40, int: 30, spd: 30 },
+  // === tier 2 (2级守将) - 4个（阵营/兵种各占1）===
+  { id: 'panzhang',   name: '潘璋',   tier: 2, quality: 'basic', faction: 'wu',  troopType: 'spear',  atk: 79, def: 68, int: 38, spd: 35 },
+  { id: 'zhangyang',  name: '张杨',   tier: 2, quality: 'basic', faction: 'wei', troopType: 'cavalry',atk: 58, def: 48, int: 40, spd: 42 },
   { id: 'tianfeng',   name: '田丰',   tier: 2, quality: 'basic', faction: 'qun', troopType: 'bow',    atk: 30, def: 45, int: 91, spd: 65 },
-  { id: 'liuye',      name: '刘晔',   tier: 2, quality: 'basic', faction: 'wei', troopType: 'bow',    atk: 25, def: 40, int: 88, spd: 71 },
+  { id: 'liuzhang',   name: '刘璋',   tier: 2, quality: 'basic', faction: 'shu', troopType: 'shield', atk: 20, def: 35, int: 40, spd: 53 },
 
-  // === tier 1 (1级守将) - 4个 ===
-  { id: 'liuyan',     name: '刘焉', tier: 1, quality: 'basic', faction: 'shu', troopType: 'shield', atk: 25, def: 40, int: 58, spd: 58 },
-  { id: 'wanglang',   name: '王朗', tier: 1, quality: 'basic', faction: 'wei', troopType: 'bow',    atk: 20, def: 30, int: 78, spd: 68 },
-  { id: 'liuzhang',   name: '刘璋', tier: 1, quality: 'basic', faction: 'shu', troopType: 'shield', atk: 20, def: 35, int: 40, spd: 53 },
-  { id: 'kongrong',   name: '孔融', tier: 1, quality: 'basic', faction: 'shu', troopType: 'shield', atk: 15, def: 25, int: 70, spd: 68 },
+  // === tier 1 (1级守将) - 4个（阵营/兵种各占1）===
+  { id: 'hansui',     name: '韩遂',   tier: 1, quality: 'basic', faction: 'qun', troopType: 'cavalry', atk: 60, def: 65, int: 58, spd: 50 },
+  { id: 'yanbaihu',   name: '严白虎', tier: 1, quality: 'basic', faction: 'wu',  troopType: 'spear',   atk: 55, def: 40, int: 30, spd: 30 },
+  { id: 'wanglang',   name: '王朗',   tier: 1, quality: 'basic', faction: 'wei', troopType: 'bow',     atk: 20, def: 30, int: 78, spd: 68 },
+  { id: 'kongrong',   name: '孔融',   tier: 1, quality: 'basic', faction: 'shu', troopType: 'shield',  atk: 15, def: 25, int: 70, spd: 68 },
 ];
 
 // ── 地块守卫规格 ─────────────────────────────────────────────────────────────
@@ -254,19 +257,31 @@ export const GARRISON_GENERALS = [
 // 每队兵力 = garrisonOf(level) / teams。
 export const TILE_MAX_LEVEL = 10
 export const TILE_GUARDS = {
-  1:  { teams: 1, pool: 'tier1',  guardLv: 1 },    // 总兵 100
-  2:  { teams: 1, pool: 'tier2',  guardLv: 3 },    // 300
-  3:  { teams: 1, pool: 'tier3',  guardLv: 5 },    // 600
-  4:  { teams: 1, pool: 'tier4',  guardLv: 7 },    // 1000
-  5:  { teams: 1, pool: 'tier5',  guardLv: 9 },    // 1500
-  6:  { teams: 1, pool: 'common', guardLv: 11 },   // 2100
-  7:  { teams: 2, pool: 'common', guardLv: 12 },   // 1400×2
-  8:  { teams: 2, pool: 'rare',   guardLv: 14 },   // 1800×2
-  9:  { teams: 2, pool: 'elite',  guardLv: 16 },   // 2250×2
-  10: { teams: 2, pool: 'legend', guardLv: 20 },   // 2750×2
+  1:  { teams: 1, pool: 'tier1',  guardLv: 1 },    // 总兵 200
+  2:  { teams: 1, pool: 'tier2',  guardLv: 3 },    // 600
+  3:  { teams: 2, pool: 'tier3',  guardLv: 5 },    // 1200（600×2）
+  4:  { teams: 2, pool: 'tier4',  guardLv: 7 },    // 2000（1000×2）
+  5:  { teams: 3, pool: 'tier5',  guardLv: 9 },    // 3000（1000×3）
+  6:  { teams: 3, pool: 'common', guardLv: 11 },   // 4200（1400×3）
+  7:  { teams: 4, pool: 'common', guardLv: 12 },   // 5600（1400×4）
+  8:  { teams: 4, pool: 'rare',   guardLv: 14 },   // 7200（1800×4）
+  9:  { teams: 5, pool: 'elite',  guardLv: 16 },   // 9000（1800×5）
+  10: { teams: 4, pool: 'legend', guardLv: 20 },   // 11000（2750×4，legend 池仅 4 名，teams 不得超过池大小）
 }
-// NPC 城池守将：等同 9 级地规格（Elite×2），总兵力仍 3000 → 1500×2
-export const NPC_CITY_GUARD = { teams: 2, pool: 'elite', guardLv: 16 }
+// NPC 城池分 5 级（等级如何分配到地图上的具体城池由地图生成逻辑决定，这里只定义每级的规格）：
+// 固定 4 队守将（teams:4，legend 池仅 4 名，teams 不得超过池大小），1~3 级按 9 级地规格折算属性
+// （guardLv:16），4~5 级按 10 级地规格（guardLv:20）；掠夺收益 loot 按总兵力比例（相对 1 级 10000 兵）等比放大。
+export const NPC_CITY_MAX_LEVEL = 5
+export const NPC_CITY_LEVELS = {
+  1: { garrison: 10000, teams: 4, pool: 'legend', guardLv: 16, loot: { coin: 2000, grain: 5000,  wood: 3000,  iron: 3000,  stone: 3000 } },
+  2: { garrison: 12500, teams: 4, pool: 'legend', guardLv: 16, loot: { coin: 2500, grain: 6250,  wood: 3750,  iron: 3750,  stone: 3750 } },
+  3: { garrison: 25000, teams: 4, pool: 'legend', guardLv: 16, loot: { coin: 5000, grain: 12500, wood: 7500,  iron: 7500,  stone: 7500 } },
+  4: { garrison: 30000, teams: 4, pool: 'legend', guardLv: 20, loot: { coin: 6000, grain: 15000, wood: 9000,  iron: 9000,  stone: 9000 } },
+  5: { garrison: 40000, teams: 4, pool: 'legend', guardLv: 20, loot: { coin: 8000, grain: 20000, wood: 12000, iron: 12000, stone: 12000 } },
+}
+// NPC 城池在地图上的等级分布：1 级（最弱）5 座、2 级 4 座、3 级 3 座、4 级 2 座、5 级（最强）1 座，
+// 共 15 座，弱到强梯度分布，由地图生成逻辑按此计数随机放置各等级城池。
+export const NPC_CITY_LEVEL_COUNTS = { 1: 5, 2: 4, 3: 3, 4: 2, 5: 1 }
 
 /** 取守将候选池（'tierN' → 守将池对应档；品质名 → 抽卡池对应品质档） */
 export function guardPoolOf(pool) {
@@ -283,9 +298,9 @@ export function guardStat(base, guardLv, quality) {
   return base + (guardLv - 1) * 4 * growthOf(quality)
 }
 
-/** 地块守卫规格（npcCity 用城池守将规格） */
+/** 地块守卫规格（npcCity 按城池等级查 NPC_CITY_LEVELS，与普通地块的 TILE_GUARDS 是两套独立编号） */
 export function tileGuardSpec(level, type) {
-  return type === 'npcCity' ? NPC_CITY_GUARD : TILE_GUARDS[level]
+  return type === 'npcCity' ? NPC_CITY_LEVELS[level] : TILE_GUARDS[level]
 }
 // 招募花费（铜币的主要消耗口）与阵容上限
 export const RECRUIT_COST_COIN = 800
@@ -296,10 +311,9 @@ export const FREE_RECRUIT_COUNT = 1
 export const AWAKEN_ATK = 3
 export const AWAKEN_DEF = 3
 
-/** 按 id 查武将模板（初始/可招募/守将），存档恢复与守将重建时用 */
+/** 按 id 查武将模板（可招募/守将），存档恢复与守将重建时用 */
 export function findGeneralTemplate(id) {
-  return STARTER_GENERALS.find(g => g.id === id) ||
-    RECRUITABLE_GENERALS.find(g => g.id === id) ||
+  return RECRUITABLE_GENERALS.find(g => g.id === id) ||
     GARRISON_GENERALS.find(g => g.id === id) || null
 }
 export const GENERAL_BASE_TROOP_CAP = 100    // 带兵上限 = 100 + (lv-1)*200
@@ -322,8 +336,10 @@ export function tileMarchSeconds(effSpeed) {
 }
 
 // ── 城池攻坚 ────────────────────────────────────────────────────────────────
-// 攻克 NPC 城池的一次性掠夺奖励
-export const NPC_CITY_LOOT = { coin: 2000, grain: 5000, wood: 3000, iron: 3000, stone: 3000 }
+// 攻克 NPC 城池的一次性掠夺奖励，按城池等级查 NPC_CITY_LEVELS[level].loot
+export function npcCityLootOf(level) {
+  return NPC_CITY_LEVELS[level]?.loot ?? NPC_CITY_LEVELS[NPC_CITY_MAX_LEVEL].loot
+}
 // 未占领地块的守军回复速度：每游戏小时回复「上限的 10%」
 export const GARRISON_REGEN_PER_HOUR = 0.1
 

@@ -1,7 +1,7 @@
 // 九州征途 - 种子化地图生成
 // 同一 seed 必然生成同一张地图，存档只需记录 seed + 领地增量，为后续联网版打基础。
 
-import { MAP_W, MAP_H, TILE_TYPES, TILE_MAX_LEVEL, garrisonOf, tileGuardSpec, guardPoolOf } from '../GameConstants.js'
+import { MAP_W, MAP_H, TILE_TYPES, TILE_MAX_LEVEL, COPPER_TILE_RATE, NPC_CITY_LEVEL_COUNTS, garrisonOf, tileGuardSpec, guardPoolOf } from '../GameConstants.js'
 
 // mulberry32：轻量确定性 PRNG
 export function mulberry32(seed) {
@@ -16,9 +16,9 @@ export function mulberry32(seed) {
 
 /**
  * 生成地图。返回二维数组 tiles[y][x] = { x, y, type, level, garrison, guards, owner }
- * - 类型：随机播种 + 两轮多数平滑，形成地貌团块
- * - 等级：按到地图中心的距离分带（外圈 1 → 中心 10），±1 抖动
- * - NPC 城池：中内圈随机放置 8 座
+ * - 类型：随机播种 + 两轮多数平滑，形成地貌团块；铜矿地在平滑后散点铺设
+ * - 等级：1~TILE_MAX_LEVEL 纯随机（出生点周边另行降级，避免开局被高级地包围）
+ * - NPC 城池：中内圈随机放置 15 座，按 NPC_CITY_LEVEL_COUNTS 分配 1~5 级（弱到强梯度）
  * - 玩家出生点：外圈的平原，保证周边可通行
  * - 守将：每块可通行地块按 TILE_GUARDS 规格指派 1~2 支守将队伍（种子确定）
  */
@@ -70,17 +70,23 @@ export function generateMap(seed) {
     grid = next
   }
 
-  // 3) 等级分带 + 抖动
+  // 2.5) 铜矿地散点：多数平滑会把零散地块并入周围地貌，故在平滑之后再随机铺设铜矿，
+  //      让它以「矿脉散点」形式纯随机分布并保证一定数量。仅覆盖陆地（湖泊不动）；
+  //      城池/出生点在后续步骤才落位，若正好压到铜矿会被覆盖，属正常。
+  for (let y = 0; y < MAP_H; y++) {
+    for (let x = 0; x < MAP_W; x++) {
+      if (grid[y][x] !== 'lake' && rng() < COPPER_TILE_RATE) grid[y][x] = 'copper'
+    }
+  }
+
+  // 3) 等级：纯随机分布（1~TILE_MAX_LEVEL 均匀），不再按到中心的距离分带。
+  //    出生点周边会在步骤 5 单独降级，避免开局被高级地包围。
   const tiles = []
   for (let y = 0; y < MAP_H; y++) {
     const row = []
     for (let x = 0; x < MAP_W; x++) {
       const type = grid[y][x]
-      const d = Math.hypot(x - cx, y - cy) / maxDist  // 0 中心 → 1 边缘
-      let level = Math.min(TILE_MAX_LEVEL, Math.max(1, Math.ceil((1 - d) * TILE_MAX_LEVEL)))
-      const j = rng()
-      if (j < 0.2 && level > 1) level--
-      else if (j > 0.85 && level < TILE_MAX_LEVEL) level++
+      const level = 1 + Math.floor(rng() * TILE_MAX_LEVEL)
       row.push({
         x, y, type, level,
         garrison: TILE_TYPES[type].passable ? garrisonOf(level, type) : 0,
@@ -92,20 +98,32 @@ export function generateMap(seed) {
     tiles.push(row)
   }
 
-  // 4) NPC 城池：距中心 20%~55% 半径、彼此至少 8 格
+  // 4) NPC 城池：距中心 20%~55% 半径、彼此至少 6 格（15 座城池比旧版 8 座更密，8 格间距实测
+  //    ~40% 地图放不满，缩到 6 格 + 更高的尝试上限后 300 个种子样本 100% 放满 15 座）。
+  //    等级按 NPC_CITY_LEVEL_COUNTS 分配（1 级最弱最多 → 5 级最强最少），先铺平打乱顺序的
+  //    等级序列，再按放置顺序逐一消费。
+  const cityLevels = []
+  for (const [lv, count] of Object.entries(NPC_CITY_LEVEL_COUNTS)) {
+    for (let i = 0; i < count; i++) cityLevels.push(Number(lv))
+  }
+  for (let i = cityLevels.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1))
+    ;[cityLevels[i], cityLevels[j]] = [cityLevels[j], cityLevels[i]]
+  }
   const cities = []
   let guard = 0
-  while (cities.length < 8 && guard++ < 500) {
+  while (cities.length < cityLevels.length && guard++ < 3000) {
     const ang = rng() * Math.PI * 2
     const r = (0.2 + rng() * 0.35) * maxDist
     const x = Math.round(cx + Math.cos(ang) * r)
     const y = Math.round(cy + Math.sin(ang) * r)
     if (x < 1 || y < 1 || x >= MAP_W - 1 || y >= MAP_H - 1) continue
-    if (cities.some(c => Math.hypot(c.x - x, c.y - y) < 8)) continue
+    if (cities.some(c => Math.hypot(c.x - x, c.y - y) < 6)) continue
+    const level = cityLevels[cities.length]
     const t = tiles[y][x]
     t.type = 'npcCity'
-    t.level = 5
-    t.garrison = garrisonOf(5, 'npcCity')
+    t.level = level
+    t.garrison = garrisonOf(level, 'npcCity')
     cities.push({ x, y })
   }
 
@@ -125,6 +143,19 @@ export function generateMap(seed) {
     if (ok) spawn = { x, y }
   }
   if (!spawn) spawn = { x: 4, y: 4 }   // 兜底（理论上不会触发）
+
+  // 5.5) 出生点周边降级：纯随机等级下主城可能被高级地包围而无法扩张，
+  //      把四周 8 格压到 1~2 级（并同步守军基数），保证开局必有可攻打的弱地。
+  //      须在步骤 6 之前完成，守将才会按降级后的等级指派。
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue
+      const t = tiles[spawn.y + dy]?.[spawn.x + dx]
+      if (!t || !TILE_TYPES[t.type].passable || t.level <= 2) continue
+      t.level = 1 + Math.floor(rng() * 2)   // 1~2
+      t.garrison = garrisonOf(t.level, t.type)
+    }
+  }
 
   // 6) 守将指派：用独立 rng（不扰动上面地形/城池/出生点的随机流，保证既有地图不变）。
   //    同一 seed 守将阵容确定，存档无需记录守将模板。

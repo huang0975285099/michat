@@ -13,7 +13,7 @@ import {
   RECRUIT_COST_COIN, MAX_GENERALS, AWAKEN_ATK, AWAKEN_DEF, AWAKEN_INT, AWAKEN_SPD, FREE_RECRUIT_COUNT,
   growthOf, LEVELUP_ATK, LEVELUP_DEF, LEVELUP_INT, LEVELUP_SPD,
   RECRUIT_GRAIN_PER_TROOP, tileMarchSeconds, MARCH_REF_SPEED, TROOP_TYPES, counterMult,
-  NPC_CITY_LOOT, GARRISON_REGEN_PER_HOUR,
+  npcCityLootOf, GARRISON_REGEN_PER_HOUR,
   BUILDINGS, BUILDING_MAX_LEVEL, buildingUpgradeCost,
   GRANARY_YIELD_PER_LEVEL, BARRACKS_CAP_PER_LEVEL, TRAINING_EXP_PER_LEVEL, FORGE_STAT_PER_LEVEL,
   STAMINA_MAX, MARCH_STAMINA_COST, STAMINA_REGEN_PER_HOUR,
@@ -458,7 +458,8 @@ export class GameState extends Emitter {
     const effAtk = g => g.atk + (g.lv - 1) * LEVELUP_ATK * growthOf(g.quality) + forgeBonus
     const effDef = g => g.def + (g.lv - 1) * LEVELUP_DEF * growthOf(g.quality) + forgeBonus
     const effInt = g => g.int + forgeBonus
-    const effSpd = g => g.spd + forgeBonus
+    // 战斗先手速度 = 基础速 + 兵种加成（骑兵 +30，与行军同口径）+ 铁匠坊
+    const effSpd = g => g.spd + (TROOP_TYPES[g.troopType]?.marchSpeed || 0) + forgeBonus
     const armyDef = gens.reduce((s, g, i) => s + shares[i] * effDef(g), 0)
     const armySpd = Math.min(...gens.map(effSpd))
 
@@ -473,27 +474,55 @@ export class GameState extends Emitter {
       const tpl = findGeneralTemplate(gd.id)
       if (!tpl) continue
       // 攻方武力对该敌将兵种的克制逐将加权；守将对攻方混编的克制按出兵比例加权（方向互反）
+      const atkCounter = gens.reduce((s, g, i) => s + shares[i] * counterMult(g.troopType, tpl.troopType), 0)
+      const defCounter = gens.reduce((s, g, i) => s + shares[i] * counterMult(tpl.troopType, g.troopType), 0)
       const armyAtk = gens.reduce((s, g, i) =>
         s + shares[i] * effAtk(g) * counterMult(g.troopType, tpl.troopType), 0)
-      const defCounter = gens.reduce((s, g, i) => s + shares[i] * counterMult(tpl.troopType, g.troopType), 0)
       const armyInt = gens.reduce((s, g, i) => s + shares[i] * effInt(g), 0)
+      // 守将属性（含等级加成，与展示口径一致）与实战值（atk 叠克制、spd 叠骑兵先手加成）
+      const gAtkAttr = guardStat(tpl.atk, gd.lv, tpl.quality)
+      const gDefAttr = guardStat(tpl.def, gd.lv, tpl.quality)
+      const gSpdAttr = guardStat(tpl.spd, gd.lv, tpl.quality)
+      const gIntAttr = guardStat(tpl.int, gd.lv, tpl.quality)
+      const guardSpd = gSpdAttr + (TROOP_TYPES[tpl.troopType]?.marchSpeed || 0)
       const r = resolveBattle(
         { atk: armyAtk, def: armyDef, int: armyInt, spd: armySpd, troops: remaining },
-        {
-          atk: guardStat(tpl.atk, gd.lv, tpl.quality) * defCounter,
-          def: guardStat(tpl.def, gd.lv, tpl.quality),
-          spd: tpl.spd, troops: gd.troops,
-        },
+        { atk: gAtkAttr * defCounter, def: gDefAttr, spd: guardSpd, troops: gd.troops },
       )
+      // 准备回合数据：双方「属性（基础，卡面口径）」→「实战（叠加各类加成后）」
+      const atkAttr = gens.reduce((s, g, i) => s + shares[i] * g.atk, 0)
+      const defAttr = gens.reduce((s, g, i) => s + shares[i] * g.def, 0)
+      const spdAttrArmy = Math.min(...gens.map(g => g.spd))
+      const prep = {
+        our: {
+          atk: Math.round(atkAttr), atkEff: Math.round(armyAtk),
+          def: Math.round(defAttr), defEff: Math.round(armyDef),
+          spd: Math.round(spdAttrArmy), spdEff: Math.round(armySpd),
+          troops: r.atkStart,
+        },
+        foe: {
+          atk: Math.round(gAtkAttr), atkEff: Math.round(gAtkAttr * defCounter),
+          def: Math.round(gDefAttr), defEff: Math.round(gDefAttr),
+          spd: Math.round(gSpdAttr), spdEff: Math.round(guardSpd),
+          troops: r.defStart,
+        },
+      }
       battles.push({
-        enemy: { name: tpl.name, quality: tpl.quality, lv: gd.lv, troopType: tpl.troopType },
+        enemy: {
+          name: tpl.name, quality: tpl.quality, lv: gd.lv, troopType: tpl.troopType,
+          atk: Math.round(gAtkAttr), def: Math.round(gDefAttr),
+          spd: Math.round(gSpdAttr), int: Math.round(gIntAttr),
+        },
+        // 兵种克制倍率（我方攻击 / 守军攻击），供战报「完整」模式展示相克关系
+        atkCounter, defCounter, armySpd: Math.round(armySpd), prep,
         outcome: r.outcome, first: r.first, rounds: r.rounds,
         atkStart: r.atkStart, defStart: r.defStart, atkLoss: r.atkLoss, defLoss: r.defLoss,
       })
       remaining -= r.atkLoss
       totalAtkLoss += r.atkLoss
       totalExp += r.exp
-      gd.troops -= r.defLoss
+      // 胜则守将队伍全灭（清零，避免回复带来的小数残余变成杀不死的「幽灵兵」）；否则扣减剩余
+      gd.troops = r.outcome === 'win' ? 0 : Math.max(0, gd.troops - r.defLoss)
       if (r.outcome !== 'win') { outcome = r.outcome; break }
     }
 
@@ -539,7 +568,7 @@ export class GameState extends Emitter {
         t.garrison = 0
         this.damaged.delete(t)
         this._pushLog(`🚩 ${names} 击败守将 ${enemyNames}，攻克 ${typeName} Lv.${t.level} (${t.x},${t.y})，损失 ${totalAtkLoss} 兵`, report)
-        if (t.type === 'npcCity') this._lootCity(names)
+        if (t.type === 'npcCity') this._lootCity(names, t.level)
         this.emit('territory', { x: t.x, y: t.y, owner: 'player' })
         if (t.type === 'npcCity') this._checkVictory()
       } else {
@@ -567,19 +596,20 @@ export class GameState extends Emitter {
   }
 
   /** 攻克 NPC 城池的一次性掠夺 */
-  _lootCity(names) {
-    for (const [k, v] of Object.entries(NPC_CITY_LOOT)) this.res[k] += v
-    this._pushLog(`💰 ${names} 掠夺城池：铜${NPC_CITY_LOOT.coin} 粮${NPC_CITY_LOOT.grain} 木${NPC_CITY_LOOT.wood} 铁${NPC_CITY_LOOT.iron} 石${NPC_CITY_LOOT.stone}`)
+  _lootCity(names, level) {
+    const loot = npcCityLootOf(level)
+    for (const [k, v] of Object.entries(loot)) this.res[k] += v
+    this._pushLog(`💰 ${names} 掠夺城池：铜${loot.coin} 粮${loot.grain} 木${loot.wood} 铁${loot.iron} 石${loot.stone}`)
     this.emit('resources', this.res)
   }
 
-  /** 八座 NPC 城池尽克 → 天下一统（单机版胜利目标，只提示一次） */
+  /** 全部 NPC 城池尽克 → 天下一统（单机版胜利目标，只提示一次） */
   _checkVictory() {
     if (this.victoryShown) return
     const allMine = this.npcCities.every(c => this.tileAt(c.x, c.y).owner === 'player')
     if (!allMine) return
     this.victoryShown = true
-    this._pushLog('👑 八城尽克，天下一统！')
+    this._pushLog(`👑 ${this.npcCities.length} 座城池尽克，天下一统！`)
     this.emit('victory')
   }
 

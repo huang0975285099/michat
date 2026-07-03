@@ -200,6 +200,30 @@ export class WorldScene extends Phaser.Scene {
         g.fillStyle(0xffffff, 0.9)
         g.fillTriangle(T * 0.5, T * 0.18, T * 0.42, T * 0.36, T * 0.58, T * 0.36)
         break
+      case 'copper': {
+        // 岩堆 + 铜矿脉高光：深色矿石块上嵌橙铜色矿点
+        const rocks = [
+          { cx: T * 0.34, cy: T * 0.6, r: T * 0.16 },
+          { cx: T * 0.64, cy: T * 0.52, r: T * 0.13 },
+        ]
+        for (const rk of rocks) {
+          g.fillStyle(0x000000, 0.22)
+          g.fillEllipse(rk.cx, rk.cy + rk.r * 0.7, rk.r * 1.8, rk.r * 0.5)
+          g.fillStyle(0x6b4a2a, 1)                       // 矿石暗底
+          g.fillCircle(rk.cx, rk.cy, rk.r)
+          g.fillStyle(0x9c6b34, 1)                       // 受光面
+          g.fillCircle(rk.cx - rk.r * 0.25, rk.cy - rk.r * 0.25, rk.r * 0.65)
+        }
+        // 铜矿脉光点
+        g.fillStyle(0xffb066, 0.95)
+        g.fillCircle(T * 0.3, T * 0.55, 2.2)
+        g.fillCircle(T * 0.4, T * 0.66, 1.6)
+        g.fillCircle(T * 0.62, T * 0.5, 1.8)
+        g.fillStyle(0xffe0b0, 0.9)
+        g.fillCircle(T * 0.31, T * 0.53, 1)
+        g.fillCircle(T * 0.61, T * 0.48, 0.9)
+        break
+      }
       case 'lake':
         // 水波 + 反光高光
         g.lineStyle(2, 0xffffff, 0.4)

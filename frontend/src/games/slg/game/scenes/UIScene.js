@@ -6,7 +6,7 @@ import Phaser from 'phaser'
 import {
   RESOURCES, TILE_TYPES, TIME_SCALE, BASE_YIELD_PER_LEVEL,
   expToLevel, cityUpgradeCost, RECRUIT_GRAIN_PER_TROOP, CITY_MAX_LEVEL,
-  NPC_CITY_LOOT,
+  npcCityLootOf,
   BUILDINGS, BUILDING_MAX_LEVEL, buildingUpgradeCost,
   GRANARY_YIELD_PER_LEVEL, BARRACKS_CAP_PER_LEVEL, TRAINING_EXP_PER_LEVEL, FORGE_STAT_PER_LEVEL,
   STAMINA_MAX, MARCH_STAMINA_COST, STAMINA_REGEN_PER_HOUR,
@@ -362,7 +362,8 @@ export class UIScene extends Phaser.Scene {
         extraY += 18
       }
       if (t.type === 'npcCity') {
-        const loot = `💰 攻克掠夺：铜${NPC_CITY_LOOT.coin} 粮${NPC_CITY_LOOT.grain} 木${NPC_CITY_LOOT.wood} 铁${NPC_CITY_LOOT.iron} 石${NPC_CITY_LOOT.stone}`
+        const cityLoot = npcCityLootOf(t.level)
+        const loot = `💰 攻克掠夺：铜${cityLoot.coin} 粮${cityLoot.grain} 木${cityLoot.wood} 铁${cityLoot.iron} 石${cityLoot.stone}`
         c.add(this.add.text(-w / 2 + 12, extraY, loot, style(11, '#ffe082')).setOrigin(0, 0))
       }
     }
@@ -830,6 +831,19 @@ export class UIScene extends Phaser.Scene {
 
   // ── 弹窗：战报详情（按守将队伍分段，逐回合）───────────────────────────────
 
+  /** 生成一个单行文本，超过 maxW 时用省略号截断（尾部保留完整信息不丢，仅裁中/尾） */
+  _ellipsisText(str, styleObj, maxW) {
+    const t = this.add.text(0, 0, str, styleObj)
+    if (t.width <= maxW) return t
+    let s = str
+    while (s.length > 1) {
+      s = s.slice(0, -1)
+      t.setText(s + '…')
+      if (t.width <= maxW) break
+    }
+    return t
+  }
+
   /** 按 battles 数据算出每一行文字（含位置），返回 { rows, height }。
    *  同一份 rows 既用来提前测量滚动区域高度，也用来实际渲染——避免两处公式各写一遍、
    *  算法一走样就互相对不上（此前就因两处高度公式不同步，导致完整模式最后一回合被裁掉看不见）。 */
@@ -840,11 +854,42 @@ export class UIScene extends Phaser.Scene {
       const q = GENERAL_QUALITY[b.enemy.quality] || GENERAL_QUALITY.common
       const ti = TROOP_TYPES[b.enemy.troopType]
       const oc = { win: '✓胜', draw: '平', lose: '✗败' }[b.outcome]
-      rows.push({ x: 0, y: y + 4, text: `第${bi + 1}阵  ${ti ? ti.icon : ''}${b.enemy.name} Lv.${b.enemy.lv}`,
+      const troopName = ti ? `${ti.icon} ` : ''
+      // 敌将卡：第一行 名称+兵种+等级（品质色）+ 先手/胜负；第二行 武/防/速/智（含等级加成）
+      rows.push({ x: 0, y: y + 2,
+        text: `第${bi + 1}阵  ${troopName}${b.enemy.name} Lv.${b.enemy.lv}`,
         size: 12, color: q.color, bold: true, origin: 0 })
-      rows.push({ right: true, y: y + 4, text: `${b.first === 'atk' ? '我方先手' : '敌方先手'} · ${oc}`,
+      rows.push({ right: true, y: y + 2, text: `${b.first === 'atk' ? '我方先手' : '敌方先手'} · ${oc}`,
         size: 10, color: '#9e9e9e', origin: 1 })
-      y += 26
+      rows.push({ x: 10, y: y + 20,
+        text: `武${b.enemy.atk ?? '?'} · 防${b.enemy.def ?? '?'} · 速${b.enemy.spd ?? '?'} · 智${b.enemy.int ?? '?'}`,
+        size: 10, color: '#9e9e9e', origin: 0 })
+      y += 40
+      // 准备回合：双方「属性（基础/卡面口径）」→「实战（叠加等级/铁匠坊/克制/骑兵先手后）」+ 先手判定
+      const ac = b.atkCounter ?? 1, dc = b.defCounter ?? 1
+      if (b.prep) {
+        const p = b.prep
+        const sv = (base, eff) => base === eff ? `${base}` : `${base}→${eff}`
+        rows.push({ x: 10, y, text: '【准备回合】', size: 11, color: '#ffd54f', bold: true, origin: 0 })
+        y += 15
+        rows.push({ x: 16, y, text: `我方  武${sv(p.our.atk, p.our.atkEff)} 防${sv(p.our.def, p.our.defEff)} 速${sv(p.our.spd, p.our.spdEff)} · 兵${p.our.troops}`,
+          size: 10, color: '#a5d6a7', origin: 0 })
+        y += 15
+        rows.push({ x: 16, y, text: `守军  武${sv(p.foe.atk, p.foe.atkEff)} 防${sv(p.foe.def, p.foe.defEff)} 速${sv(p.foe.spd, p.foe.spdEff)} · 兵${p.foe.troops}`,
+          size: 10, color: '#ef9a9a', origin: 0 })
+        y += 15
+        rows.push({ x: 16, y,
+          text: `先手  我方速${p.our.spdEff} vs 守军速${p.foe.spdEff} → ${b.first === 'atk' ? '我方先手' : '敌方先手'}`,
+          size: 10, color: '#90caf9', origin: 0 })
+        y += 15
+        // 完整模式：额外点明兵种克制倍率（属性→实战里已体现，此处给出精确倍数）
+        if (mode === 'full' && (Math.abs(ac - 1) > 0.001 || Math.abs(dc - 1) > 0.001)) {
+          rows.push({ x: 16, y, text: `兵种克制  我方攻击×${ac.toFixed(2)} · 守军攻击×${dc.toFixed(2)}`,
+            size: 10, color: '#ffab91', origin: 0 })
+          y += 15
+        }
+        y += 4
+      }
       b.rounds.forEach((r) => {
         if (mode === 'simple') {
           rows.push({ x: 10, y, text: `第${r.round}回合   我方 ${r.atkTroops}（-${r.atkLoss}）    守军 ${r.defTroops}（-${r.defLoss}）`,
@@ -853,7 +898,8 @@ export class UIScene extends Phaser.Scene {
         } else {
           rows.push({ x: 10, y, text: `第${r.round}回合`, size: 11, color: '#ffd54f', bold: true, origin: 0 })
           y += 14
-          r.actions.forEach((a) => {
+          // 旧存档日志里的战报可能没有 actions 明细，容错避免展开完整模式时崩溃
+          ;(r.actions || []).forEach((a) => {
             const from = a.striker === 'atk' ? '我方' : '守军'
             const to = a.striker === 'atk' ? '守军' : '我方'
             rows.push({
@@ -875,7 +921,7 @@ export class UIScene extends Phaser.Scene {
     const { rows, height: contentH } = this._layoutBattleRows(battles, mode)
     const sw = this.scale.width, sh = this.scale.height
     const w = Math.min(sw - 24, 380)
-    const headerH = 96
+    const headerH = 78
     const listVH = Math.min(sh - 220, Math.max(88, contentH || 22))
     const h = Math.min(sh - 40, headerH + listVH + 46)
     const outcomeInfo = {
@@ -886,21 +932,26 @@ export class UIScene extends Phaser.Scene {
 
     this._openModal(w, h, (panel) => {
       panel.add(this.add.text(-w / 2 + 14, -h / 2 + 14, '战报详情', style(15, '#ffffff', true)).setOrigin(0, 0))
+      // 简洁/完整 切换：紧跟标题右侧（完整模式额外展示每次攻防的战力换算与兵种克制，帮助理解战斗道理）
+      const mkTab = (x, label, active, onClick) => this._button(x, -h / 2 + 22, 52, 20,
+        label, active ? COLOR.btnAmber : COLOR.btnGrey, true, onClick)
+      panel.add(mkTab(-w / 2 + 104, '简洁', mode === 'simple', () => { this._reportMode = 'simple'; this._openBattleReport(report) }))
+      panel.add(mkTab(-w / 2 + 160, '完整', mode === 'full', () => { this._reportMode = 'full'; this._openBattleReport(report) }))
       panel.add(this.add.text(w / 2 - 14, -h / 2 + 16, outcomeInfo.text,
         style(14, outcomeInfo.color, true)).setOrigin(1, 0))
-      panel.add(this.add.text(-w / 2 + 14, -h / 2 + 36,
-        `${report.names}  vs  ${report.tile.type} Lv.${report.tile.level} (${report.tile.x},${report.tile.y})`,
-        style(11, '#9e9e9e')).setOrigin(0, 0))
-      panel.add(this.add.text(-w / 2 + 14, -h / 2 + 54,
+      // 头部对阵行：我方武将 vs 守将（兵种图标+名字+等级），末尾附地块信息。
+      // 双传说地块 + 多将合击时该行可能超宽，用省略号截断保证不溢出面板（守将完整信息在下方敌将卡里）。
+      const guardRoster = battles.length
+        ? battles.map(b => `${TROOP_TYPES[b.enemy.troopType]?.icon || ''}${b.enemy.name}Lv.${b.enemy.lv}`).join('、')
+        : '空虚守军'
+      const rosterLine = `${report.names}  vs  ${guardRoster}  ·  ${report.tile.type}Lv.${report.tile.level}(${report.tile.x},${report.tile.y})`
+      const rt = this._ellipsisText(rosterLine, style(11, '#9e9e9e'), w - 28)
+      rt.setPosition(-w / 2 + 14, -h / 2 + 38).setOrigin(0, 0)
+      panel.add(rt)
+      panel.add(this.add.text(-w / 2 + 14, -h / 2 + 56,
         `我方 ${report.atkStart} → ${report.atkStart - report.atkLossTotal}（-${report.atkLossTotal}）    ` +
         `守军 ${report.defStart} → ${report.defStart - report.defLossTotal}（-${report.defLossTotal}）`,
         style(11, '#dddddd')).setOrigin(0, 0))
-
-      // 简洁/完整 切换（完整模式展示每次攻防的战力换算，帮助理解战斗道理）
-      const mkTab = (x, label, active, onClick) => this._button(x, -h / 2 + 74, 60, 20,
-        label, active ? COLOR.btnAmber : COLOR.btnGrey, true, onClick)
-      panel.add(mkTab(-w / 2 + 44, '简洁', mode === 'simple', () => { this._reportMode = 'simple'; this._openBattleReport(report) }))
-      panel.add(mkTab(-w / 2 + 108, '完整', mode === 'full', () => { this._reportMode = 'full'; this._openBattleReport(report) }))
 
       if (!rows.length) {
         panel.add(this.add.text(0, 8, '守军空虚，未经交战直接占领', style(12, '#888888')).setOrigin(0.5))
@@ -944,7 +995,7 @@ export class UIScene extends Phaser.Scene {
     this._openModal(w, h, (panel) => {
       panel.add(this.add.text(0, -h / 2 + 18, '👑', style(36)).setOrigin(0.5, 0))
       panel.add(this.add.text(0, -h / 2 + 64, '天下一统！', style(20, '#ffd54f', true)).setOrigin(0.5, 0))
-      panel.add(this.add.text(0, -h / 2 + 94, '八座城池尽入囊中，九州归一。',
+      panel.add(this.add.text(0, -h / 2 + 94, `${this.state.npcCities.length} 座城池尽入囊中，九州归一。`,
         style(13, '#dddddd')).setOrigin(0.5, 0))
       panel.add(this._button(0, h / 2 - 26, 130, 30, '继续经营', COLOR.btnAmber, true,
         () => this._closeModal()))

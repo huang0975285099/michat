@@ -15,8 +15,10 @@ import { BATTLE_MAX_ROUNDS, BATTLE_ROUND_ATTRITION } from '../GameConstants.js'
  *            atkStart:number, defStart:number}}
  */
 export function resolveBattle(attacker, defender) {
-  const atkStart = attacker.troops
-  const defStart = defender.troops
+  // 兵力一律取整入场：守军经在线/离线回复后会带小数（每回合按比例损耗取整后，
+  // 小数残余永远抹不掉 → 守军「杀不死」而假判平局，且战报显示难看的浮点数）。
+  const atkStart = Math.round(attacker.troops)
+  const defStart = Math.round(defender.troops)
   // 先手方：速度高者（平手攻方先，主动进攻占先机）
   const first = (defender.spd || 0) > (attacker.spd || 0) ? 'def' : 'atk'
 
