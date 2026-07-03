@@ -10,8 +10,8 @@ import {
   BUILDINGS, BUILDING_MAX_LEVEL, buildingUpgradeCost,
   GRANARY_YIELD_PER_LEVEL, BARRACKS_CAP_PER_LEVEL, TRAINING_EXP_PER_LEVEL, FORGE_STAT_PER_LEVEL,
   STAMINA_MAX, MARCH_STAMINA_COST, STAMINA_REGEN_PER_HOUR,
-  GENERAL_QUALITY, MAX_GENERALS, RECRUIT_COST_COIN, AWAKEN_ATK, AWAKEN_DEF,
-  TROOP_TYPES, counterMult,
+  GENERAL_QUALITY, MAX_GENERALS, RECRUIT_COST_COIN, AWAKEN_ATK, AWAKEN_DEF, AWAKEN_INT, AWAKEN_SPD,
+  TROOP_TYPES, counterMult, findGeneralTemplate, guardStat,
 } from '../GameConstants.js'
 import { GameState } from '../core/GameState.js'
 
@@ -22,7 +22,7 @@ const COLOR = {
   panelBg: 0x20261e, panelLine: 0xffd700,
   btnRed: 0xc62828, btnAmber: 0xd4a017, btnGreen: 0x2e7d32,
   btnGrey: 0x455a64, rowBg: 0x2c352a,
-  toastInfo: 0x37474f, toastWarn: 0xb26a00, toastWin: 0x2e7d32, toastLose: 0xc62828,
+  toastInfo: 0x37474f, toastWarn: 0xb26a00, toastWin: 0x2e7d32, toastLose: 0xc62828, toastDraw: 0x616161,
 }
 
 function fmt(n) {
@@ -34,6 +34,14 @@ function fmt(n) {
 
 function style(size, color = '#ffffff', bold = false) {
   return { fontFamily: FONT, fontSize: `${size}px`, color, fontStyle: bold ? 'bold' : 'normal' }
+}
+
+// 颜色调亮/调暗（factor<1 变暗，>1 变亮），用于按钮/面板渐变
+function shadeColor(color, factor) {
+  const r = Math.min(255, Math.max(0, Math.floor(((color >> 16) & 0xff) * factor)))
+  const g = Math.min(255, Math.max(0, Math.floor(((color >> 8) & 0xff) * factor)))
+  const b = Math.min(255, Math.max(0, Math.floor((color & 0xff) * factor)))
+  return (r << 16) | (g << 8) | b
 }
 
 export class UIScene extends Phaser.Scene {
@@ -56,9 +64,13 @@ export class UIScene extends Phaser.Scene {
 
     // ── 逻辑层事件 ──
     this._subs = [
-      this.state.on('battle', ({ win, general }) =>
-        this._toast(win ? `${general} 战斗胜利！` : `${general} 战败…`,
-          win ? COLOR.toastWin : COLOR.toastLose)),
+      this.state.on('battle', ({ outcome, general }) => {
+        const msg = outcome === 'win' ? `${general} 战斗胜利！`
+          : outcome === 'draw' ? `${general} 未分胜负…` : `${general} 战败…`
+        const color = outcome === 'win' ? COLOR.toastWin
+          : outcome === 'draw' ? COLOR.toastDraw : COLOR.toastLose
+        this._toast(msg, color)
+      }),
       this.state.on('territory', () => this._refreshTilePanel()),
       this.state.on('city', () => this._refreshTilePanel()),
       this.state.on('generals', () => this._refreshTilePanel()),
@@ -122,23 +134,41 @@ export class UIScene extends Phaser.Scene {
 
   _buildTopbar() {
     const w = this.scale.width
-    this.topbarBg = this.add.rectangle(0, 0, w, TOPBAR_H, 0x000000, 0.6)
-      .setOrigin(0).setDepth(DEPTH.bar)
+    this.topbarBg = this.add.graphics().setDepth(DEPTH.bar)
+    this._refreshTopbarBg(w)
     this.backBtn = this.add.text(10, TOPBAR_H / 2, '←', style(22, '#ffffff', true))
       .setOrigin(0, 0.5).setDepth(DEPTH.bar)
       .setInteractive({ useHandCursor: true })
       .on('pointerup', () => this.game.events.emit('slg-exit'))
     this.resText = this.add.text(36, TOPBAR_H / 2, '', style(13))
       .setOrigin(0, 0.5).setDepth(DEPTH.bar)
+    this.dateText = this.add.text(w / 2, TOPBAR_H / 2, '', style(13, '#ffd54f', true))
+      .setOrigin(1, 0.5).setDepth(DEPTH.bar)
     this.statusText = this.add.text(w - 8, TOPBAR_H / 2, '', style(13, '#ffd54f'))
       .setOrigin(1, 0.5).setDepth(DEPTH.bar)
+  }
+
+  _refreshTopbarBg(w) {
+    const g = this.topbarBg
+    g.clear()
+    // 渐变底（上亮下暗）
+    g.fillGradientStyle(0x1a1f16, 0x1a1f16, 0x0a0d08, 0x0a0d08, 0.92)
+    g.fillRect(0, 0, w, TOPBAR_H)
+    // 底部双金线分隔
+    g.lineStyle(1, 0xc8a045, 0.85)
+    g.lineBetween(0, TOPBAR_H - 0.5, w, TOPBAR_H - 0.5)
+    g.lineStyle(1, 0xffd700, 0.25)
+    g.lineBetween(0, TOPBAR_H - 2.5, w, TOPBAR_H - 2.5)
   }
 
   _refreshTopbar() {
     const s = this.state
     this.resText.setText(
       Object.entries(RESOURCES).map(([k, d]) => `${d.icon}${fmt(s.res[k])}`).join('  '))
+    const d = s.gameDate()
+    this.dateText.setText(`📅公元${d.year}年${d.month}月${d.day}日`)
     this.statusText.setText(`🚩${s.territoryCount()}/${s.territoryCapNow()}  ⚡${s.power()}`)
+    this.dateText.setX(this.statusText.x - this.statusText.width - 12)
   }
 
   // ── 底部按钮 ──────────────────────────────────────────────────────────────
@@ -157,9 +187,19 @@ export class UIScene extends Phaser.Scene {
     const r = 22
     const c = this.add.container(0, 0).setDepth(DEPTH.bar)
     const g = this.add.graphics()
-    g.fillStyle(0x000000, 0.55)
+    // 投影底
+    g.fillStyle(0x000000, 0.4)
+    g.fillCircle(0, 1.5, r)
+    // 渐变主体（上亮下暗）
+    g.fillGradientStyle(0x3a4434, 0x3a4434, 0x161a12, 0x161a12, 0.95)
     g.fillCircle(0, 0, r)
-    g.lineStyle(1.5, 0xffffff, 0.3)
+    // 顶部高光弧
+    g.lineStyle(2, 0xffffff, 0.25)
+    g.beginPath()
+    g.arc(0, 0, r - 2.5, Math.PI * 1.15, Math.PI * 1.85)
+    g.strokePath()
+    // 金色描边
+    g.lineStyle(1.5, 0xc8a045, 0.9)
     g.strokeCircle(0, 0, r)
     const t = this.add.text(0, 0, icon, style(20)).setOrigin(0.5)
     c.add([g, t])
@@ -237,10 +277,15 @@ export class UIScene extends Phaser.Scene {
 
     const sw = this.scale.width, sh = this.scale.height
     const w = Math.min(sw - 16, 400)
-    // 主城两行按钮（升级 + 建筑）加高；NPC 城池信息多一行（掠夺预览）加高
+    // 主城两行按钮（升级 + 建筑）加高；守将/NPC 城池面板按队伍数动态加高
     let h = 108
     if (t.isCity) h = 148
-    else if (t.type === 'npcCity' && t.owner !== 'player') h = 128
+    else if (t.type === 'npcCity' && t.owner !== 'player') h = 172
+    else if (t.owner !== 'player' && def.passable) {
+      const teams = (t.guards || []).length || 1
+      h = 112 + (teams - 1) * 24
+      if (teams > 1) h += 18
+    }
     const cx = sw / 2, cy = sh - h / 2 - 76
     const c = this.add.container(cx, cy).setDepth(DEPTH.panel)
 
@@ -266,6 +311,7 @@ export class UIScene extends Phaser.Scene {
     if (def.res === 'all') yieldText = `各类资源 +${t.level * BASE_YIELD_PER_LEVEL / 2}/小时`
     else if (def.res) yieldText = `${RESOURCES[def.res].name} +${t.level * BASE_YIELD_PER_LEVEL}/小时`
     const adjacent = this.state.isAdjacentToTerritory(t.x, t.y)
+    let isDefenderPanel = false
     if (t.isCity) {
       info = `🏯 我方主城（Lv.${this.state.cityLv}）· 领地上限 ${this.state.territoryCapNow()}`
     } else if (t.owner === 'player') {
@@ -273,14 +319,53 @@ export class UIScene extends Phaser.Scene {
     } else if (!def.passable) {
       info = '🌊 不可通行'
     } else {
-      const gt = TROOP_TYPES[t.garrisonType]
-      const gtLabel = gt ? `${gt.icon}${gt.name}军 ` : ''
-      info = `${gtLabel}守军约 ${fmt(t.garrison)} · 占领后 ${yieldText}` + (adjacent ? '' : ' · 需与领地相邻')
+      isDefenderPanel = true
+    }
+
+    if (!isDefenderPanel) {
+      c.add(this.add.text(-w / 2 + 12, -h / 2 + 38, info, style(12, '#dddddd')).setOrigin(0, 0))
+    } else {
+      // 守将面板：每队一行（基础信息 + 武/防/速/智），末尾一行收益与相邻提示
+      const teams = t.guards || []
+      const rowH = 20
+      const startY = -h / 2 + 36
+      if (teams.length === 0) {
+        c.add(this.add.text(-w / 2 + 12, startY, '守将 空虚', style(12, '#dddddd')).setOrigin(0, 0))
+      } else {
+        teams.forEach((gd, i) => {
+          const y = startY + i * rowH
+          const tpl = findGeneralTemplate(gd.id)
+          if (!tpl) {
+            c.add(this.add.text(-w / 2 + 12, y, `守军 ${fmt(gd.troops)}`, style(12, '#dddddd')).setOrigin(0, 0))
+          } else {
+            const icon = TROOP_TYPES[tpl.troopType]?.icon || ''
+            const q = tpl.quality
+            const atk = Math.round(guardStat(tpl.atk, gd.lv, q))
+            const def = Math.round(guardStat(tpl.def, gd.lv, q))
+            const spd = Math.round(guardStat(tpl.spd, gd.lv, q))
+            const int = Math.round(guardStat(tpl.int, gd.lv, q))
+            c.add(this.add.text(-w / 2 + 12, y,
+              `守将 ${icon}${tpl.name} Lv.${gd.lv} ×${fmt(gd.troops)}（武${atk} · 防${def} · 速${spd} · 智${int}）`,
+              style(12, '#dddddd')).setOrigin(0, 0))
+          }
+        })
+      }
+      const yieldY = startY + Math.max(1, teams.length) * rowH + 4
+      const yieldLine = `占领后 ${yieldText}` + (adjacent ? '' : ' · 需与领地相邻')
+      c.add(this.add.text(-w / 2 + 12, yieldY, yieldLine, style(12, '#a5d6a7')).setOrigin(0, 0))
+
+      let extraY = yieldY + 18
+      if (teams.length > 1) {
+        c.add(this.add.text(-w / 2 + 12, extraY,
+          '⚠️ 两队守军须一次远征连续击破，否则守军重整回满',
+          style(11, '#ffcc80')).setOrigin(0, 0))
+        extraY += 18
+      }
       if (t.type === 'npcCity') {
-        info += `\n💰 攻克掠夺：铜${NPC_CITY_LOOT.coin} 粮${NPC_CITY_LOOT.grain} 木${NPC_CITY_LOOT.wood} 铁${NPC_CITY_LOOT.iron} 石${NPC_CITY_LOOT.stone}`
+        const loot = `💰 攻克掠夺：铜${NPC_CITY_LOOT.coin} 粮${NPC_CITY_LOOT.grain} 木${NPC_CITY_LOOT.wood} 铁${NPC_CITY_LOOT.iron} 石${NPC_CITY_LOOT.stone}`
+        c.add(this.add.text(-w / 2 + 12, extraY, loot, style(11, '#ffe082')).setOrigin(0, 0))
       }
     }
-    c.add(this.add.text(-w / 2 + 12, -h / 2 + 38, info, style(12, '#dddddd')).setOrigin(0, 0))
 
     // 操作按钮
     const by = h / 2 - 24
@@ -323,10 +408,31 @@ export class UIScene extends Phaser.Scene {
       .setInteractive().on('pointerup', () => this._closeModal())
     const panel = this.add.container(sw / 2, sh / 2)
     const bg = this.add.graphics()
-    bg.fillStyle(COLOR.panelBg, 0.97)
+    // 深色渐变底（上亮下暗）
+    bg.fillGradientStyle(0x2a3124, 0x2a3124, 0x161a12, 0x161a12)
     bg.fillRoundedRect(-w / 2, -h / 2, w, h, 12)
-    bg.lineStyle(1, COLOR.panelLine, 0.3)
+    // 木纹横线纹理
+    bg.lineStyle(1, 0x3a4434, 0.12)
+    for (let y = -h / 2 + 10; y < h / 2 - 4; y += 6) {
+      bg.lineBetween(-w / 2 + 6, y, w / 2 - 6, y)
+    }
+    // 外金线
+    bg.lineStyle(2, 0xc8a045, 0.9)
     bg.strokeRoundedRect(-w / 2, -h / 2, w, h, 12)
+    // 内金线
+    bg.lineStyle(1, 0xffd700, 0.35)
+    bg.strokeRoundedRect(-w / 2 + 4, -h / 2 + 4, w - 8, h - 8, 8)
+    // 四角金色角饰（L 形）
+    const m = 7, L = 11
+    bg.lineStyle(2.5, 0xffd700, 0.95)
+    const corner = (cx, cy, sx, sy) => {
+      bg.lineBetween(cx, cy, cx + sx * L, cy)
+      bg.lineBetween(cx, cy, cx, cy + sy * L)
+    }
+    corner(-w / 2 + m, -h / 2 + m, 1, 1)
+    corner(w / 2 - m, -h / 2 + m, -1, 1)
+    corner(-w / 2 + m, h / 2 - m, 1, -1)
+    corner(w / 2 - m, h / 2 - m, -1, -1)
     panel.add(bg)
     // 面板本体拦截点击（不透传给遮罩关闭）
     panel.setInteractive(new Phaser.Geom.Rectangle(-w / 2, -h / 2, w, h),
@@ -425,8 +531,10 @@ export class UIScene extends Phaser.Scene {
         row.add(this.add.text(-(w - 24) / 2 + 10, -9,
           `${gt ? gt.icon : ''}${g.name}  Lv.${g.lv}`,
           style(14, enabled ? '#ffffff' : '#888888', true)).setOrigin(0, 0.5))
-        // 对本目标守军的克制关系
-        const defType = this.state.tileAt(this.sel.x, this.sel.y)?.garrisonType
+        // 对本目标守军的克制关系（以第一支有兵守将队伍的兵种为准）
+        const selTile = this.state.tileAt(this.sel.x, this.sel.y)
+        const aliveGuard = selTile?.guards?.find(gd => gd.troops > 0) || selTile?.guards?.[0]
+        const defType = aliveGuard ? findGeneralTemplate(aliveGuard.id)?.troopType : selTile?.garrisonType
         const mult = counterMult(g.troopType, defType)
         const counter = mult > 1 ? '克制' : (mult < 1 ? '被克' : '')
         row.add(this.add.text(-(w - 24) / 2 + 10, 10,
@@ -470,10 +578,10 @@ export class UIScene extends Phaser.Scene {
   // ── 弹窗：武将 ───────────────────────────────────────────────────────────
 
   _openGenerals() {
-    const gens = this.state.generals
-    const rowH = 70
+    const gens = this.state.sortedGenerals()
+    const rowH = 92
     const sw = this.scale.width, sh = this.scale.height
-    const w = Math.min(sw - 24, 400)
+    const w = Math.min(sw - 24, 440)
     const headerH = 46, footerH = 28
     const listVH = Math.min(gens.length * rowH, (sh - 100) - headerH - footerH)
     const h = headerH + listVH + footerH
@@ -491,38 +599,96 @@ export class UIScene extends Phaser.Scene {
       gens.forEach((g, i) => {
         const cy = i * rowH + rowH / 2
         const cap = this.state.troopCap(g)
-        const half = rowH - 8
+        const half = rowH - 10
         const row = this.add.container(rw / 2 + 2, cy)
         const bg = this.add.graphics()
-        bg.fillStyle(COLOR.rowBg, 0.85)
+        bg.fillStyle(COLOR.rowBg, 0.95)
         bg.fillRoundedRect(-rw / 2, -half / 2, rw, half, 8)
         row.add(bg)
         content.add(row)
 
         const qColor = (GENERAL_QUALITY[g.quality] || GENERAL_QUALITY.common).color
-        const awaken = g.awaken ? `  ✦${g.awaken}` : ''
+        const qName = (GENERAL_QUALITY[g.quality] || GENERAL_QUALITY.common).name
+        const awaken = g.awaken ? `✦${g.awaken} ` : ''
         const gt = TROOP_TYPES[g.troopType]
-        row.add(this.add.text(-rw / 2 + 10, -half / 2 + 8,
-          `${gt ? gt.icon : ''}${g.name}  Lv.${g.lv}${awaken}`, style(14, qColor, true)).setOrigin(0, 0.5))
-        row.add(this.add.text(-rw / 2 + 128, -half / 2 + 8,
-          `经验 ${Math.floor(g.exp)}/${expToLevel(g.lv)}`, style(11, '#9e9e9e')).setOrigin(0, 0.5))
-        row.add(this.add.text(-rw / 2 + 10, -half / 2 + 26,
-          `武${g.atk} 防${g.def} 速${g.spd} · 兵力 ${g.troops}/${cap}`,
-          style(11, '#bbbbbb')).setOrigin(0, 0.5))
-        // 体力条
+
+        // 布局分区：左头像 + 中间信息 + 右按钮列
+        const btnW = 62, btnGap = 8
+        const avatarSize = half - 12
+        const avatarX = -rw / 2 + 8
+        const infoLeft = avatarX + avatarSize + 10
+        const infoRight = rw / 2 - btnW - btnGap - 2
+        const infoW = infoRight - infoLeft
+
+        // ── 左侧头像 + 品质底框 ──
+        bg.lineStyle(2, qColor, 0.9)
+        bg.strokeRoundedRect(avatarX, -half / 2 + 6, avatarSize, avatarSize, 4)
+        bg.fillStyle(shadeColor(qColor, 0.35), 1)
+        bg.fillRoundedRect(avatarX + 1, -half / 2 + 7, avatarSize - 2, avatarSize - 2, 3)
+        row.add(this.add.text(avatarX + avatarSize / 2, -half / 2 + 6 + avatarSize / 2,
+          g.name[0], style(20, '#ffffff', true)).setOrigin(0.5))
+        if (gt) {
+          row.add(this.add.text(avatarX + avatarSize - 2, -half / 2 + 8, gt.icon,
+            style(11)).setOrigin(1, 0))
+        }
+
+        // ── 右上：名字 + 等级 + 品质标签 ──
+        row.add(this.add.text(infoLeft, -half / 2 + 12,
+          `${awaken}${g.name}`, style(15, qColor, true)).setOrigin(0, 0.5))
+        row.add(this.add.text(infoLeft + 70, -half / 2 + 12,
+          `Lv.${g.lv}`, style(12, '#ffd700', true)).setOrigin(0, 0.5))
+        const qtag = this.add.graphics()
+        qtag.fillStyle(qColor, 0.2)
+        qtag.fillRoundedRect(0, -9, 36, 18, 9)
+        qtag.lineStyle(1, qColor, 0.7)
+        qtag.strokeRoundedRect(0, -9, 36, 18, 9)
+        qtag.x = infoLeft + 118; qtag.y = -half / 2 + 12
+        row.add(qtag)
+        row.add(this.add.text(infoLeft + 136, -half / 2 + 12,
+          qName, style(10, qColor, true)).setOrigin(0.5, 0.5))
+
+        // ── 中上：五维属性（武/防/智/速 + 兵力）──
+        const statY = -half / 2 + 32
+        row.add(this.add.text(infoLeft, statY,
+          `武${Math.round(g.atk)}  防${Math.round(g.def)}  智${Math.round(g.int)}  速${Math.round(g.spd)}`,
+          style(11, '#e8e8e8')).setOrigin(0, 0.5))
+        row.add(this.add.text(infoLeft + infoW, statY,
+          `兵力 ${g.troops}/${cap}`, style(10, '#cccccc', true)).setOrigin(1, 0.5))
+
+        // ── 下方：经验条（数值叠在条内右侧）──
+        const expRatio = g.exp / expToLevel(g.lv)
+        row.add(this._bar(infoLeft, -half / 2 + 46, infoW, 5, expRatio, 0x4fc3f7))
+        row.add(this.add.text(infoLeft + infoW - 4, -half / 2 + 44,
+          `经验 ${Math.floor(g.exp)}/${expToLevel(g.lv)}`,
+          style(9, expRatio > 0.6 ? '#ffffff' : '#8ab4c8', true)).setOrigin(1, 0))
+
+        // ── 体力条（数值叠在条内右侧）──
         const st = g.stamina ?? STAMINA_MAX
-        row.add(this.add.text(-rw / 2 + 10, -half / 2 + 48,
-          `体力 ${Math.floor(st)}/${STAMINA_MAX}`, style(10, '#9e9e9e')).setOrigin(0, 0.5))
-        const barColor = st >= MARCH_STAMINA_COST ? 0x66bb6a : 0xef5350
-        row.add(this._bar(-rw / 2 + 78, -half / 2 + 44, rw - 190, 6, st / STAMINA_MAX, barColor))
+        const stRatio = st / STAMINA_MAX
+        const stColor = st >= MARCH_STAMINA_COST ? 0x66bb6a : 0xef5350
+        row.add(this._bar(infoLeft, -half / 2 + 58, infoW, 5, stRatio, stColor))
+        row.add(this.add.text(infoLeft + infoW - 4, -half / 2 + 56,
+          `体力 ${Math.floor(st)}/${STAMINA_MAX}`,
+          style(9, stRatio > 0.6 ? '#ffffff' : '#a0e0a0', true)).setOrigin(1, 0))
+
+        // ── 右侧按钮列：补兵 + 销毁 ──
+        const btnX = rw / 2 - btnW / 2 - 2
         const canRecruit = g.state === 'idle' && g.troops < cap
-        row.add(this._button(rw / 2 - 46, 0, 76, 26, '补满兵',
+        row.add(this._button(btnX, -14, btnW, 24, '补满兵',
           COLOR.btnGreen, canRecruit, () => {
-            // 遮罩不裁剪输入：滚出视口的行按钮不应响应（否则会抢占标题区/招募按钮的点击）
             if (!this._rowVisibleInScroll(cy)) return
             const err = this.state.recruit(g.id, cap - g.troops)
             if (err) this._toast(err, COLOR.toastWarn)
-            else this._openGenerals()   // 重建刷新
+            else this._openGenerals()
+          }))
+        row.add(this._button(btnX, 16, btnW, 24, '销毁',
+          COLOR.btnGrey, true, () => {
+            if (!this._rowVisibleInScroll(cy)) return
+            this._openConfirm(`确定销毁 ${g.name}？\n等级与觉醒将一并清除且不可恢复`, () => {
+              const res = this.state.dismissGeneral(g.id)
+              if (res.error) this._toast(res.error, COLOR.toastWarn)
+              else this._openGenerals()
+            })
           }))
       })
       panel.add(this.add.text(0, h / 2 - 16,
@@ -538,8 +704,9 @@ export class UIScene extends Phaser.Scene {
     this._openModal(w, h, (panel) => {
       panel.add(this.add.text(0, -h / 2 + 16, '🎲 招募武将', style(16, '#ffffff', true)).setOrigin(0.5, 0))
 
-      // 概率表
+      // 概率表（basic 为守将专用档，rate=0 不展示）
       const rates = Object.values(GENERAL_QUALITY)
+        .filter(q => q.rate > 0)
         .map(q => `${q.name} ${q.rate}%`).join('    ')
       panel.add(this.add.text(0, -h / 2 + 46, rates, style(11, '#9e9e9e')).setOrigin(0.5, 0))
 
@@ -555,11 +722,11 @@ export class UIScene extends Phaser.Scene {
           `${q.name} · ${res.name}`, style(20, q.color, true)).setOrigin(0.5))
       } else if (free) {
         panel.add(this.add.text(0, resY,
-          `剩余 ${this.state.freeRecruits} 次免费招募机会\n重复武将转为觉醒（武+${AWAKEN_ATK} 防+${AWAKEN_DEF}）`,
+          `剩余 ${this.state.freeRecruits} 次免费招募机会\n重复武将转为觉醒（武+${AWAKEN_ATK} 防+${AWAKEN_DEF} 智+${AWAKEN_INT} 速+${AWAKEN_SPD} ×品质成长）`,
           { ...style(12, '#ffd54f'), align: 'center' }).setOrigin(0.5))
       } else {
         panel.add(this.add.text(0, resY,
-          `消耗 ${RESOURCES.coin.icon}${RECRUIT_COST_COIN} 招募一名武将\n重复武将转为觉醒（武+${AWAKEN_ATK} 防+${AWAKEN_DEF}）`,
+          `消耗 ${RESOURCES.coin.icon}${RECRUIT_COST_COIN} 招募一名武将\n重复武将转为觉醒（武+${AWAKEN_ATK} 防+${AWAKEN_DEF} 智+${AWAKEN_INT} 速+${AWAKEN_SPD} ×品质成长）`,
           { ...style(12, '#9e9e9e'), align: 'center' }).setOrigin(0.5))
       }
 
@@ -631,7 +798,7 @@ export class UIScene extends Phaser.Scene {
       case 'granary':  return `全资源产出 +${Math.round(GRANARY_YIELD_PER_LEVEL * lv * 100)}%`
       case 'barracks': return `带兵上限 +${BARRACKS_CAP_PER_LEVEL * lv}`
       case 'training': return `在城武将练级 +${TRAINING_EXP_PER_LEVEL * lv} 经验/小时`
-      case 'forge':    return `全军战斗武力 +${FORGE_STAT_PER_LEVEL * lv}`
+      case 'forge':    return `全军全属性 +${FORGE_STAT_PER_LEVEL * lv}`
       default: return ''
     }
   }
@@ -650,8 +817,104 @@ export class UIScene extends Phaser.Scene {
       const content = this._makeScrollRegion(
         sw / 2 - w / 2 + 16, sh / 2 - h / 2 + 46, w - 32, h - 46 - 14, lines.length * rowH)
       lines.forEach((l, i) => {
-        content.add(this.add.text(0, i * rowH, l.text, style(12, '#dddddd')).setOrigin(0, 0))
+        const clickable = !!l.report
+        const t = this.add.text(0, i * rowH, clickable ? `${l.text}  ›` : l.text,
+          style(12, clickable ? '#ffd54f' : '#dddddd')).setOrigin(0, 0)
+        if (clickable) {
+          t.setInteractive({ useHandCursor: true }).on('pointerup', () => this._openBattleReport(l.report))
+        }
+        content.add(t)
       })
+    })
+  }
+
+  // ── 弹窗：战报详情（按守将队伍分段，逐回合）───────────────────────────────
+
+  /** 按 battles 数据算出每一行文字（含位置），返回 { rows, height }。
+   *  同一份 rows 既用来提前测量滚动区域高度，也用来实际渲染——避免两处公式各写一遍、
+   *  算法一走样就互相对不上（此前就因两处高度公式不同步，导致完整模式最后一回合被裁掉看不见）。 */
+  _layoutBattleRows(battles, mode) {
+    const rows = []
+    let y = 0
+    battles.forEach((b, bi) => {
+      const q = GENERAL_QUALITY[b.enemy.quality] || GENERAL_QUALITY.common
+      const ti = TROOP_TYPES[b.enemy.troopType]
+      const oc = { win: '✓胜', draw: '平', lose: '✗败' }[b.outcome]
+      rows.push({ x: 0, y: y + 4, text: `第${bi + 1}阵  ${ti ? ti.icon : ''}${b.enemy.name} Lv.${b.enemy.lv}`,
+        size: 12, color: q.color, bold: true, origin: 0 })
+      rows.push({ right: true, y: y + 4, text: `${b.first === 'atk' ? '我方先手' : '敌方先手'} · ${oc}`,
+        size: 10, color: '#9e9e9e', origin: 1 })
+      y += 26
+      b.rounds.forEach((r) => {
+        if (mode === 'simple') {
+          rows.push({ x: 10, y, text: `第${r.round}回合   我方 ${r.atkTroops}（-${r.atkLoss}）    守军 ${r.defTroops}（-${r.defLoss}）`,
+            size: 11, color: '#dddddd', origin: 0 })
+          y += 22
+        } else {
+          rows.push({ x: 10, y, text: `第${r.round}回合`, size: 11, color: '#ffd54f', bold: true, origin: 0 })
+          y += 14
+          r.actions.forEach((a) => {
+            const from = a.striker === 'atk' ? '我方' : '守军'
+            const to = a.striker === 'atk' ? '守军' : '我方'
+            rows.push({
+              x: 16, y,
+              text: `${from}→${to}  战力${Math.round(a.atkPow)} vs 防${Math.round(a.defPow)}  ×${a.ratio.toFixed(2)} → -${a.loss}`,
+              size: 10, color: '#bbbbbb', origin: 0,
+            })
+            y += 18
+          })
+        }
+      })
+    })
+    return { rows, height: y }
+  }
+
+  _openBattleReport(report) {
+    const battles = report.battles || []
+    const mode = this._reportMode || 'simple'   // 'simple' | 'full'
+    const { rows, height: contentH } = this._layoutBattleRows(battles, mode)
+    const sw = this.scale.width, sh = this.scale.height
+    const w = Math.min(sw - 24, 380)
+    const headerH = 96
+    const listVH = Math.min(sh - 220, Math.max(88, contentH || 22))
+    const h = Math.min(sh - 40, headerH + listVH + 46)
+    const outcomeInfo = {
+      win: { text: '胜利', color: '#66bb6a' },
+      draw: { text: '平局', color: '#bdbdbd' },
+      lose: { text: '战败', color: '#ef5350' },
+    }[report.outcome]
+
+    this._openModal(w, h, (panel) => {
+      panel.add(this.add.text(-w / 2 + 14, -h / 2 + 14, '战报详情', style(15, '#ffffff', true)).setOrigin(0, 0))
+      panel.add(this.add.text(w / 2 - 14, -h / 2 + 16, outcomeInfo.text,
+        style(14, outcomeInfo.color, true)).setOrigin(1, 0))
+      panel.add(this.add.text(-w / 2 + 14, -h / 2 + 36,
+        `${report.names}  vs  ${report.tile.type} Lv.${report.tile.level} (${report.tile.x},${report.tile.y})`,
+        style(11, '#9e9e9e')).setOrigin(0, 0))
+      panel.add(this.add.text(-w / 2 + 14, -h / 2 + 54,
+        `我方 ${report.atkStart} → ${report.atkStart - report.atkLossTotal}（-${report.atkLossTotal}）    ` +
+        `守军 ${report.defStart} → ${report.defStart - report.defLossTotal}（-${report.defLossTotal}）`,
+        style(11, '#dddddd')).setOrigin(0, 0))
+
+      // 简洁/完整 切换（完整模式展示每次攻防的战力换算，帮助理解战斗道理）
+      const mkTab = (x, label, active, onClick) => this._button(x, -h / 2 + 74, 60, 20,
+        label, active ? COLOR.btnAmber : COLOR.btnGrey, true, onClick)
+      panel.add(mkTab(-w / 2 + 44, '简洁', mode === 'simple', () => { this._reportMode = 'simple'; this._openBattleReport(report) }))
+      panel.add(mkTab(-w / 2 + 108, '完整', mode === 'full', () => { this._reportMode = 'full'; this._openBattleReport(report) }))
+
+      if (!rows.length) {
+        panel.add(this.add.text(0, 8, '守军空虚，未经交战直接占领', style(12, '#888888')).setOrigin(0.5))
+      } else {
+        const content = this._makeScrollRegion(
+          sw / 2 - w / 2 + 16, sh / 2 - h / 2 + headerH, w - 32, listVH, contentH)
+        rows.forEach((row) => {
+          const x = row.right ? (w - 32 - 6) : row.x
+          content.add(this.add.text(x, row.y, row.text,
+            style(row.size, row.color, row.bold)).setOrigin(row.origin, 0))
+        })
+      }
+
+      panel.add(this._button(0, h / 2 - 20, 120, 28, '返回日志', COLOR.btnGrey, true, () => this._openLog()))
     })
   }
 
@@ -705,9 +968,24 @@ export class UIScene extends Phaser.Scene {
   _button(x, y, w, h, label, color, enabled, onClick) {
     const c = this.add.container(x, y)
     const g = this.add.graphics()
-    g.fillStyle(color, enabled ? 1 : 0.35)
-    g.fillRoundedRect(-w / 2, -h / 2, w, h, h * 0.3)
-    const t = this.add.text(0, 0, label, style(13, enabled ? '#ffffff' : '#aaaaaa', true))
+    if (enabled) {
+      // 渐变填充（上亮下暗）
+      const dark = shadeColor(color, 0.6)
+      g.fillGradientStyle(color, color, dark, dark)
+      g.fillRoundedRect(-w / 2, -h / 2, w, h, h * 0.3)
+      // 顶部高光条
+      g.fillStyle(0xffffff, 0.22)
+      g.fillRoundedRect(-w / 2 + 2, -h / 2 + 1, w - 4, h * 0.38, h * 0.2)
+      // 金色描边
+      g.lineStyle(1, 0xc8a045, 0.85)
+      g.strokeRoundedRect(-w / 2 + 0.5, -h / 2 + 0.5, w - 1, h - 1, h * 0.3)
+    } else {
+      g.fillStyle(0x3a3a3a, 0.5)
+      g.fillRoundedRect(-w / 2, -h / 2, w, h, h * 0.3)
+      g.lineStyle(1, 0x555555, 0.4)
+      g.strokeRoundedRect(-w / 2 + 0.5, -h / 2 + 0.5, w - 1, h - 1, h * 0.3)
+    }
+    const t = this.add.text(0, 0, label, style(13, enabled ? '#ffffff' : '#888888', true))
       .setOrigin(0.5)
     c.add([g, t])
     if (enabled && onClick) {
@@ -724,6 +1002,11 @@ export class UIScene extends Phaser.Scene {
     const bg = this.add.graphics()
     bg.fillStyle(COLOR.rowBg, clickable ? 1 : 0.6)
     bg.fillRoundedRect(-w / 2, -h / 2, w, h, 8)
+    // 可点击行加左侧金色竖线点缀
+    if (clickable) {
+      bg.lineStyle(2, 0xc8a045, 0.6)
+      bg.lineBetween(-w / 2 + 3, -h / 2 + 5, -w / 2 + 3, h / 2 - 5)
+    }
     c.add(bg)
     if (clickable && onClick) {
       c.setInteractive(new Phaser.Geom.Rectangle(-w / 2, -h / 2, w, h),
@@ -764,11 +1047,12 @@ export class UIScene extends Phaser.Scene {
 
   _onResize() {
     const w = this.scale.width
-    this.topbarBg.setSize(w, TOPBAR_H)
+    this._refreshTopbarBg(w)
     this.statusText.setX(w - 8)
     this._layoutBottombar()
     this._rebuildMarchList()
     this._refreshTilePanel()
     this._closeModal()   // 弹窗直接关闭，避免错位
+    this._refreshTopbar() // 立即根据 statusText 宽度重新定位日期
   }
 }

@@ -1,7 +1,7 @@
 // 九州征途 - 种子化地图生成
 // 同一 seed 必然生成同一张地图，存档只需记录 seed + 领地增量，为后续联网版打基础。
 
-import { MAP_W, MAP_H, TILE_TYPES, garrisonOf, GARRISON_TYPE_POOL } from '../GameConstants.js'
+import { MAP_W, MAP_H, TILE_TYPES, TILE_MAX_LEVEL, garrisonOf, tileGuardSpec, guardPoolOf } from '../GameConstants.js'
 
 // mulberry32：轻量确定性 PRNG
 export function mulberry32(seed) {
@@ -15,11 +15,12 @@ export function mulberry32(seed) {
 }
 
 /**
- * 生成地图。返回二维数组 tiles[y][x] = { x, y, type, level, garrison, owner }
+ * 生成地图。返回二维数组 tiles[y][x] = { x, y, type, level, garrison, guards, owner }
  * - 类型：随机播种 + 两轮多数平滑，形成地貌团块
- * - 等级：按到地图中心的距离分带（外圈 1 → 中心 5），±1 抖动
+ * - 等级：按到地图中心的距离分带（外圈 1 → 中心 10），±1 抖动
  * - NPC 城池：中内圈随机放置 8 座
  * - 玩家出生点：外圈的平原，保证周边可通行
+ * - 守将：每块可通行地块按 TILE_GUARDS 规格指派 1~2 支守将队伍（种子确定）
  */
 export function generateMap(seed) {
   const rng = mulberry32(seed)
@@ -76,14 +77,15 @@ export function generateMap(seed) {
     for (let x = 0; x < MAP_W; x++) {
       const type = grid[y][x]
       const d = Math.hypot(x - cx, y - cy) / maxDist  // 0 中心 → 1 边缘
-      let level = Math.min(5, Math.max(1, Math.ceil((1 - d) * 5)))
+      let level = Math.min(TILE_MAX_LEVEL, Math.max(1, Math.ceil((1 - d) * TILE_MAX_LEVEL)))
       const j = rng()
       if (j < 0.2 && level > 1) level--
-      else if (j > 0.85 && level < 5) level++
+      else if (j > 0.85 && level < TILE_MAX_LEVEL) level++
       row.push({
         x, y, type, level,
         garrison: TILE_TYPES[type].passable ? garrisonOf(level, type) : 0,
-        garrisonType: null,   // 见步骤 6，用独立 rng 赋值
+        guards: [],           // 见步骤 6，用独立 rng 指派守将
+        garrisonType: null,   // 首支守将队伍的兵种（供 UI 克制提示）
         owner: null,
       })
     }
@@ -124,14 +126,24 @@ export function generateMap(seed) {
   }
   if (!spawn) spawn = { x: 4, y: 4 }   // 兜底（理论上不会触发）
 
-  // 6) 守军兵种：用独立 rng（不扰动上面地形/城池/出生点的随机流，保证既有地图不变）
-  const rng2 = mulberry32((seed ^ 0x9e3779b9) >>> 0)
+  // 6) 守将指派：用独立 rng（不扰动上面地形/城池/出生点的随机流，保证既有地图不变）。
+  //    同一 seed 守将阵容确定，存档无需记录守将模板。
+  const rng2 = mulberry32((seed ^ 0x85ebca6b) >>> 0)
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
       const t = tiles[y][x]
-      t.garrisonType = TILE_TYPES[t.type].passable
-        ? GARRISON_TYPE_POOL[Math.floor(rng2() * GARRISON_TYPE_POOL.length)]
-        : null
+      if (!TILE_TYPES[t.type].passable) continue
+      const spec = tileGuardSpec(t.level, t.type)
+      const pool = guardPoolOf(spec.pool)
+      const perTeam = garrisonOf(t.level, t.type) / spec.teams
+      const picked = []
+      while (picked.length < spec.teams) {
+        const tpl = pool[Math.floor(rng2() * pool.length)]
+        if (picked.some(p => p.id === tpl.id)) continue   // 两队守将互不相同
+        picked.push(tpl)
+      }
+      t.guards = picked.map(tpl => ({ id: tpl.id, lv: spec.guardLv, troops: perTeam }))
+      t.garrisonType = picked[0].troopType
     }
   }
 

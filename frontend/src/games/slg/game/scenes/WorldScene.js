@@ -3,13 +3,21 @@
 // 贴图全部运行时用 Graphics 生成（MVP 无美术资源）。
 
 import Phaser from 'phaser'
-import { MAP_W, MAP_H, TILE_SIZE, TILE_TYPES } from '../GameConstants.js'
+import { MAP_W, MAP_H, TILE_SIZE, TILE_TYPES, TILE_MAX_LEVEL } from '../GameConstants.js'
 
 const T = TILE_SIZE
 const CLICK_TOLERANCE = 8      // px：区分点击与拖拽
 const MIN_ZOOM = 0.4
 const MAX_ZOOM = 2.5
 const AUTOSAVE_MS = 10000
+
+// 颜色调亮/调暗工具（factor<1 变暗，>1 变亮），用于地块与面板的渐变立体感
+function shade(color, factor) {
+  const r = Math.min(255, Math.max(0, Math.floor(((color >> 16) & 0xff) * factor)))
+  const g = Math.min(255, Math.max(0, Math.floor(((color >> 8) & 0xff) * factor)))
+  const b = Math.min(255, Math.max(0, Math.floor((color & 0xff) * factor)))
+  return (r << 16) | (g << 8) | b
+}
 
 export class WorldScene extends Phaser.Scene {
   constructor() { super('World') }
@@ -35,7 +43,7 @@ export class WorldScene extends Phaser.Scene {
     // 订阅逻辑层事件
     this._subs = [
       this.state.on('territory', ({ x, y }) => { this._refreshTile(x, y); this._drawTerritory() }),
-      this.state.on('battle', ({ tile, win }) => this._battleFlash(tile, win)),
+      this.state.on('battle', ({ tile, outcome }) => this._battleFlash(tile, outcome)),
       this.state.on('city', () => this._drawTerritory()),
     ]
     this._saveTimer = 0
@@ -66,6 +74,7 @@ export class WorldScene extends Phaser.Scene {
   update(_, delta) {
     this.state.tick(delta)
     this._drawMarches()
+    this._drawSelection()   // 每帧重画，实现选中框脉冲发光
     this._saveTimer += delta
     if (this._saveTimer >= AUTOSAVE_MS) {
       this._saveTimer = 0
@@ -77,7 +86,7 @@ export class WorldScene extends Phaser.Scene {
 
   _buildTextures() {
     for (const [type, def] of Object.entries(TILE_TYPES)) {
-      for (let lv = 1; lv <= 5; lv++) {
+      for (let lv = 1; lv <= TILE_MAX_LEVEL; lv++) {
         const key = `t_${type}_${lv}`
         if (this.textures.exists(key)) continue
         const g = this.make.graphics({ add: false })
@@ -92,20 +101,44 @@ export class WorldScene extends Phaser.Scene {
     if (!this.textures.exists('t_playerCity')) {
       const g = this.make.graphics({ add: false })
       this._drawTileBase(g, 0xd4a017)
-      g.fillStyle(0x8a5a00, 1)
-      g.fillRect(T * 0.2, T * 0.35, T * 0.6, T * 0.45)   // 城体
-      g.fillStyle(0xffe08a, 1)
-      g.fillRect(T * 0.42, T * 0.15, T * 0.16, T * 0.25) // 城楼
+      // 投影底座
+      g.fillStyle(0x000000, 0.35)
+      g.fillEllipse(T * 0.5, T * 0.84, T * 0.72, T * 0.16)
+      // 城墙（上亮下暗渐变）
+      g.fillGradientStyle(0xa8741e, 0xa8741e, 0x6e4a00, 0x6e4a00)
+      g.fillRect(T * 0.2, T * 0.35, T * 0.6, T * 0.45)
+      // 城垛
+      g.fillStyle(0x5a3800, 1)
+      g.fillRect(T * 0.2, T * 0.3, T * 0.12, T * 0.08)
+      g.fillRect(T * 0.44, T * 0.3, T * 0.12, T * 0.08)
+      g.fillRect(T * 0.68, T * 0.3, T * 0.12, T * 0.08)
+      // 城楼
+      g.fillGradientStyle(0xffe08a, 0xffe08a, 0xc89540, 0xc89540)
+      g.fillRect(T * 0.42, T * 0.15, T * 0.16, T * 0.2)
+      // 城楼顶高光
+      g.fillStyle(0xfff5c0, 0.7)
+      g.fillRect(T * 0.42, T * 0.15, T * 0.16, T * 0.04)
+      // 旗杆与旗帜
+      g.lineStyle(1.5, 0x3a2a1a, 1)
+      g.lineBetween(T * 0.5, T * 0.02, T * 0.5, T * 0.16)
       g.fillStyle(0xd43a3a, 1)
-      g.fillTriangle(T * 0.5, T * 0.02, T * 0.5, T * 0.16, T * 0.72, T * 0.09) // 旗
+      g.fillTriangle(T * 0.5, T * 0.03, T * 0.5, T * 0.13, T * 0.72, T * 0.08)
       g.generateTexture('t_playerCity', T, T)
       g.destroy()
     }
   }
 
   _drawTileBase(g, color) {
-    g.fillStyle(color, 1)
+    const dark = shade(color, 0.82)
+    const light = shade(color, 1.18)
+    // 上亮下暗渐变，模拟顶光（底部仅轻微压暗，保证整体明亮可读）
+    g.fillGradientStyle(color, color, dark, dark)
     g.fillRect(0, 0, T, T)
+    // 顶部/左侧内高光
+    g.lineStyle(1, light, 0.55)
+    g.lineBetween(1, 1, T - 1, 1)
+    g.lineBetween(1, 1, 1, T - 1)
+    // 外边缘暗线（减淡，避免压暗地块）
     g.lineStyle(1, 0x000000, 0.18)
     g.strokeRect(0.5, 0.5, T - 1, T - 1)
   }
@@ -113,57 +146,98 @@ export class WorldScene extends Phaser.Scene {
   _drawMotif(g, type) {
     switch (type) {
       case 'plain':
-        g.fillStyle(0xffffff, 0.15)
-        g.fillCircle(T * 0.3, T * 0.4, 2); g.fillCircle(T * 0.65, T * 0.6, 2)
+        // 草丛暗底 + 亮尖
+        g.fillStyle(0xffffff, 0.1)
+        g.fillCircle(T * 0.3, T * 0.4, 3); g.fillCircle(T * 0.65, T * 0.6, 3)
+        g.fillStyle(0xffffff, 0.25)
+        g.fillTriangle(T * 0.28, T * 0.42, T * 0.3, T * 0.34, T * 0.33, T * 0.42)
+        g.fillTriangle(T * 0.63, T * 0.62, T * 0.65, T * 0.54, T * 0.68, T * 0.62)
         break
       case 'farm':
-        g.lineStyle(2, 0x8a7a2a, 0.55)
+        // 垄沟暗线 + 亮线模拟起伏
         for (let i = 1; i <= 3; i++) {
-          g.lineBetween(T * 0.15, T * i / 4, T * 0.85, T * i / 4)
+          const y = T * i / 4
+          g.lineStyle(2, 0x5a4a1a, 0.6)
+          g.lineBetween(T * 0.15, y + 1, T * 0.85, y + 1)
+          g.lineStyle(1.5, 0xc8a838, 0.5)
+          g.lineBetween(T * 0.15, y - 1, T * 0.85, y - 1)
         }
         break
-      case 'forest':
-        g.fillStyle(0x2f5426, 1)
-        g.fillTriangle(T * 0.3, T * 0.65, T * 0.15, T * 0.85, T * 0.45, T * 0.85)
-        g.fillTriangle(T * 0.62, T * 0.4, T * 0.45, T * 0.68, T * 0.79, T * 0.68)
-        g.fillTriangle(T * 0.42, T * 0.22, T * 0.28, T * 0.5, T * 0.56, T * 0.5)
+      case 'forest': {
+        // 树冠：投影 + 暗底 + 亮顶 + 高光
+        const trees = [
+          { cx: T * 0.3, cy: T * 0.75, r: T * 0.15 },
+          { cx: T * 0.62, cy: T * 0.58, r: T * 0.17 },
+          { cx: T * 0.42, cy: T * 0.4, r: T * 0.13 },
+        ]
+        for (const t of trees) {
+          g.fillStyle(0x000000, 0.25)
+          g.fillEllipse(t.cx, t.cy + t.r * 0.7, t.r * 1.8, t.r * 0.5)
+          g.fillStyle(0x1f3a18, 1)
+          g.fillCircle(t.cx, t.cy, t.r)
+          g.fillStyle(0x4a7a35, 1)
+          g.fillCircle(t.cx - t.r * 0.25, t.cy - t.r * 0.25, t.r * 0.7)
+          g.fillStyle(0x7aa84f, 0.6)
+          g.fillCircle(t.cx - t.r * 0.35, t.cy - t.r * 0.4, t.r * 0.3)
+        }
         break
+      }
       case 'hill':
-        g.lineStyle(2, 0x7a6a4e, 0.8)
-        g.beginPath()
-        g.arc(T * 0.35, T * 0.65, T * 0.18, Math.PI, 0)
-        g.strokePath()
-        g.beginPath()
-        g.arc(T * 0.68, T * 0.72, T * 0.13, Math.PI, 0)
-        g.strokePath()
+        // 等高线 + 下半圆阴影
+        g.lineStyle(2, 0x6a5a3e, 0.9)
+        g.beginPath(); g.arc(T * 0.35, T * 0.65, T * 0.18, Math.PI, 0); g.strokePath()
+        g.beginPath(); g.arc(T * 0.68, T * 0.72, T * 0.13, Math.PI, 0); g.strokePath()
+        g.fillStyle(0x000000, 0.18)
+        g.beginPath(); g.arc(T * 0.35, T * 0.65, T * 0.18, 0, Math.PI); g.fillPath()
+        g.beginPath(); g.arc(T * 0.68, T * 0.72, T * 0.13, 0, Math.PI); g.fillPath()
         break
       case 'mountain':
-        g.fillStyle(0x6b625a, 1)
-        g.fillTriangle(T * 0.5, T * 0.18, T * 0.2, T * 0.8, T * 0.8, T * 0.8)
-        g.fillStyle(0xffffff, 0.85)
+        // 山体明暗面 + 雪顶
+        g.fillStyle(0x4a423a, 1)
+        g.fillTriangle(T * 0.5, T * 0.18, T * 0.2, T * 0.8, T * 0.5, T * 0.8)
+        g.fillStyle(0x7a7068, 1)
+        g.fillTriangle(T * 0.5, T * 0.18, T * 0.5, T * 0.8, T * 0.8, T * 0.8)
+        g.fillStyle(0xffffff, 0.9)
         g.fillTriangle(T * 0.5, T * 0.18, T * 0.42, T * 0.36, T * 0.58, T * 0.36)
         break
       case 'lake':
-        g.lineStyle(2, 0xffffff, 0.35)
+        // 水波 + 反光高光
+        g.lineStyle(2, 0xffffff, 0.4)
         g.beginPath(); g.arc(T * 0.35, T * 0.45, T * 0.12, Math.PI * 0.1, Math.PI * 0.9); g.strokePath()
         g.beginPath(); g.arc(T * 0.65, T * 0.65, T * 0.12, Math.PI * 0.1, Math.PI * 0.9); g.strokePath()
+        g.fillStyle(0xffffff, 0.7)
+        g.fillCircle(T * 0.32, T * 0.38, 1.5)
+        g.fillCircle(T * 0.62, T * 0.58, 1.5)
         break
       case 'npcCity':
-        g.fillStyle(0x7a3a2a, 1)
+        // 城墙渐变 + 城垛 + 城楼 + 城门阴影
+        g.fillGradientStyle(0x8a3a2a, 0x8a3a2a, 0x5a2018, 0x5a2018)
         g.fillRect(T * 0.2, T * 0.3, T * 0.6, T * 0.5)
-        g.fillStyle(0xd9a066, 1)
-        g.fillRect(T * 0.28, T * 0.2, T * 0.12, T * 0.15)
-        g.fillRect(T * 0.6, T * 0.2, T * 0.12, T * 0.15)
-        g.fillStyle(0x3a1a12, 1)
-        g.fillRect(T * 0.44, T * 0.55, T * 0.12, T * 0.25)   // 城门
+        g.fillStyle(0xa85040, 0.8)
+        g.fillRect(T * 0.2, T * 0.3, T * 0.6, T * 0.04)
+        g.fillStyle(0x6a2820, 1)
+        g.fillRect(T * 0.2, T * 0.26, T * 0.1, T * 0.06)
+        g.fillRect(T * 0.45, T * 0.26, T * 0.1, T * 0.06)
+        g.fillRect(T * 0.7, T * 0.26, T * 0.1, T * 0.06)
+        g.fillGradientStyle(0xe8b070, 0xe8b070, 0xb07840, 0xb07840)
+        g.fillRect(T * 0.28, T * 0.2, T * 0.12, T * 0.12)
+        g.fillRect(T * 0.6, T * 0.2, T * 0.12, T * 0.12)
+        g.fillStyle(0x2a1008, 1)
+        g.fillRoundedRect(T * 0.44, T * 0.55, T * 0.12, T * 0.25, 4)
         break
     }
   }
 
   _drawLevelPips(g, lv) {
-    g.fillStyle(0xffffff, 0.9)
+    // 1~10 级：每行最多 5 个点，超出折到上一行（48px 地块放不下 10 个横排点）
     for (let i = 0; i < lv; i++) {
-      g.fillCircle(T - 6 - i * 7, T - 6, 2.4)
+      const col = i % 5, row = Math.floor(i / 5)
+      const px = T - 6 - col * 7
+      const py = T - 6 - row * 7
+      g.fillStyle(0x000000, 0.5)
+      g.fillCircle(px, py, 3)
+      g.fillStyle(0xffd700, 1)
+      g.fillCircle(px, py, 2.4)
     }
   }
 
@@ -227,6 +301,18 @@ export class WorldScene extends Phaser.Scene {
         (this.state.now - m.departAt) / Math.max(m.arriveAt - m.departAt, 0.001), 0, 1)
       const seg = cells.length - 1
       const { px, py } = this._pointAlong(cells, p, seg, c)
+      // 拖尾：沿路径回溯几个递减光点
+      for (let k = 1; k <= 4; k++) {
+        const tp = p - k * 0.025
+        if (tp <= 0) break
+        const { px: tx, py: ty } = this._pointAlong(cells, tp, seg, c)
+        g.fillStyle(color, (1 - k / 4) * 0.45)
+        g.fillCircle(tx, ty, 5 - k)
+      }
+      // 外发光晕
+      g.fillStyle(color, 0.35)
+      g.fillCircle(px, py, 9)
+      // 主光点
       g.fillStyle(color, 1)
       g.fillCircle(px, py, 6)
       g.fillStyle(0xffffff, 1)
@@ -249,19 +335,39 @@ export class WorldScene extends Phaser.Scene {
     g.clear()
     if (!this.selected) return
     const { x, y } = this.selected
-    g.lineStyle(3, 0xffffff, 1)
-    g.strokeRect(x * T + 2, y * T + 2, T - 4, T - 4)
+    // 脉冲：1.2 秒周期
+    const t = (this.time.now % 1200) / 1200
+    const pulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 2)
+    // 外发光环（呼吸）
+    g.lineStyle(2 + pulse * 3, 0xffd700, 0.25 + pulse * 0.45)
+    g.strokeRect(x * T + 0.5, y * T + 0.5, T - 1, T - 1)
+    // 内框（静态亮线）
+    g.lineStyle(2, 0xffffff, 0.9)
+    g.strokeRect(x * T + 3, y * T + 3, T - 6, T - 6)
   }
 
-  _battleFlash(tile, win) {
-    const r = this.add.rectangle(
-      tile.x * T + T / 2, tile.y * T + T / 2, T, T,
-      win ? 0xffd700 : 0xff3030, 0.75,
-    ).setDepth(40)
+  _battleFlash(tile, outcome) {
+    const cx = tile.x * T + T / 2, cy = tile.y * T + T / 2
+    const color = outcome === 'win' ? 0xffd700 : outcome === 'draw' ? 0x9e9e9e : 0xff3030
+    // 中心光圈扩散
+    const ring = this.add.circle(cx, cy, T * 0.3, color, 0.85).setDepth(40)
     this.tweens.add({
-      targets: r, alpha: 0, scale: 1.6, duration: 600,
-      onComplete: () => r.destroy(),
+      targets: ring, alpha: 0, scale: 2.6, duration: 700,
+      ease: 'Sine.easeOut', onComplete: () => ring.destroy(),
     })
+    // 碎片飞溅
+    const n = outcome === 'win' ? 10 : 7
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + Math.random() * 0.3
+      const shard = this.add.circle(cx, cy, 2.5, color, 1).setDepth(41)
+      const dist = T * 0.5 + Math.random() * T * 0.35
+      this.tweens.add({
+        targets: shard,
+        x: cx + Math.cos(a) * dist, y: cy + Math.sin(a) * dist,
+        alpha: 0, scale: 0.3, duration: 450 + Math.random() * 250,
+        ease: 'Sine.easeOut', onComplete: () => shard.destroy(),
+      })
+    }
   }
 
   // ── 相机与输入 ────────────────────────────────────────────────────────────

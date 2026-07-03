@@ -4,12 +4,14 @@
 
 import {
   MAP_W, MAP_H, TILE_TYPES, RESOURCES, TIME_SCALE, OFFLINE_CAP_SECONDS,
+  GAME_START_YEAR, GAME_SECONDS_PER_YEAR, GAME_SECONDS_PER_MONTH, GAME_SECONDS_PER_DAY,
   BASE_YIELD_PER_LEVEL, COIN_YIELD_PER_LEVEL,
-  garrisonOf, garrisonStats,
+  garrisonOf, guardStat,
   CITY_MAX_LEVEL, territoryCap, cityUpgradeCost,
   troopCapOf, expToLevel, GENERAL_MAX_LEVEL,
   GENERAL_QUALITY, RECRUITABLE_GENERALS, findGeneralTemplate,
-  RECRUIT_COST_COIN, MAX_GENERALS, AWAKEN_ATK, AWAKEN_DEF, FREE_RECRUIT_COUNT,
+  RECRUIT_COST_COIN, MAX_GENERALS, AWAKEN_ATK, AWAKEN_DEF, AWAKEN_INT, AWAKEN_SPD, FREE_RECRUIT_COUNT,
+  growthOf, LEVELUP_ATK, LEVELUP_DEF, LEVELUP_INT, LEVELUP_SPD,
   RECRUIT_GRAIN_PER_TROOP, tileMarchSeconds, MARCH_REF_SPEED, TROOP_TYPES, counterMult,
   NPC_CITY_LOOT, GARRISON_REGEN_PER_HOUR,
   BUILDINGS, BUILDING_MAX_LEVEL, buildingUpgradeCost,
@@ -40,7 +42,7 @@ function makeGeneral(tpl, starter = false) {
   return {
     id: tpl.id, name: tpl.name, quality: tpl.quality || 'common',
     troopType: tpl.troopType || 'spear', faction: tpl.faction || null,
-    atk: tpl.atk, def: tpl.def, spd: tpl.spd,
+    atk: tpl.atk, def: tpl.def, spd: tpl.spd, int: tpl.int,
     lv: 1, exp: 0, troops: starter ? INITIAL_TROOPS : 0, state: 'idle',
     stamina: STAMINA_MAX, awaken: 0,
   }
@@ -147,14 +149,19 @@ export class GameState extends Emitter {
     }
   }
 
-  /** 被挫伤的未占领地块，守军按每游戏小时 10% 上限缓慢回复 */
+  /** 被挫伤的未占领地块，守将各队按每游戏小时 10% 队伍上限缓慢回复 */
   _regenGarrisons(gameSeconds) {
     if (!this.damaged.size) return
     for (const t of this.damaged) {
       if (t.owner === 'player') { this.damaged.delete(t); continue }
-      const max = garrisonOf(t.level, t.type)
-      t.garrison = Math.min(max, t.garrison + max * GARRISON_REGEN_PER_HOUR * gameSeconds / 3600)
-      if (t.garrison >= max) this.damaged.delete(t)
+      const teamMax = garrisonOf(t.level, t.type) / (t.guards.length || 1)
+      let allFull = true
+      for (const gd of t.guards) {
+        gd.troops = Math.min(teamMax, gd.troops + teamMax * GARRISON_REGEN_PER_HOUR * gameSeconds / 3600)
+        if (gd.troops < teamMax) allFull = false
+      }
+      t.garrison = t.guards.reduce((s, gd) => s + gd.troops, 0)
+      if (allFull) this.damaged.delete(t)
     }
   }
 
@@ -175,6 +182,15 @@ export class GameState extends Emitter {
   territoryCapNow() { return territoryCap(this.cityLv) }
   /** 势力值 = 领地等级总和 × 10 */
   power() { return this.ownedTiles().reduce((s, t) => s + t.level, 0) * 10 }
+
+  /** 游戏内历法：{ year, month, day }，从公元 1 年 1 月 1 日起算（仅用于展示） */
+  gameDate() {
+    const y = Math.floor(this.now / GAME_SECONDS_PER_YEAR)
+    const monthSec = this.now % GAME_SECONDS_PER_YEAR
+    const m = Math.floor(monthSec / GAME_SECONDS_PER_MONTH)
+    const d = Math.floor((monthSec % GAME_SECONDS_PER_MONTH) / GAME_SECONDS_PER_DAY)
+    return { year: GAME_START_YEAR + y, month: m + 1, day: d + 1 }
+  }
 
   /** 是否与己方领地八向相邻（出征前提） */
   isAdjacentToTerritory(x, y) {
@@ -224,9 +240,24 @@ export class GameState extends Emitter {
   }
 
   /**
+   * 遣散武将，无视等级、觉醒、状态。
+   * @returns {{success:true} | {error:string}}
+   */
+  dismissGeneral(id) {
+    const idx = this.generals.findIndex(g => g.id === id)
+    if (idx === -1) return { error: '武将不存在' }
+    const g = this.generals[idx]
+    if (g.state === 'marching') return { error: `${g.name} 正在行军中，无法遣散` }
+    this.generals.splice(idx, 1)
+    this._pushLog(`🗑️ 遣散 ${g.name}`)
+    this.emit('generals', this.generals)
+    return { success: true }
+  }
+
+  /**
    * 铜币招募一名武将。返回 { error } 或 { type:'new'|'awaken', name, quality, general }。
    * - 抽到未拥有且阵容未满 → 入列新武将
-   * - 抽到已拥有 → 该武将觉醒（+武/+防）
+   * - 抽到已拥有 → 该武将觉醒（+武/+防/+智/+速）
    * - 阵容已满且抽到新武将 → 转为觉醒一名同池随机已有武将（不浪费）
    */
   recruitGeneral() {
@@ -252,8 +283,8 @@ export class GameState extends Emitter {
     } else {
       // 觉醒目标：已拥有则本人，否则（阵容满）随机一名已有武将
       const target = owned || this.generals[Math.floor(Math.random() * this.generals.length)]
-      this._awaken(target)
-      this._pushLog(`✨ ${target.name} 觉醒（武+${AWAKEN_ATK} 防+${AWAKEN_DEF}，第 ${target.awaken} 次）`)
+      const gain = this._awaken(target)
+      this._pushLog(`✨ ${target.name} 觉醒（武+${gain.atk} 防+${gain.def}，第 ${target.awaken} 次）`)
       result = { type: 'awaken', name: target.name, quality: target.quality, general: target }
     }
     this.emit('resources', this.res)
@@ -261,10 +292,29 @@ export class GameState extends Emitter {
     return result
   }
 
+  /** 觉醒：属性提升 = 基础值 × 品质成长值。返回本次实际增量（供日志展示） */
   _awaken(g) {
     g.awaken = (g.awaken || 0) + 1
-    g.atk += AWAKEN_ATK
-    g.def += AWAKEN_DEF
+    const gr = growthOf(g.quality)
+    const gain = {
+      atk: Math.round(AWAKEN_ATK * gr * 10) / 10,
+      def: Math.round(AWAKEN_DEF * gr * 10) / 10,
+      int: Math.round(AWAKEN_INT * gr * 10) / 10,
+      spd: Math.round(AWAKEN_SPD * gr * 10) / 10,
+    }
+    g.atk += gain.atk
+    g.def += gain.def
+    g.int += gain.int
+    g.spd += gain.spd
+    return gain
+  }
+
+  /** 按等级降序排列武将（等级相同时按觉醒次数降序） */
+  sortedGenerals() {
+    return [...this.generals].sort((a, b) => {
+      if (b.lv !== a.lv) return b.lv - a.lv
+      return (b.awaken || 0) - (a.awaken || 0)
+    })
   }
 
   // ── 主城 ──────────────────────────────────────────────────────────────────
@@ -331,7 +381,7 @@ export class GameState extends Emitter {
       if (g.state !== 'idle') return `${g.name} 已在行军中`
       if (g.troops <= 0) return `${g.name} 没有兵力，请先征兵`
       if ((g.stamina ?? STAMINA_MAX) < MARCH_STAMINA_COST) {
-        const wait = Math.ceil((MARCH_STAMINA_COST - g.stamina) / STAMINA_REGEN_PER_HOUR)
+        const wait = Math.ceil((MARCH_STAMINA_COST - (g.stamina ?? STAMINA_MAX)) / STAMINA_REGEN_PER_HOUR)
         return `${g.name} 体力不足，约 ${wait} 分钟后可再出征`
       }
       gens.push(g)
@@ -388,23 +438,68 @@ export class GameState extends Emitter {
     const t = this.tileAt(m.to.x, m.to.y)
     const names = gens.map(g => g.name).join('、')
 
-    // 合兵：总兵力 = 各队之和，武力 = 按兵力加权平均（含等级加成 + 兵种克制倍率）+ 铁匠坊全局加成
-    // 克制按「各武将兵种 vs 该地块守军兵种」逐将计算，再按出兵比例加权 → 混编部队自然融合
+    // 行军期间地块已被己方先占领（如另一支队抢先攻下）：不再战斗/占领/掠夺，直接折返
+    if (t && t.owner === 'player') {
+      this._pushLog(`ℹ️ ${names} 抵达时 ${TILE_TYPES[t.type].name} (${t.x},${t.y}) 已是己方领地，未交战折返`)
+      const steps = (m.path?.length ?? 1) - 1
+      const minSpd = Math.min(...gens.map(g => this._marchSpeed(g)))
+      m.phase = 'back'
+      m.departAt = this.now
+      m.arriveAt = this.now + steps * tileMarchSeconds(minSpd)
+      return
+    }
+
+    // 攻方军团：兵力 = 各将之和；武/防/速按出兵比例加权（含等级战时加成 +(lv-1)*2）+ 铁匠坊全属性；
+    // 速度 = 全队最慢（合击迁就短板）。克制随敌将兵种逐场重算，见下方循环。
     const troopsBefore = gens.map(g => g.troops)
     const total = troopsBefore.reduce((s, n) => s + n, 0)
+    const shares = troopsBefore.map(n => n / total)
     const forgeBonus = FORGE_STAT_PER_LEVEL * this.buildings.forge
-    const avgAtk = gens.reduce((s, g, i) =>
-      s + troopsBefore[i] * (g.atk + (g.lv - 1) * 2) * counterMult(g.troopType, t.garrisonType), 0)
-      / total + forgeBonus
-    const stats = garrisonStats(t.level)
-    const result = resolveBattle(
-      { atk: avgAtk, troops: total },
-      { def: stats.def, troops: t.garrison },
-    )
+    const effAtk = g => g.atk + (g.lv - 1) * LEVELUP_ATK * growthOf(g.quality) + forgeBonus
+    const effDef = g => g.def + (g.lv - 1) * LEVELUP_DEF * growthOf(g.quality) + forgeBonus
+    const effInt = g => g.int + forgeBonus
+    const effSpd = g => g.spd + forgeBonus
+    const armyDef = gens.reduce((s, g, i) => s + shares[i] * effDef(g), 0)
+    const armySpd = Math.min(...gens.map(effSpd))
 
-    // 伤亡与经验按出兵比例分摊
-    const losses = troopsBefore.map(n => Math.floor(result.atkLoss * n / total))
-    let left = result.atkLoss - losses.reduce((s, n) => s + n, 0)
+    // 多队连战：按守将队伍顺序逐场结算，攻方兵力跨场继承；某场非胜立即中止
+    const battles = []
+    let remaining = total
+    let outcome = 'win'
+    let totalAtkLoss = 0
+    let totalExp = 0
+    for (const gd of t.guards) {
+      if (gd.troops <= 0) continue
+      const tpl = findGeneralTemplate(gd.id)
+      if (!tpl) continue
+      // 攻方武力对该敌将兵种的克制逐将加权；守将对攻方混编的克制按出兵比例加权（方向互反）
+      const armyAtk = gens.reduce((s, g, i) =>
+        s + shares[i] * effAtk(g) * counterMult(g.troopType, tpl.troopType), 0)
+      const defCounter = gens.reduce((s, g, i) => s + shares[i] * counterMult(tpl.troopType, g.troopType), 0)
+      const armyInt = gens.reduce((s, g, i) => s + shares[i] * effInt(g), 0)
+      const r = resolveBattle(
+        { atk: armyAtk, def: armyDef, int: armyInt, spd: armySpd, troops: remaining },
+        {
+          atk: guardStat(tpl.atk, gd.lv, tpl.quality) * defCounter,
+          def: guardStat(tpl.def, gd.lv, tpl.quality),
+          spd: tpl.spd, troops: gd.troops,
+        },
+      )
+      battles.push({
+        enemy: { name: tpl.name, quality: tpl.quality, lv: gd.lv, troopType: tpl.troopType },
+        outcome: r.outcome, first: r.first, rounds: r.rounds,
+        atkStart: r.atkStart, defStart: r.defStart, atkLoss: r.atkLoss, defLoss: r.defLoss,
+      })
+      remaining -= r.atkLoss
+      totalAtkLoss += r.atkLoss
+      totalExp += r.exp
+      gd.troops -= r.defLoss
+      if (r.outcome !== 'win') { outcome = r.outcome; break }
+    }
+
+    // 伤亡与经验按出兵比例分摊（多场累计后一次分摊）
+    const losses = troopsBefore.map(n => Math.floor(totalAtkLoss * n / total))
+    let left = totalAtkLoss - losses.reduce((s, n) => s + n, 0)
     for (let i = 0; left > 0 && i < gens.length; i++) {
       const room = troopsBefore[i] - losses[i]
       const add = Math.min(room, left)
@@ -413,33 +508,55 @@ export class GameState extends Emitter {
     }
     gens.forEach((g, i) => {
       g.troops -= losses[i]
-      this._gainExp(g, Math.round(result.exp * troopsBefore[i] / total))
+      this._gainExp(g, Math.round(totalExp * troopsBefore[i] / total))
     })
 
-    t.garrison -= result.defLoss
-    // 守军被挫伤但未被占领：进入回复列表
-    if (!result.win && t.garrison < garrisonOf(t.level, t.type)) this.damaged.add(t)
+    const multiTeam = t.guards.length > 1
+    if (outcome !== 'win' && multiTeam) {
+      // 多队地块未一次全灭：守军全部重整回满（不进回复列表）
+      const teamMax = garrisonOf(t.level, t.type) / t.guards.length
+      for (const gd of t.guards) gd.troops = teamMax
+      this.damaged.delete(t)
+    } else if (outcome !== 'win') {
+      // 单队地块：挫伤保留，随时间回复
+      this.damaged.add(t)
+    }
+    t.garrison = t.guards.reduce((s, gd) => s + gd.troops, 0)
 
     const typeName = TILE_TYPES[t.type].name
-    if (result.win) {
+    const enemyNames = battles.length ? battles.map(b => b.enemy.name).join('、') : '空虚守军'
+    const report = {
+      names, outcome, battles, exp: totalExp,
+      atkStart: total, atkLossTotal: totalAtkLoss,
+      defStart: battles.reduce((s, b) => s + b.defStart, 0),
+      defLossTotal: battles.reduce((s, b) => s + b.defLoss, 0),
+      tile: { x: t.x, y: t.y, type: typeName, level: t.level },
+    }
+    if (outcome === 'win') {
       // 占领（发起时已校验上限；若期间达到上限则只战胜不占领）
       if (this.territoryCount() < this.territoryCapNow()) {
         t.owner = 'player'
         t.garrison = 0
         this.damaged.delete(t)
-        this._pushLog(`🚩 ${names} 攻克 ${typeName} Lv.${t.level} (${t.x},${t.y})，损失 ${result.atkLoss} 兵`)
+        this._pushLog(`🚩 ${names} 击败守将 ${enemyNames}，攻克 ${typeName} Lv.${t.level} (${t.x},${t.y})，损失 ${totalAtkLoss} 兵`, report)
         if (t.type === 'npcCity') this._lootCity(names)
         this.emit('territory', { x: t.x, y: t.y, owner: 'player' })
         if (t.type === 'npcCity') this._checkVictory()
       } else {
         // 战胜但领地已满：守军已被打空却未占领，加入回复列表，避免永久停在 0 兵被白嫖
         if (t.garrison < garrisonOf(t.level, t.type)) this.damaged.add(t)
-        this._pushLog(`⚠️ ${names} 战胜但领地已满，未能占领 (${t.x},${t.y})`)
+        this._pushLog(`⚠️ ${names} 战胜但领地已满，未能占领 (${t.x},${t.y})`, report)
       }
     } else {
-      this._pushLog(`💀 ${names} 进攻 ${typeName} Lv.${t.level} 失败，损失 ${result.atkLoss} 兵（守军余 ${Math.floor(t.garrison)}）`)
+      const last = battles[battles.length - 1]
+      const resetNote = multiTeam ? '，守军已重整回满' : `（守军余 ${Math.floor(t.garrison)}）`
+      if (outcome === 'draw') {
+        this._pushLog(`⚔️ ${names} 与 ${last.enemy.name} 激战 ${last.rounds.length} 回合未分胜负，攻打 ${typeName} Lv.${t.level} (${t.x},${t.y}) 无功而返${resetNote}`, report)
+      } else {
+        this._pushLog(`💀 ${names} 进攻 ${typeName} Lv.${t.level} (${t.x},${t.y}) 被 ${last.enemy.name} 击退，损失 ${totalAtkLoss} 兵${resetNote}`, report)
+      }
     }
-    this.emit('battle', { tile: { x: t.x, y: t.y }, win: result.win, general: names })
+    this.emit('battle', { tile: { x: t.x, y: t.y }, outcome, general: names })
 
     // 折返（沿原路径逐格，同样按全队最慢有效速度）
     const steps = (m.path?.length ?? 1) - 1
@@ -479,7 +596,13 @@ export class GameState extends Emitter {
     while (g.lv < GENERAL_MAX_LEVEL && g.exp >= expToLevel(g.lv)) {
       g.exp -= expToLevel(g.lv)
       g.lv++
-      g.atk += 2; g.def += 2
+      // 升级属性提升 = 基础值 × 品质成长值（品质越高成长越快）
+      // int/spd 仅用于展示，不参与战斗结算
+      const gr = growthOf(g.quality)
+      g.atk += Math.round(LEVELUP_ATK * gr * 10) / 10
+      g.def += Math.round(LEVELUP_DEF * gr * 10) / 10
+      g.int += Math.round(LEVELUP_INT * gr * 10) / 10
+      g.spd += Math.round(LEVELUP_SPD * gr * 10) / 10
       this._pushLog(`⭐ ${g.name} 升至 ${g.lv} 级`)
     }
   }
@@ -491,6 +614,8 @@ export class GameState extends Emitter {
     if (!t || t.owner !== 'player') return '不是己方领地'
     if (t.isCity) return '不能放弃主城'
     t.owner = null
+    const teamMax = garrisonOf(t.level, t.type) / (t.guards.length || 1)
+    for (const gd of t.guards) gd.troops = teamMax
     t.garrison = garrisonOf(t.level, t.type)
     this.damaged.delete(t)
     this._pushLog(`🏳️ 放弃领地 (${x},${y})`)
@@ -500,8 +625,8 @@ export class GameState extends Emitter {
 
   // ── 日志 ──────────────────────────────────────────────────────────────────
 
-  _pushLog(text) {
-    this.log.unshift({ text, at: Date.now() })
+  _pushLog(text, report = null) {
+    this.log.unshift({ text, at: Date.now(), report })
     if (this.log.length > 50) this.log.length = 50
     this.emit('log', this.log)
   }
@@ -521,17 +646,20 @@ export class GameState extends Emitter {
       }
     }
     const data = {
-      v: 4, seed: this.seed, savedAt: Date.now(), now: this.now,
+      v: 5, seed: this.seed, savedAt: Date.now(), now: this.now,
       res: this.res, cityLv: this.cityLv,
       freeRecruits: this.freeRecruits,
       buildings: { ...this.buildings },
       generals: this.generals.map(g => ({
-        id: g.id, lv: g.lv, exp: Math.round(g.exp), troops: g.troops, atk: g.atk, def: g.def,
+        id: g.id, name: g.name, quality: g.quality, troopType: g.troopType, faction: g.faction,
+        spd: g.spd,
+        lv: g.lv, exp: Math.round(g.exp), troops: g.troops, atk: g.atk, def: g.def,
         stamina: Math.round(g.stamina), awaken: g.awaken || 0,
       })),
       owned,
       marches: this.marches,
-      damaged: [...this.damaged].map(t => ({ x: t.x, y: t.y, garrison: Math.round(t.garrison) })),
+      // 守将阵容由 seed 确定重建，只需存各队剩余兵力
+      damaged: [...this.damaged].map(t => ({ x: t.x, y: t.y, teams: t.guards.map(gd => Math.round(gd.troops)) })),
       log: this.log.slice(0, 20),
     }
     try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)) } catch { /* 存储满等忽略 */ }
@@ -549,7 +677,7 @@ export class GameState extends Emitter {
   static load() {
     let data
     try { data = JSON.parse(localStorage.getItem(SAVE_KEY)) } catch { return null }
-    if (!data || ![1, 2, 3, 4].includes(data.v)) return null
+    if (!data || ![1, 2, 3, 4, 5].includes(data.v)) return null
 
     const gs = new GameState(data.seed)
     gs.now = data.now || 0
@@ -577,6 +705,7 @@ export class GameState extends Emitter {
       if (!t) continue
       t.owner = 'player'
       t.garrison = 0
+      for (const gd of t.guards) gd.troops = 0
       if (o.isCity) t.isCity = true
     }
     for (const m of data.marches || []) {
@@ -593,10 +722,18 @@ export class GameState extends Emitter {
     }
     for (const d of data.damaged || []) {
       const t = gs.tileAt(d.x, d.y)
-      if (t && t.owner !== 'player') {
-        t.garrison = d.garrison
-        gs.damaged.add(t)
+      if (!t || t.owner === 'player') continue
+      if (Array.isArray(d.teams)) {
+        // v5：各队剩余兵力逐一恢复
+        t.guards.forEach((gd, i) => { gd.troops = d.teams[i] ?? gd.troops })
+      } else {
+        // v1~v4：单一守军数字，按比例摊到各队
+        const max = garrisonOf(t.level, t.type)
+        const factor = Math.max(0, Math.min(1, (d.garrison ?? max) / max))
+        t.guards.forEach(gd => { gd.troops = Math.round(gd.troops * factor) })
       }
+      t.garrison = t.guards.reduce((s, gd) => s + gd.troops, 0)
+      gs.damaged.add(t)
     }
     // 若存档时已一统，不再重复提示
     gs.victoryShown = gs.npcCities.every(c => gs.tileAt(c.x, c.y).owner === 'player')
