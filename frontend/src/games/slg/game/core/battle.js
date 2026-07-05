@@ -58,7 +58,8 @@ export function resolveBattle(attackers, defenders, seed = 1) {
     atk: u.atk || 0, def: u.def || 0, spd: u.spd || 0, int: u.int || 0,
     troopType: u.troopType || null, skillId: u.skillId || null, skillLv: u.skillLv || 1,
     start: Math.round(u.troops), troops: Math.round(u.troops),
-    statuses: {},                       // statusId → 剩余可跳过次数
+    statuses: {},                       // statusId → 剩余可跳过次数（控制类）
+    dots: [],                           // 持续伤害/易伤：[{name, dmg, duration, vuln}]（沙暴等）
     buffs:   { atk: [], def: [], int: [], spd: [] },   // 增益列表：[{value, duration}]
     debuffs: { atk: [], def: [], int: [], spd: [] },   // 减益列表：[{value, duration}]
     healed: 0,                          // 累计接受治疗量（doHeal 给目标累加）
@@ -93,8 +94,54 @@ export function resolveBattle(attackers, defenders, seed = 1) {
     }
   }
 
-  // 一次攻击：从对方存活者随机取 min(count, 存活数) 个不重复目标，逐一结算伤害
-  // 集成 effAttr（buff/debuff）、condition（残血爆发）、lifesteal（吸血）
+  // 目标当前「兵刃易伤」加成（沙暴等 dot 记在 dots[].vuln 上；取最强，不叠加）
+  const bianrenVuln = (target) => target.dots.reduce((m, d) => Math.max(m, d.vuln || 0), 0)
+
+  // 单次命中结算（率土绝对伤害）。attribute 决定伤害类型：int=谋略，其余(武/速)=兵刃。
+  // 兵刃伤害额外吃目标的「兵刃易伤」；谋略伤害不吃。lifesteal 按本次伤害回血。
+  const resolveHit = (skill, u, target, attribute, mult, useCounter, events) => {
+    if (target.troops <= 0) return
+    const attrVal = effAttr(u, attribute)                  // buff/debuff 折算后的攻击属性
+    const defVal  = effAttr(target, 'def')                 // 减益后目标的有效统率
+    const counter = useCounter ? counterMult(u.troopType, target.troopType) : 1
+    const roll = 0.95 + rand() * 0.10
+    const troopsBefore = target.troops
+    const isStrategy = attribute === 'int'                 // int=谋略，武/速=兵刃
+    const vuln = (!isStrategy) ? (1 + bianrenVuln(target)) : 1
+    // 攻击战力：攻击方兵力 × 属性折算 × 战法倍率 × 兵种克制 × 浮动（率土口径：输出由攻击方决定）
+    const atkPow = u.troops * (1 + attrVal / BATTLE_DMG_ATTR_DIVISOR) * mult * counter * roll
+    // 绝对伤害：战力经目标「统率」减免（目标兵力不参与减免 → 残血可被一击收掉）× 兵刃易伤
+    let dmg = BATTLE_ROUND_ATTRITION * atkPow / (1 + defVal / BATTLE_DMG_ATTR_DIVISOR) * vuln
+    // 上限 = 入场兵力 80%（防满血秒杀，最少两击；按入场兵力算 → 残血可收掉）；下限 = 当前兵力 5%
+    dmg = Math.min(BATTLE_DMG_RATE_MAX * target.start, Math.max(BATTLE_DMG_RATE_MIN * troopsBefore, dmg))
+    const loss = Math.min(troopsBefore, Math.max(1, Math.round(dmg)))
+    target.troops -= loss
+    u.dealt += loss
+    target.taken += loss
+    const ratio = loss / (troopsBefore || 1)               // 展示用：削掉当前兵力比例（1.00=击杀）
+    events.push({
+      type: 'damage', side: u.side, actor: u.name, actorKey: u.key,
+      target: target.name, targetKey: target.key, skill: skill.id, skillName: skill.name,
+      dmgType: isStrategy ? '谋略' : '兵刃',
+      value: loss, atkPow, defStat: Math.round(defVal), counter, ratio, targetLeft: target.troops,
+    })
+    if (skill.lifesteal && loss > 0) {                     // 吸血：按伤害回血（不超过入场兵力）
+      const before = u.troops
+      u.troops = Math.min(u.start, u.troops + Math.round(loss * skill.lifesteal))
+      const real = u.troops - before
+      if (real > 0) {
+        u.lifesteal += real
+        events.push({ type: 'lifesteal', side: u.side, actor: u.name, actorKey: u.key,
+          skill: skill.id, skillName: skill.name, value: real, targetLeft: u.troops })
+      }
+    }
+    if (target.troops <= 0) {
+      events.push({ type: 'death', side: target.side, actor: target.name, actorKey: target.key })
+    }
+  }
+
+  // 一次攻击：随机取 min(count, 存活数) 个不重复目标，逐一结算。
+  // hits：多属性命中（破甲=兵刃+谋略）；缺省单次命中，属性取 skill.attribute。
   const doAttack = (skill, u, events) => {
     const enemies = alive(u.side === 'atk' ? defUnits : atkUnits)
     if (!enemies.length) return
@@ -108,46 +155,54 @@ export function resolveBattle(attackers, defenders, seed = 1) {
       events.push({ type: 'condition_met', side: u.side, actor: u.name, actorKey: u.key,
         condition: skill.condition, conditionMult: skill.conditionMult || 1.5 })
     }
+    const hits = skill.hits || [{ attribute: skill.attribute, useCounter: skill.useCounter }]
     for (let n = 0; n < count; n++) {
       const target = pool.splice(Math.floor(rand() * pool.length), 1)[0]
-      const attrVal = effAttr(u, skill.attribute)            // buff/debuff 折算后的攻击属性
-      const defVal  = effAttr(target, 'def')                  // 减益后目标的有效统率
-      const counter = skill.useCounter ? counterMult(u.troopType, target.troopType) : 1
-      const roll = 0.95 + rand() * 0.10
-      const troopsBefore = target.troops
-      // 攻击战力：攻击方兵力 × 属性折算 × 战法倍率 × 兵种克制 × 浮动（率土口径：输出由攻击方决定）
-      const atkPow = u.troops * (1 + attrVal / BATTLE_DMG_ATTR_DIVISOR) * mult * counter * roll
-      // 绝对伤害：战力经目标「防御属性」减免（目标兵力不参与减免 → 残血不再被兵力护住，可被一击收掉）
-      let dmg = BATTLE_ROUND_ATTRITION * atkPow / (1 + defVal / BATTLE_DMG_ATTR_DIVISOR)
-      // 上限 = 入场兵力的 80%（防满血被一击秒杀，最少两击；但用「入场兵力」而非当前兵力，
-      // 所以削到残血后任何一记实打都能收掉，不再挤牙膏出 -4/-1 长尾）；下限 = 当前兵力的 5%（保证推进）
-      dmg = Math.min(BATTLE_DMG_RATE_MAX * target.start, Math.max(BATTLE_DMG_RATE_MIN * troopsBefore, dmg))
-      const loss = Math.min(troopsBefore, Math.max(1, Math.round(dmg)))
-      target.troops -= loss
-      u.dealt += loss
-      target.taken += loss
-      // ratio 改为「本次实际削掉的当前兵力比例」，供战报展示（1.00 = 击杀）
-      const ratio = loss / (troopsBefore || 1)
-      events.push({
-        type: 'damage', side: u.side, actor: u.name, actorKey: u.key,
-        target: target.name, targetKey: target.key, skill: skill.id, skillName: skill.name,
-        value: loss, atkPow, defStat: Math.round(defVal), counter, ratio, targetLeft: target.troops,
-      })
-      // 吸血：将一定比例的伤害回复为自身兵力（无法超过入场兵力）
-      if (skill.lifesteal && loss > 0) {
-        const steal = Math.round(loss * skill.lifesteal)
-        const before = u.troops
-        u.troops = Math.min(u.start, u.troops + steal)
-        const real = u.troops - before
-        if (real > 0) {
-          u.lifesteal += real
-          events.push({ type: 'lifesteal', side: u.side, actor: u.name, actorKey: u.key,
-            skill: skill.id, skillName: skill.name,
-            value: real, targetLeft: u.troops })
+      for (const h of hits) resolveHit(skill, u, target, h.attribute, mult, h.useCounter ?? skill.useCounter, events)
+    }
+  }
+
+  // 持续伤害/易伤施加（沙暴）：给随机 count 名敌人挂 dot（每回合造成快照伤害 + 兵刃易伤），刷新取 max。
+  const doDot = (skill, u, events) => {
+    const enemies = alive(u.side === 'atk' ? defUnits : atkUnits)
+    if (!enemies.length) return
+    const count = Math.min(skill.targetCount || 1, enemies.length)
+    const pool = enemies.slice()
+    const attrVal = effAttr(u, skill.attribute)            // int（受智力影响）
+    for (let n = 0; n < count; n++) {
+      const target = pool.splice(Math.floor(rand() * pool.length), 1)[0]
+      const defVal = effAttr(target, 'def')
+      // 每回合伤害快照（率土绝对伤害口径，施加时定值），不随后续兵力/属性变化
+      const tickDmg = BATTLE_ROUND_ATTRITION * u.troops * (1 + attrVal / BATTLE_DMG_ATTR_DIVISOR) * (skill.mult || 1) / (1 + defVal / BATTLE_DMG_ATTR_DIVISOR)
+      const dur = skill.duration || 2
+      const existing = target.dots.find(d => d.name === skill.status)
+      if (existing) { existing.dmg = Math.max(existing.dmg, tickDmg); existing.duration = Math.max(existing.duration, dur); existing.vuln = skill.vulnPhysical || 0 }
+      else target.dots.push({ name: skill.status, dmg: tickDmg, duration: dur, vuln: skill.vulnPhysical || 0 })
+      u.debuffCast++
+      events.push({ type: 'status_add', side: target.side, actor: target.name, actorKey: target.key,
+        status: skill.status, statusName: STATUSES[skill.status]?.name || skill.status, value: dur })
+    }
+  }
+
+  // 回合末：所有 dot 造成一次持续伤害并倒计时；<=0 时移除（易伤随之消失）
+  const tickDots = (events) => {
+    for (const u of [...atkUnits, ...defUnits]) {
+      if (u.troops <= 0) continue
+      for (let i = u.dots.length - 1; i >= 0; i--) {
+        const d = u.dots[i]
+        if (u.troops > 0) {
+          const loss = Math.min(u.troops, Math.max(1, Math.round(Math.min(BATTLE_DMG_RATE_MAX * u.start, d.dmg))))
+          u.troops -= loss
+          u.taken += loss
+          events.push({ type: 'dot_damage', side: u.side, actor: u.name, actorKey: u.key,
+            status: d.name, statusName: STATUSES[d.name]?.name || d.name, value: loss, targetLeft: u.troops })
+          if (u.troops <= 0) events.push({ type: 'death', side: u.side, actor: u.name, actorKey: u.key })
         }
-      }
-      if (target.troops <= 0) {
-        events.push({ type: 'death', side: target.side, actor: target.name, actorKey: target.key })
+        if (--d.duration <= 0) {
+          events.push({ type: 'status_remove', side: u.side, actor: u.name, actorKey: u.key,
+            status: d.name, statusName: STATUSES[d.name]?.name || d.name })
+          u.dots.splice(i, 1)
+        }
       }
     }
   }
@@ -296,6 +351,7 @@ export function resolveBattle(attackers, defenders, seed = 1) {
           else if (skill.effect === 'heal')     doHeal(skill, u, events)
           else if (skill.effect === 'buff')     doBuff(skill, u, events)
           else if (skill.effect === 'debuff')   doDebuff(skill, u, events)
+          else if (skill.effect === 'dot')      doDot(skill, u, events)
         } else {
           events.push({ type: 'skill_failed', side: u.side, actor: u.name, actorKey: u.key,
             skill: skill.id, skillName: skill.name })
@@ -322,8 +378,8 @@ export function resolveBattle(attackers, defenders, seed = 1) {
       if (!bothAlive()) break
     }
 
-    // 回合末：所有 buff/debuff 倒计时 -1，<=0 时移除（events 流追加 mod_expire 事件）
-    if (bothAlive()) tickBuffs(events)
+    // 回合末：先结算持续伤害(dot)，再给 buff/debuff 倒计时（events 流追加 dot_damage / mod_expire）
+    if (bothAlive()) { tickDots(events); tickBuffs(events) }
 
     rounds.push({
       round,

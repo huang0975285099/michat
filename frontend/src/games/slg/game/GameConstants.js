@@ -292,15 +292,15 @@ export const GARRISON_GENERALS = [
 export const TILE_MAX_LEVEL = 10
 export const TILE_GUARDS = {
   1:  { teams: 1, pool: 'basic',  guardLv: 1 },    // 总兵 400（400×1）
-  2:  { teams: 2, pool: 'basic',  guardLv: 3 },    // 1200（600×2）
-  3:  { teams: 3, pool: 'basic',  guardLv: 5 },    // 2400（800×3）
-  4:  { teams: 4, pool: 'common', guardLv: 7 },    // 4000（1000×4）
-  5:  { teams: 5, pool: 'common', guardLv: 9 },    // 6000（1200×5）
-  6:  { teams: 6, pool: 'common', guardLv: 11 },   // 8400（1400×6）
-  7:  { teams: 7, pool: 'common', guardLv: 13 },   // 11200（1600×7）
-  8:  { teams: 8, pool: 'rare',   guardLv: 15 },   // 14400（1800×8）
-  9:  { teams: 9, pool: 'elite',  guardLv: 17 },   // 18000（2000×9）
-  10: { teams: 10, pool: 'legend', guardLv: 20 },   // 22000（2200×10，legend 池已扩至 6 名，teams 不超过池大小）
+  2:  { teams: 1, pool: 'basic',  guardLv: 2 },    // 1200（600×2）
+  3:  { teams: 2, pool: 'basic',  guardLv: 3 },    // 2400（800×3）
+  4:  { teams: 2, pool: 'common', guardLv: 5 },    // 4000（1000×4）
+  5:  { teams: 3, pool: 'common', guardLv: 10 },    // 6000（1200×5）
+  6:  { teams: 3, pool: 'common', guardLv: 12 },   // 8400（1400×6）
+  7:  { teams: 4, pool: 'common', guardLv: 14 },   // 11200（1600×7）
+  8:  { teams: 4, pool: 'rare',   guardLv: 16 },   // 14400（1800×8）
+  9:  { teams: 5, pool: 'elite',  guardLv: 18 },   // 18000（2000×9）
+  10: { teams: 5, pool: 'legend', guardLv: 20 },   // 22000（2200×10，legend 池已扩至 6 名，teams 不超过池大小）
 }
 // NPC 城池分 5 级（等级如何分配到地图上的具体城池由地图生成逻辑决定，这里只定义每级的规格）：
 // pool 按等级递进 basic→common→rare→elite→legend（与 TILE_GUARDS 高级地同档同 guardLv，数值口径一致）。

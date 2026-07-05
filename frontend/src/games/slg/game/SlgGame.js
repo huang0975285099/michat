@@ -21,6 +21,7 @@ export function createSlgGame(container, state) {
       height: '100%',
     },
     render: { antialias: true, pixelArt: false },
+    disableVisibilityChange: true, // 失焦/切后台也继续 tick，避免资源产出停滞
   })
   game.scene.add('World', WorldScene, true, { state })
   game.scene.add('UI', UIScene, true, { state })   // 后添加 → 渲染在上层

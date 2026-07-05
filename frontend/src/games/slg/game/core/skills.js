@@ -100,7 +100,7 @@ export const SKILLS = {
     id: 'lianji', name: '连击', timing: 'afterAttack', rate: 35, rateStep: 2,
     mult: 1.0, multStep: 0.025, useCounter: true,
     effect: 'extra_attack', cost: 20, maxLevel: 10,
-    desc: '普通攻击后 35% 概率再追加一次普通攻击（追加的普攻同样受兵种克制影响）',
+    desc: '普通攻击后 35% 概率再追加一次普通攻击（受兵种克制影响）',
   },
 
   // 7. 谎报（唯一控制战法，替代威慑/迷阵/缴械）
@@ -115,56 +115,58 @@ export const SKILLS = {
   // ── 新增战法（8 个）─────────────────────────────────────────────────────────
 
   // 8. 青囊（智力治疗我军，新机制 heal）
+  // 平衡：原 mult 1.5 使单次回复≈施法者 70% 兵力，全战法第一（审计 S 档最高）→ 降到 1.0
   qingnang: {
     id: 'qingnang', name: '青囊', timing: 'beforeAction', rate: 30, rateStep: 2,
-    attribute: 'int', mult: 1.5, multStep: 0.05,
+    attribute: 'int', mult: 1.0, multStep: 0.05,
     target: 'random_ally', targetCount: 1,
     effect: 'heal', useCounter: false, cost: 30, maxLevel: 10,
-    desc: '30% 概率治疗随机 1 名我军，回复量 = 自身智力 × 1.5 倍兵力（无法超过入场兵力）',
+    desc: '30% 概率治疗随机 1 名我军，回复兵力随自身智力提升（无法超过入场兵力）',
   },
 
-  // 9. 激励（武力增益我军武力，新机制 buff）
+  // 9. 激励（增益我军武力，新机制 buff）
+  // 平衡：原单目标 buff 收益极低（审计 B 档垫底）→ 改为全队(最多3)增益，让 buff 类站得住脚
   jili: {
     id: 'jili', name: '激励', timing: 'beforeAction', rate: 35, rateStep: 2,
     attribute: 'atk',
-    target: 'random_ally', targetCount: 1,
+    target: 'random_ally', targetCount: 3,
     effect: 'buff', buffAttr: 'atk', buffValue: 25,
     duration: 2, durationScaleLevels: [5, 10],
     cost: 25, maxLevel: 10,
-    desc: '35% 概率提升随机 1 名我军 25% 武力，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
+    desc: '35% 概率提升我军最多 3 名 25% 武力，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
   },
 
-  // 10. 铁壁（统率增益我军统率，新机制 buff；用 def 属性发动）
+  // 10. 铁壁（增益我军统率，新机制 buff；用 def 属性发动）
   tiebi: {
     id: 'tiebi', name: '铁壁', timing: 'beforeAction', rate: 35, rateStep: 2,
     attribute: 'def',
-    target: 'random_ally', targetCount: 1,
+    target: 'random_ally', targetCount: 3,
     effect: 'buff', buffAttr: 'def', buffValue: 25,
     duration: 2, durationScaleLevels: [5, 10],
     cost: 25, maxLevel: 10,
-    desc: '35% 概率提升随机 1 名我军 25% 统率，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
+    desc: '35% 概率提升我军最多 3 名 25% 统率，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
   },
 
-  // 11. 破甲（智力减益敌军统率，新机制 debuff）
+  // 11. 破甲（兵刃+谋略双伤，damage 多属性命中）—— 一次发动同时打出一记兵刃(武力)与一记谋略(智力)。
+  //     hits 里两次命中共用 mult（0.75→1.5 随等级），对同一目标结算，互不吃对方属性。
   pojia: {
-    id: 'pojia', name: '破甲', timing: 'beforeAction', rate: 35, rateStep: 2,
-    attribute: 'int',
+    id: 'pojia', name: '破甲', timing: 'beforeAction', rate: 30, rateStep: 2,
+    attribute: 'atk', mult: 0.75, multStep: 0.0833,
+    hits: [{ attribute: 'atk' }, { attribute: 'int' }],   // 兵刃(武力) + 谋略(智力)
     target: 'random_enemy', targetCount: 1,
-    effect: 'debuff', buffAttr: 'def', buffValue: -25,
-    duration: 2, durationScaleLevels: [5, 10],
-    cost: 25, maxLevel: 10,
-    desc: '35% 概率降低随机 1 名敌军 25% 统率，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
+    effect: 'damage', useCounter: false, maxLevel: 10,
+    desc: '30% 概率对随机 1 名敌军同时造成一次兵刃(武力)与一次谋略(智力)伤害，各 75%（Lv.10 各 150%）',
   },
 
-  // 12. 乱谋（智力减益敌军智力，新机制 debuff）
+  // 12. 天雷（高爆发智力单体，damage）—— 原「乱谋(减敌智力)」对无战法守军毫无作用、审计垫底；
+  //     智力增益(神机)实测在纯智力队也仅 +96(远逊直接带火攻的 +636)，故改为「智力武将的爆发核弹」：
+  //     低概率、高倍率，直接把智力换成大额输出。universal、不依赖队友。id 保留 luanmou 兼容旧档。
   luanmou: {
-    id: 'luanmou', name: '乱谋', timing: 'beforeAction', rate: 35, rateStep: 2,
-    attribute: 'int',
+    id: 'luanmou', name: '天雷', timing: 'beforeAction', rate: 25, rateStep: 2,
+    attribute: 'int', mult: 1.6, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
-    effect: 'debuff', buffAttr: 'int', buffValue: -25,
-    duration: 2, durationScaleLevels: [5, 10],
-    cost: 25, maxLevel: 10,
-    desc: '35% 概率降低随机 1 名敌军 25% 智力，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
+    effect: 'damage', useCounter: false, cost: 30, maxLevel: 10,
+    desc: '25% 概率对随机 1 名敌军造成 160% 智力伤害（无视兵种克制，智力越高越爆炸）',
   },
 
   // 13. 嗜血（武力伤害 + 吸血，damage 变种）
@@ -192,15 +194,41 @@ export const SKILLS = {
   guishen: {
     id: 'guishen', name: '鬼神', timing: 'afterAttack', rate: 25, rateStep: 2,
     mult: 1.5, multStep: 0.025, useCounter: true,
-    effect: 'extra_attack', cost: 30, maxLevel: 10,
-    desc: '普通攻击后 25% 概率追加一次 150% 普攻伤害（受兵种克制影响）',
+    effect: 'extra_attack', maxLevel: 10,
+    desc: '普通攻击后 25% 概率再追加一次普通攻击，伤害提升至 150%（受兵种克制影响）',
+  },
+
+  // 16. 沙暴（智力持续伤害 + 兵刃易伤，新机制 dot）—— 施加时按当回合战力快照每回合伤害，逐回合结算；
+  //     期间目标受到的兵刃(武/速)伤害 +25%（谋略不受影响）。mult 0.63→1.26 即「伤害率 63%~126%」。
+  shabao: {
+    id: 'shabao', name: '沙暴', timing: 'beforeAction', rate: 30, rateStep: 2,
+    attribute: 'int', mult: 0.63, multStep: 0.07,
+    target: 'random_enemy', targetCount: 2,
+    effect: 'dot', status: 'shabao', vulnPhysical: 0.25,
+    duration: 2, maxLevel: 10,
+    desc: '30% 概率对随机 2 名敌军施加【沙暴】：每回合造成智力持续伤害(63%→126%)，并使其受到的兵刃伤害 +25%，持续 2 回合',
   },
 }
 
-// 状态定义：control 效果施加的状态。skip=true 表示无法行动。
-// V2.0 收缩：仅保留 huangbao，删除 weishe/mizhen/jiaoxie。
+// 状态定义：control 类 skip=true 表示无法行动；dot 类只作为持续伤害/易伤的标签（记在 unit.dots 上）。
 export const STATUSES = {
   huangbao: { id: 'huangbao', name: '谎报', skip: true, desc: '无法行动' },
+  shabao:   { id: 'shabao',   name: '沙暴', dot: true,  desc: '持续伤害 + 兵刃易伤 25%' },
+}
+
+// ── 战法定价（战法仓库玉石消耗）：按审计强度分档 B/A/S = 10/20/30，集中定义、覆盖各战法 cost。
+// 升级消耗 = cost × 当前等级（见 GameState.upgradeSkill），故越强的战法升级也越贵。
+export const SKILL_TIER_COST = { S: 30, A: 20, B: 10 }
+const SKILL_TIERS = {
+  // S：最强档——破甲(兵刃+谋略双伤，审计第一)、嗜血/背水(伤害+吸血/爆发)、落雷/力劈(最强纯伤害)
+  pojia: 'S', shixue: 'S', beishui: 'S', luolei: 'S', lipi: 'S',
+  // A：均衡主力——持续/伤害/治疗/追击
+  shabao: 'A', jianyu: 'A', huogong: 'A', qingnang: 'A', jifeng: 'A', luanmou: 'A', guishen: 'A', lianji: 'A',
+  // B：情境支援（控制/增益）
+  huangbao: 'B', jili: 'B', tiebi: 'B',
+}
+for (const [id, tier] of Object.entries(SKILL_TIERS)) {
+  if (SKILLS[id]) { SKILLS[id].tier = tier; SKILLS[id].cost = SKILL_TIER_COST[tier] }
 }
 
 /** 玩家可绑定的战法（普通攻击不进仓库、人人自带，故排除） */

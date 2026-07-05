@@ -333,7 +333,7 @@ export class UIScene extends Phaser.Scene {
     if (!isDefenderPanel) {
       c.add(this.add.text(-w / 2 + 12, -h / 2 + 38, info, style(12, '#dddddd')).setOrigin(0, 0))
     } else {
-      // 守将面板：每队一行（基础信息 + 武/防/速/智），末尾一行收益与相邻提示
+      // 守将面板：每队一行（基础信息 + 武/统/速/智），末尾一行收益与相邻提示
       const teams = t.guards || []
       const rowH = 20
       const startY = -h / 2 + 36
@@ -355,7 +355,7 @@ export class UIScene extends Phaser.Scene {
             const cha = Math.round(guardStat(tpl.cha, gd.lv, q))
             const spd = Math.round(calcSpd({ atk, def, int, pol, cha }))
             c.add(this.add.text(-w / 2 + 12, y,
-              `守将 ${icon}${tpl.name} Lv.${gd.lv} ×${fmt(gd.troops)}（武${atk} · 防${def} · 速${spd} · 智${int}）`,
+              `守将 ${icon}${tpl.name} Lv.${gd.lv} ×${fmt(gd.troops)}（武${atk} · 统${def} · 速${spd} · 智${int}）`,
               style(12, '#dddddd')).setOrigin(0, 0))
           }
         })
@@ -846,10 +846,10 @@ export class UIScene extends Phaser.Scene {
         row.add(this.add.text(infoLeft + 136, -half / 2 + 12,
           qName, style(10, qColor, true)).setOrigin(0.5, 0.5))
 
-        // ── 中上：五维属性（武/防/智/速 + 兵力）──
+        // ── 中上：五维属性（武/统/智/速 + 兵力）──
         const statY = -half / 2 + 32
         row.add(this.add.text(infoLeft, statY,
-          `武${Math.round(g.atk)}  防${Math.round(g.def)}  智${Math.round(g.int)}  速${Math.round(g.spd)}`,
+          `武${Math.round(g.atk)}  统${Math.round(g.def)}  智${Math.round(g.int)}  速${Math.round(g.spd)}`,
           style(11, '#e8e8e8')).setOrigin(0, 0.5))
         row.add(this.add.text(infoLeft + infoW, statY,
           `兵力 ${g.troops}/${cap}`, style(10, '#cccccc', true)).setOrigin(1, 0.5))
@@ -991,7 +991,7 @@ export class UIScene extends Phaser.Scene {
         '品质概率与武将招募一致（普通 50% / 精良 30% / 精锐 15% / 王牌 5%）',
         style(10, '#9e9e9e')).setOrigin(0.5, 0))
       panel.add(this.add.text(0, -h / 2 + 96,
-        '随机类型（6 种）× 随机主属性（武/防/智/速）',
+        '随机类型（6 种）× 随机主属性（武/统/智/速）',
         style(10, '#9e9e9e')).setOrigin(0.5, 0))
 
       const canAfford = this.state.res.coin >= EQUIP_DRAW_COST
@@ -1036,7 +1036,7 @@ export class UIScene extends Phaser.Scene {
       panel.add(this.add.text(-w / 2 + 14, -h / 2 + 14,
         `📜 ${g.name} 装备`, style(15, '#ffffff', true)).setOrigin(0, 0))
       panel.add(this.add.text(-w / 2 + 110, -h / 2 + 16,
-        `武${Math.round(g.atk)} 防${Math.round(g.def)} 智${Math.round(g.int)} 速${Math.round(g.spd)}`,
+        `武${Math.round(g.atk)} 统${Math.round(g.def)} 智${Math.round(g.int)} 速${Math.round(g.spd)}`,
         style(11, '#9e9e9e')).setOrigin(0, 0))
 
       const content = this._makeScrollRegion(
@@ -1365,13 +1365,13 @@ export class UIScene extends Phaser.Scene {
       const q = GENERAL_QUALITY[b.enemy.quality] || GENERAL_QUALITY.common
       const ti = TROOP_TYPES[b.enemy.troopType]
       const troopName = ti ? `${ti.icon} ` : ''
-      // 敌将卡：第一行 名称+兵种+等级（品质色）；第二行 武/防/速/智（含等级加成）。
+      // 敌将卡：第一行 名称+兵种+等级（品质色）；第二行 武/统/速/智（含等级加成）。
       // 先手/胜负不再在此重复（先手见下方准备回合，胜负见右上角总结）。
       rows.push({ x: 0, y: y + 2,
         text: `第${bi + 1}阵  ${troopName}${b.enemy.name} Lv.${b.enemy.lv}`,
         size: 12, color: q.color, bold: true, origin: 0 })
       rows.push({ x: 10, y: y + 20,
-        text: `武${b.enemy.atk ?? '?'} · 防${b.enemy.def ?? '?'} · 速${b.enemy.spd ?? '?'} · 智${b.enemy.int ?? '?'}`,
+        text: `武${b.enemy.atk ?? '?'} · 统${b.enemy.def ?? '?'} · 速${b.enemy.spd ?? '?'} · 智${b.enemy.int ?? '?'}`,
         size: 10, color: '#9e9e9e', origin: 0 })
       y += 40
       // 准备回合：双方「属性（基础/卡面口径）」→「实战（叠加等级/铁匠坊/克制/骑兵先手后）」+ 先手判定
@@ -1381,10 +1381,10 @@ export class UIScene extends Phaser.Scene {
         const sv = (base, eff) => base === eff ? `${base}` : `${base}→${eff}`
         rows.push({ x: 10, y, text: '【准备回合】', size: 11, color: '#ffd54f', bold: true, origin: 0 })
         y += 15
-        rows.push({ x: 16, y, text: `我方  武${sv(p.our.atk, p.our.atkEff)} 防${sv(p.our.def, p.our.defEff)} 速${sv(p.our.spd, p.our.spdEff)} 智${sv(p.our.int ?? '?', p.our.intEff ?? p.our.int ?? '?')} · 兵${p.our.troops}`,
+        rows.push({ x: 16, y, text: `我方  武${sv(p.our.atk, p.our.atkEff)} 统${sv(p.our.def, p.our.defEff)} 速${sv(p.our.spd, p.our.spdEff)} 智${sv(p.our.int ?? '?', p.our.intEff ?? p.our.int ?? '?')} · 兵${p.our.troops}`,
           size: 10, color: '#a5d6a7', origin: 0 })
         y += 15
-        rows.push({ x: 16, y, text: `守军  武${sv(p.foe.atk, p.foe.atkEff)} 防${sv(p.foe.def, p.foe.defEff)} 速${sv(p.foe.spd, p.foe.spdEff)} 智${p.foe.int ?? '?'} · 兵${p.foe.troops}`,
+        rows.push({ x: 16, y, text: `守军  武${sv(p.foe.atk, p.foe.atkEff)} 统${sv(p.foe.def, p.foe.defEff)} 速${sv(p.foe.spd, p.foe.spdEff)} 智${p.foe.int ?? '?'} · 兵${p.foe.troops}`,
           size: 10, color: '#ef9a9a', origin: 0 })
         y += 15
         rows.push({ x: 16, y,
@@ -1413,7 +1413,7 @@ export class UIScene extends Phaser.Scene {
             const to = a.striker === 'atk' ? '守军' : '我方'
             rows.push({
               x: 16, y,
-              text: `${from}→${to}  战力${Math.round(a.atkPow)} vs 防${Math.round(a.defPow)}  ×${a.ratio.toFixed(2)} → -${a.loss}`,
+              text: `${from}→${to}  战力${Math.round(a.atkPow)} vs 统${Math.round(a.defPow)}  ×${a.ratio.toFixed(2)} → -${a.loss}`,
               size: 10, color: '#bbbbbb', origin: 0,
             })
             y += 18
@@ -1454,7 +1454,7 @@ export class UIScene extends Phaser.Scene {
         if (u.conditionMet) stat.push(`残血爆发${u.conditionMet}次`)
         const statTail = stat.length ? ` · ${stat.join(' ')}` : ''
         rows.push({ x: 16, y,
-          text: `武${sv(u.atk, u.atkEff)} 防${sv(u.def, u.defEff)} 速${sv(u.spd, u.spdEff)} 智${sv(u.int, u.intEff)} · 输出${u.dealt} 承伤${u.taken}${statTail}`,
+          text: `武${sv(u.atk, u.atkEff)} 统${sv(u.def, u.defEff)} 速${sv(u.spd, u.spdEff)} 智${sv(u.int, u.intEff)} · 输出${u.dealt} 承伤${u.taken}${statTail}`,
           size: 10, color: '#9e9e9e', origin: 0 })
         y += 17
       })
@@ -1515,15 +1515,17 @@ export class UIScene extends Phaser.Scene {
       }
       case 'condition_met':
         return { indent: 22, color: '#ff8a65', text: `${e.actor} 触发【残血爆发】倍率 ×${e.conditionMult}` }
+      case 'dot_damage':
+        return { indent: 22, color: '#ffb74d', text: `${e.actor} 受【${e.statusName}】持续伤害 -${e.value}${e.targetLeft <= 0 ? '（阵亡）' : ''}` }
       case 'damage': {
         // 克制标注（×1.25 克制 / ×0.85 被克）；战力值已含倍率/克制/浮动
         const counterNote = Math.abs((e.counter ?? 1) - 1) > 0.001 ? (e.counter > 1 ? ' 克制' : ' 被克') : ''
-        // 标出该次伤害来自「普攻」还是某个战法，避免同一武将的战法伤害与普攻伤害看不出区别
-        const src = e.skill === 'normal_attack' ? '普攻' : (e.skillName || '战法')
-        // 防御显示目标「防御属性」（恒定值），不再是随兵力缩水的防御战力（旧档 defPow 兜底）
+        // 来源标签：普攻直接标「普攻」；战法标【名·兵刃/谋略】——破甲的两次命中靠 dmgType 区分兵刃/谋略
+        const src = e.skill === 'normal_attack' ? '普攻' : `${e.skillName || '战法'}${e.dmgType ? '·' + e.dmgType : ''}`
+        // 显示目标「统」（统率，恒定属性，全局对 def 的统一缩写），不再是随兵力缩水的防御战力（旧档 defPow 兜底）
         const defShown = e.defStat ?? e.defPow ?? 0
         return { indent: 22, color: mine ? good : bad,
-          text: `[${src}] ${e.actor}→${e.target} 战力${Math.round(e.atkPow)} vs 防御${Math.round(defShown)} ×${e.ratio.toFixed(2)}${counterNote} → -${e.value}${e.targetLeft <= 0 ? '（阵亡）' : ''}` }
+          text: `[${src}] ${e.actor}→${e.target} 战力${Math.round(e.atkPow)} vs 统${Math.round(defShown)} ×${e.ratio.toFixed(2)}${counterNote} → -${e.value}${e.targetLeft <= 0 ? '（阵亡）' : ''}` }
       }
       default:
         return null   // round/action/normal_attack/death/status_remove 不单独成行

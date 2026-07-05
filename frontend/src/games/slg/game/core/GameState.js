@@ -79,6 +79,7 @@ export class GameState extends Emitter {
     this.equipments = []       // 装备仓库：所有装备实例数组（绑定关系存在各武将 g.equip.{type} iid 上）
     this._equipSeq = 0         // 装备实例 iid 自增序号
     this.freeRecruits = FREE_RECRUIT_COUNT   // 开局赠送的免费招募次数（不占铜币）
+    this._firstRecruitDone = false   // 首次招募必出王牌（Legend），之后按正常概率
     this.autoJadeCommon = false  // 招募开关：开启后抽到的普通/精良武将自动转换为玉石，不入列也不觉醒
     this.marches = []          // { id, generalIds:[], from, to, departAt, arriveAt, phase:'out'|'back' }
     this.log = []              // 战报/事件日志（最近 50 条）
@@ -328,6 +329,17 @@ export class GameState extends Emitter {
     this._processMarches()
   }
 
+  /** 标签页从隐藏/失焦恢复可见时调用：浏览器会整页暂停 rAF，tick 期间不会被调用，
+   *  这里按真实经过时长补算一次产出与行军（沿用离线收益的封顶规则，避免挂后台异常暴涨）*/
+  catchUp(elapsedMs) {
+    const offlineSecs = Math.max(0, elapsedMs / 1000)
+    const gameSecs = Math.min(offlineSecs * TIME_SCALE, OFFLINE_CAP_SECONDS)
+    if (gameSecs <= 0) return
+    this.now += gameSecs
+    this._produce(gameSecs)
+    this._processMarches()
+  }
+
   // ── 资源产出 ──────────────────────────────────────────────────────────────
 
   /** 每小时产量汇总（含粮仓加成，供 UI 展示与 _produce 结算） */
@@ -506,7 +518,9 @@ export class GameState extends Emitter {
     if (free) this.freeRecruits--
     else this.res.coin -= RECRUIT_COST_COIN
 
-    const quality = this._rollQuality()
+    // 首次招募必出王牌（Legend），之后按正常概率抽取
+    const quality = this._firstRecruitDone ? this._rollQuality() : 'legend'
+    this._firstRecruitDone = true
     const pool = RECRUITABLE_GENERALS.filter(g => g.quality === quality)
     // 该档无可招募武将则退回普通档兜底
     const tpl = (pool.length ? pool : RECRUITABLE_GENERALS)[
@@ -919,6 +933,7 @@ export class GameState extends Emitter {
       v: 9, seed: this.seed, savedAt: Date.now(), now: this.now,
       res: this.res, cityLv: this.cityLv,
       freeRecruits: this.freeRecruits,
+      firstRecruitDone: this._firstRecruitDone,
       autoJadeCommon: !!this.autoJadeCommon,
       skills: this.skills.slice(),
       skillLevels: { ...this.skillLevels },
@@ -968,6 +983,10 @@ export class GameState extends Emitter {
     gs.buildings = { ...gs.buildings, ...(data.buildings || {}) }
     // v4+ 才有免费招募次数；v1~v3 旧存档已获得过起手三武将，不再补送
     gs.freeRecruits = data.v >= 4 ? (data.freeRecruits ?? 0) : 0
+    // 旧档无此字段：只要已经招募过（免费次数已用或已有招募武将）就视为首抽已完成，避免老玩家意外补发王牌
+    gs._firstRecruitDone = data.firstRecruitDone ?? (
+      (data.generals?.length ?? 0) > 0 || (data.freeRecruits ?? FREE_RECRUIT_COUNT) < FREE_RECRUIT_COUNT
+    )
     // v9+ 招募开关：旧档缺省 false
     gs.autoJadeCommon = data.autoJadeCommon === true
     // v7+ 才有战法仓库；从 v6 迁移的旧档保留构造时随机发的 3 个（data.skills 缺省）

@@ -58,6 +58,19 @@ export class WorldScene extends Phaser.Scene {
     ]
     this._saveTimer = 0
 
+    // 标签页隐藏/窗口失焦时浏览器会暂停 rAF，update() 不再被调用，资源会停止增长；
+    // 这里监听可见性/焦点恢复事件，按真实经过时长补一次产出（见 GameState.catchUp）
+    this._lastRealMs = Date.now()
+    this._onVisibilityRestore = () => {
+      const now = Date.now()
+      if (document.visibilityState === 'visible') {
+        this.state.catchUp(now - this._lastRealMs)
+      }
+      this._lastRealMs = now
+    }
+    document.addEventListener('visibilitychange', this._onVisibilityRestore)
+    window.addEventListener('focus', this._onVisibilityRestore)
+
     // 相机初始定位到主城
     const { x, y } = this.state.spawn
     this.cameras.main.centerOn(x * T + T / 2, y * T + T / 2)
@@ -74,6 +87,8 @@ export class WorldScene extends Phaser.Scene {
       this._subs.forEach(off => off())
       this.game.events.off('center-on', this._onCenterOn)
       this.game.events.off('clear-selection', this._onClearSel)
+      document.removeEventListener('visibilitychange', this._onVisibilityRestore)
+      window.removeEventListener('focus', this._onVisibilityRestore)
       this.state.save()
     })
   }
@@ -82,6 +97,7 @@ export class WorldScene extends Phaser.Scene {
   _ui() { return this.scene.get('UI') }
 
   update(_, delta) {
+    this._lastRealMs = Date.now()
     this.state.tick(delta)
     this._drawMarches()
     this._drawSelection()   // 每帧重画，实现选中框脉冲发光

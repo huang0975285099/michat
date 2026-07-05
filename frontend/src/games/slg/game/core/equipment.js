@@ -37,7 +37,7 @@ export function equipMaxed(eq) {
 }
 
 /** 属性单字缩写（用于装备名后缀） */
-const ATTR_SHORT = { atk: '武', def: '防', int: '智', spd: '速' }
+const ATTR_SHORT = { atk: '武', def: '统', int: '智', spd: '速' }
 
 /** 装备显示名 = 品质前缀 + 类型名 + · + 属性缩写（单字） */
 export function equipName(eq) {
