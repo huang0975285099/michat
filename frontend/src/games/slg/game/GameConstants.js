@@ -62,27 +62,27 @@ export function garrisonOf(level, type) {
 }
 
 // ── 主城 ────────────────────────────────────────────────────────────────────
-export const CITY_MAX_LEVEL = 5
-// 领地上限 = 8 + 主城等级 * 4
-export function territoryCap(cityLv) { return 8 + cityLv * 4 }
-// 升级到 lv 的花费（lv2 起）
+export const CITY_MAX_LEVEL = 10
+// 领地上限 = 8 + 主城等级 * 10
+export function territoryCap(cityLv) { return 8 + cityLv * 10 }
+// 升级到 lv 的花费（lv2 起）：指数增长，lv10 为 512x 基础
 export function cityUpgradeCost(toLv) {
-  const k = Math.pow(2, toLv - 2)   // lv2:1x lv3:2x lv4:4x lv5:8x
+  const k = Math.pow(2, toLv - 2)   // lv2:1x lv3:2x lv4:4x ... lv10:256x
   return { coin: 500 * k, wood: 500 * k, stone: 500 * k }
 }
 
 // ── 建筑体系（阶段二）─────────────────────────────────────────────────────────
-// 主城内四条独立强化线，效果覆盖全局。等级 1~5 且不得超过主城等级。
-export const BUILDING_MAX_LEVEL = 5
+// 主城内四条独立强化线，效果覆盖全局。等级 1~10 且不得超过主城等级。
+export const BUILDING_MAX_LEVEL = 10
 export const BUILDINGS = {
   granary:  { name: '粮仓',   icon: '🌾', costKeys: ['grain', 'wood'] },
   barracks: { name: '兵营',   icon: '⚔️', costKeys: ['wood', 'iron'] },
   training: { name: '校场',   icon: '🎯', costKeys: ['stone', 'coin'] },
   forge:    { name: '铁匠坊', icon: '🔨', costKeys: ['iron', 'stone'] },
 }
-// 升级到 lv 的花费（lv2 起）：两种主资源各 300 × 2^(lv-2)
+// 升级到 lv 的花费（lv2 起）：两种主资源各 300 × 2^(lv-2)，lv10 为 512x 基础
 export function buildingUpgradeCost(type, toLv) {
-  const k = Math.pow(2, toLv - 2)   // lv2:1x lv3:2x lv4:4x lv5:8x
+  const k = Math.pow(2, toLv - 2)   // lv2:1x lv3:2x ... lv10:256x
   const [a, b] = BUILDINGS[type].costKeys
   return { [a]: 300 * k, [b]: 300 * k }
 }
@@ -331,8 +331,8 @@ export function troopCapOf(lv) { return GENERAL_BASE_TROOP_CAP + (lv - 1) * 200 
 // 升级经验：升到 lv 需要 lv*1000 累计经验
 export function expToLevel(lv) { return lv * 200 }
 export const GENERAL_MAX_LEVEL = 20
-// 征兵花费：1 兵 = 2 粮
-export const RECRUIT_GRAIN_PER_TROOP = 2
+// 征兵花费：1 兵 = 2 粮 + 1 铁矿 + 1 木材
+export const RECRUIT_COST_PER_TROOP = { grain: 2, iron: 1, wood: 1 }
 
 // ── 行军 ────────────────────────────────────────────────────────────────────
 // 沿网格逐格行军，每格耗时随「有效速度」变化，合击按全队最慢者计。

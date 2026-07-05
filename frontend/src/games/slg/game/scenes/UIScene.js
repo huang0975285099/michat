@@ -5,7 +5,7 @@
 import Phaser from 'phaser'
 import {
   RESOURCES, TILE_TYPES, TIME_SCALE, BASE_YIELD_PER_LEVEL,
-  expToLevel, cityUpgradeCost, RECRUIT_GRAIN_PER_TROOP, CITY_MAX_LEVEL,
+  expToLevel, cityUpgradeCost, RECRUIT_COST_PER_TROOP, CITY_MAX_LEVEL,
   npcCityLootOf,
   BUILDINGS, BUILDING_MAX_LEVEL, buildingUpgradeCost,
   GRANARY_YIELD_PER_LEVEL, BARRACKS_CAP_PER_LEVEL, TRAINING_EXP_PER_LEVEL, FORGE_STAT_PER_LEVEL,
@@ -411,6 +411,7 @@ export class UIScene extends Phaser.Scene {
 
   _openModal(w, h, build) {
     this._closeModal()
+    this._closeTilePanel()   // 打开新模态弹窗时关闭土地面板
     const sw = this.scale.width, sh = this.scale.height
     const root = this.add.container(0, 0).setDepth(DEPTH.modal)
     const dim = this.add.rectangle(0, 0, sw, sh, 0x000000, 0.55).setOrigin(0)
@@ -892,8 +893,9 @@ export class UIScene extends Phaser.Scene {
             })
           }))
       })
+      const rc = RECRUIT_COST_PER_TROOP
       panel.add(this.add.text(0, h / 2 - 16,
-        `征兵 ${RECRUIT_GRAIN_PER_TROOP} 粮/兵 · 出征耗 ${MARCH_STAMINA_COST} 体力（每分钟回 ${STAMINA_REGEN_PER_HOUR}）`,
+        `征兵 ${rc.grain}粮${rc.iron}铁${rc.wood}木/兵 · 出征耗 ${MARCH_STAMINA_COST} 体力（每分钟回 ${STAMINA_REGEN_PER_HOUR}）`,
         style(10, '#9e9e9e')).setOrigin(0.5))
     })
   }
@@ -1150,9 +1152,10 @@ export class UIScene extends Phaser.Scene {
     this._openModal(w, h, (panel) => {
       panel.add(this.add.text(-w / 2 + 14, -h / 2 + 14,
         '🎒 装备仓库', style(15, '#ffffff', true)).setOrigin(0, 0))
-      panel.add(this.add.text(0, -h / 2 + 34,
-        `共 ${all.length} 件 · ${RESOURCES.coin.icon}${Math.floor(this.state.res.coin)}`,
-        style(11, '#ffd54f')).setOrigin(0.5, 0))
+      // 方案 A：统计文字与标题合并到同一行，避免被「抽装备」按钮遮挡
+      panel.add(this.add.text(-w / 2 + 130, -h / 2 + 17,
+        `共 ${all.length} 件`,
+        style(11, '#ffd54f')).setOrigin(0, 0))
       // 抽装备入口（原在「武将」面板，现移到本面板右上角）
       panel.add(this._button(w / 2 - 52, -h / 2 + 23, 92, 28, '✨ 抽装备', COLOR.btnAmber, true,
         () => this._openEquipDraw()))
@@ -1283,12 +1286,12 @@ export class UIScene extends Phaser.Scene {
             else this._openBuildings()   // 重建刷新
           }))
         // 铁匠坊专属「打造」入口：跳转装备仓库
-        if (type === 'forge') {
-          row.add(this._button(rw / 2 - 48, half / 2 - 14, 76, 24,
-            '🔨 打造', COLOR.btnGreen, true, () => {
-              this._openEquipWarehouse()
-            }))
-        }
+        // if (type === 'forge') {
+        //   row.add(this._button(rw / 2 - 48, half / 2 - 14, 76, 24,
+        //     '🔨 打造', COLOR.btnGreen, true, () => {
+        //       this._openEquipWarehouse()
+        //     }))
+        // }
       })
       panel.add(this.add.text(0, h / 2 - 18,
         '建筑等级不可超过主城等级', style(11, '#9e9e9e')).setOrigin(0.5))

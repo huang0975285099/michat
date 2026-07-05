@@ -182,10 +182,19 @@ export function resolveBattle(attackers, defenders, seed = 1) {
     for (let n = 0; n < count; n++) {
       const target = pool.splice(Math.floor(rand() * pool.length), 1)[0]
       const list = side === 'ally' ? target.buffs[skill.buffAttr] : target.debuffs[skill.buffAttr]
-      // 同属性增益/减益取 max 覆盖（不累加），避免叠加成变态数值；不同属性独立
-      const existing = list.find(b => b.value === skill.buffValue)
-      if (existing) existing.duration = Math.max(existing.duration, skill.duration)
-      else list.push({ value: skill.buffValue, duration: skill.duration })
+      // 同属性增益/减益：取「|value| 最强」覆盖策略（不累加），避免不同 value 叠加成变态数值。
+      // 新 |value| ≥ 已有 |value| → 用新值覆盖并刷新 duration；
+      // 新 |value| < 已有 |value| → 仅刷新 duration（不削弱已有更强效果）。
+      const newAbs = Math.abs(skill.buffValue)
+      const strongest = list[0]
+      if (!strongest) {
+        list.push({ value: skill.buffValue, duration: skill.duration })
+      } else if (newAbs >= Math.abs(strongest.value)) {
+        strongest.value = skill.buffValue
+        strongest.duration = Math.max(strongest.duration, skill.duration)
+      } else {
+        strongest.duration = Math.max(strongest.duration, skill.duration)
+      }
       events.push({
         type: side === 'ally' ? 'buff_add' : 'debuff_add',
         side: target.side, actor: target.name, actorKey: target.key,

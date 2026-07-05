@@ -12,7 +12,7 @@ import {
   GENERAL_QUALITY, RECRUITABLE_GENERALS, findGeneralTemplate,
   RECRUIT_COST_COIN, MAX_GENERALS, AWAKEN_ATK, AWAKEN_DEF, AWAKEN_INT, AWAKEN_SPD, FREE_RECRUIT_COUNT,
   growthOf, LEVELUP_ATK, LEVELUP_DEF, LEVELUP_INT, LEVELUP_SPD,
-  RECRUIT_GRAIN_PER_TROOP, tileMarchSeconds, MARCH_REF_SPEED, TROOP_TYPES,
+  RECRUIT_COST_PER_TROOP, tileMarchSeconds, MARCH_REF_SPEED, TROOP_TYPES,
   MAX_MARCH_PARTY,
   npcCityLootOf, GARRISON_REGEN_PER_HOUR,
   BUILDINGS, BUILDING_MAX_LEVEL, buildingUpgradeCost,
@@ -446,9 +446,11 @@ export class GameState extends Emitter {
     const cap = this.troopCap(g)
     count = Math.min(count, cap - g.troops)
     if (count <= 0) return '已达带兵上限'
-    const cost = count * RECRUIT_GRAIN_PER_TROOP
-    if (this.res.grain < cost) return `粮食不足（需 ${cost}）`
-    this.res.grain -= cost
+    const cost = { grain: count * RECRUIT_COST_PER_TROOP.grain, iron: count * RECRUIT_COST_PER_TROOP.iron, wood: count * RECRUIT_COST_PER_TROOP.wood }
+    for (const [k, v] of Object.entries(cost)) {
+      if (this.res[k] < v) return `${RESOURCES[k].name}不足（需 ${v}）`
+    }
+    for (const [k, v] of Object.entries(cost)) this.res[k] -= v
     g.troops += count
     this.emit('resources', this.res)
     this.emit('generals', this.generals)
@@ -1038,29 +1040,52 @@ const SKILL_MIGRATION_V2 = {
   zhuiji:  'lianji',   hengsao: 'lianji',
   weishe:  'huangbao', mizhen:  'huangbao', jiaoxie: 'huangbao',
 }
+// 旧战法兑换价表（用于迁移玉石补偿；旧战法已从 SKILLS 字典删除，需硬编码）
+const OLD_SKILL_COSTS_V2 = {
+  huikan: 20, mengji: 30, tuci: 20,
+  jianta: 20, tuxi: 25,
+  shuigong: 25, tianlei: 30,
+  xuanfeng: 25, duji: 30,
+  zhuiji: 25, hengsao: 30,
+  weishe: 25, mizhen: 30, jiaoxie: 20,
+}
 
 /**
  * V2.0 战法精简迁移：在 GameState.load() 末尾调用，把旧战法 ID 迁移到新 ID。
- * 1) 武将 skillId 旧 ID → 新 ID
+ * 1) 武将 skillId 旧 ID → 新 ID（同新 ID 冲突时只保留第一个，其余清空让玩家重绑）
  * 2) gs.skills 仓库去重（旧+新合并到新 ID）
  * 3) gs.skillLevels 等级迁移（同新 ID 取 max，避免回退）
- * 4) 过滤掉迁移后仍不在 SKILLS 字典中的无效 ID（保险）
+ * 4) 玉石补偿：仓库中重复映射导致丢失的旧战法按兑换价退还
+ * 5) 过滤掉迁移后仍不在 SKILLS 字典中的无效 ID（保险）
  */
 function _migrateV2Skills(gs) {
-  // 1) 武将 skillId 迁移
+  // 1) 武将 skillId 迁移（处理冲突：同新 ID 只保留第一个武将，其余清空）
+  const usedSkillIds = new Set()
   for (const g of gs.generals) {
-    if (g.skillId && SKILL_MIGRATION_V2[g.skillId]) {
-      g.skillId = SKILL_MIGRATION_V2[g.skillId]
+    if (!g.skillId) continue
+    const newId = SKILL_MIGRATION_V2[g.skillId] || g.skillId
+    if (!getSkill(newId)) { g.skillId = null; continue }   // 未知 ID 清空
+    if (usedSkillIds.has(newId)) {
+      g.skillId = null                                     // 冲突：清空，玩家需重新绑定
+    } else {
+      g.skillId = newId
+      usedSkillIds.add(newId)
     }
   }
-  // 2) skills 仓库去重迁移
+  // 2) skills 仓库去重迁移 + 统计丢失的旧战法（用于玉石补偿）
+  let refund = 0
   if (Array.isArray(gs.skills) && gs.skills.length) {
     const seen = new Set()
     const next = []
     for (const id of gs.skills) {
       const nid = SKILL_MIGRATION_V2[id] || id
-      if (!getSkill(nid)) continue            // 保险：跳过未知 ID
-      if (!seen.has(nid)) { seen.add(nid); next.push(nid) }
+      if (!getSkill(nid)) continue                         // 保险：跳过未知 ID
+      if (!seen.has(nid)) {
+        seen.add(nid); next.push(nid)
+      } else if (OLD_SKILL_COSTS_V2[id]) {
+        // 重复映射：此旧战法被合并丢失，退还兑换价
+        refund += OLD_SKILL_COSTS_V2[id]
+      }
     }
     gs.skills = next
   }
@@ -1069,9 +1094,14 @@ function _migrateV2Skills(gs) {
     const next = {}
     for (const [id, lv] of Object.entries(gs.skillLevels)) {
       const nid = SKILL_MIGRATION_V2[id] || id
-      if (!getSkill(nid)) continue            // 保险：跳过未知 ID
+      if (!getSkill(nid)) continue                         // 保险：跳过未知 ID
       next[nid] = Math.max(next[nid] || 0, lv)
     }
     gs.skillLevels = next
+  }
+  // 4) 玉石补偿发放
+  if (refund > 0) {
+    gs.res.jade = (gs.res.jade || 0) + refund
+    gs._pushLog?.(`💎 战法精简迁移补偿 +${refund} 玉石（重复战法已合并）`)
   }
 }
