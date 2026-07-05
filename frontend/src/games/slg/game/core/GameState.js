@@ -19,11 +19,16 @@ import {
   GRANARY_YIELD_PER_LEVEL, BARRACKS_CAP_PER_LEVEL, TRAINING_EXP_PER_LEVEL, FORGE_STAT_PER_LEVEL,
   STAMINA_MAX, MARCH_STAMINA_COST, STAMINA_REGEN_PER_HOUR,
   INITIAL_RESOURCES, INITIAL_TROOPS, SAVE_KEY,
+  DISMISS_JADE, SKILL_MAX_LEVEL,
+  EQUIP_TYPES, EQUIP_QUALITY, EQUIP_MAX_LEVEL, EQUIP_DRAW_COST, EQUIP_DISMISS_JADE,
 } from '../GameConstants.js'
 import { generateMap } from './MapGenerator.js'
 import { findPath } from './pathfind.js'
 import { resolveBattle } from './battle.js'
 import { getSkill, BINDABLE_SKILLS } from './skills.js'
+import {
+  equipValue, equipUpgradeCost, equipMaxed, equipName, equipDesc, rollEquipment,
+} from './equipment.js'
 
 // 轻量事件发射器（不依赖 Phaser，保持核心层纯净）
 class Emitter {
@@ -47,6 +52,7 @@ function makeGeneral(tpl, starter = false) {
     atk: tpl.atk, def: tpl.def, spd: tpl.spd, int: tpl.int,
     lv: 1, exp: 0, troops: starter ? INITIAL_TROOPS : 0, state: 'idle',
     stamina: STAMINA_MAX, awaken: 0, skillId: null,   // 绑定的主动战法（第二期由绑定 UI 设置）
+    equip: { weapon: null, helmet: null, necklace: null, armor: null, belt: null, boots: null },   // 6 槽装备 iid
   }
 }
 
@@ -68,7 +74,11 @@ export class GameState extends Emitter {
     this.buildings = { granary: 1, barracks: 1, training: 1, forge: 1 }
     this.generals = []
     this.skills = []           // 战法仓库：拥有的战法 id（每种仅一份；绑定关系存在各武将 g.skillId 上）
+    this.skillLevels = {}      // 战法等级：{ skillId: level }，缺省=1。等级跟战法走、不跟武将走
+    this.equipments = []       // 装备仓库：所有装备实例数组（绑定关系存在各武将 g.equip.{type} iid 上）
+    this._equipSeq = 0         // 装备实例 iid 自增序号
     this.freeRecruits = FREE_RECRUIT_COUNT   // 开局赠送的免费招募次数（不占铜币）
+    this.autoJadeCommon = false  // 招募开关：开启后抽到的普通/精良武将自动转换为玉石，不入列也不觉醒
     this.marches = []          // { id, generalIds:[], from, to, departAt, arriveAt, phase:'out'|'back' }
     this.log = []              // 战报/事件日志（最近 50 条）
     this.damaged = new Set()   // 被挫伤（守军未满）的未占领地块，随时间回复
@@ -112,6 +122,169 @@ export class GameState extends Emitter {
     if (!getSkill(skillId) || this.skills.includes(skillId)) return
     this.skills.push(skillId)
     this.emit('skills', this.skills)
+  }
+
+  /**
+   * 玉石兑换战法。扣 cost 玉石，战法入仓库，初始 Lv.1。
+   * @returns {{success:true} | {error:string}}
+   */
+  buySkill(skillId) {
+    const sk = getSkill(skillId)
+    if (!sk) return { error: '战法不存在' }
+    if (this.skills.includes(skillId)) return { error: '已拥有该战法' }
+    const cost = sk.cost || 0
+    if ((this.res.jade || 0) < cost) return { error: `玉石不足（需 ${cost}）` }
+    this.res.jade -= cost
+    this.skills.push(skillId)
+    this.skillLevels[skillId] = 1
+    this._pushLog(`💎 兑换战法【${sk.name}】，消耗 ${cost} 玉石`)
+    this.emit('skills', this.skills)
+    this.emit('resources', this.res)
+    return { success: true }
+  }
+
+  /**
+   * 升级战法。消耗 = cost × 当前等级。
+   * @returns {{success:true, level:number} | {error:string}}
+   */
+  upgradeSkill(skillId) {
+    const sk = getSkill(skillId)
+    if (!sk) return { error: '战法不存在' }
+    if (!this.skills.includes(skillId)) return { error: '尚未拥有该战法' }
+    const curLv = this.skillLevels[skillId] || 1
+    if (curLv >= SKILL_MAX_LEVEL) return { error: '战法已满级' }
+    const cost = (sk.cost || 0) * curLv
+    if ((this.res.jade || 0) < cost) return { error: `玉石不足（需 ${cost}）` }
+    this.res.jade -= cost
+    this.skillLevels[skillId] = curLv + 1
+    this._pushLog(`⬆️ 战法【${sk.name}】升至 ${curLv + 1} 级，消耗 ${cost} 玉石`)
+    this.emit('skills', this.skills)
+    this.emit('resources', this.res)
+    return { success: true, level: curLv + 1 }
+  }
+
+  /** 查询战法当前等级（未拥有/缺省=1） */
+  skillLevel(skillId) {
+    return this.skillLevels[skillId] || 1
+  }
+
+  // ── 装备仓库 & 绑定 ─────────────────────────────────────────────────────────
+  // 每件装备实例 iid 全局唯一，存在 this.equipments；某装备是否「已绑定」由 boundTo 字段决定。
+  // 绑定规则：6 槽，每名武将每种类型最多 1 件；同一装备同时只能被 1 个武将绑定。
+
+  /** 仓库全部装备实例 */
+  ownedEquipments() { return this.equipments.slice() }
+  /** 仓库内未绑定装备（可装给武将） */
+  availableEquipments(type) {
+    return this.equipments.filter(e => !e.boundTo && (!type || e.type === type))
+  }
+  /** 按 iid 取装备实例 */
+  equipment(iid) { return this.equipments.find(e => e.iid === iid) || null }
+
+  /**
+   * 抽装备。扣 EQUIP_DRAW_COST 铜币，随机掷品质/类型/属性，入仓库 Lv.1。
+   * @returns {{success:true, eq} | {error:string}}
+   */
+  drawEquipment() {
+    if (this.res.coin < EQUIP_DRAW_COST) return { error: `铜币不足（需 ${EQUIP_DRAW_COST}）` }
+    this.res.coin -= EQUIP_DRAW_COST
+    const rolled = rollEquipment()
+    const iid = `eq_${++this._equipSeq}`
+    const eq = { iid, ...rolled, boundTo: null }
+    this.equipments.push(eq)
+    this._pushLog(`✨ 抽得【${equipName(eq)}】${equipDesc(eq)}`)
+    this.emit('equipments', this.equipments)
+    this.emit('resources', this.res)
+    return { success: true, eq }
+  }
+
+  /**
+   * 升级装备。消耗 = costBase × 当前等级。
+   * @returns {{success:true, level:number} | {error:string}}
+   */
+  upgradeEquipment(iid) {
+    const eq = this.equipment(iid)
+    if (!eq) return { error: '装备不存在' }
+    if (equipMaxed(eq)) return { error: '装备已满级' }
+    const cost = equipUpgradeCost(eq)
+    if (this.res.coin < cost) return { error: `铜币不足（需 ${cost}）` }
+    this.res.coin -= cost
+    eq.level += 1
+    this._pushLog(`⬆️【${equipName(eq)}】升至 ${eq.level} 级，消耗 ${cost} 铜币`)
+    this.emit('equipments', this.equipments)
+    this.emit('resources', this.res)
+    return { success: true, level: eq.level }
+  }
+
+  /**
+   * 给武将绑定装备（指定槽位）。若该槽已有装备则自动卸下回仓库。
+   * @returns {null|string} 成功返回 null，失败返回错误信息
+   */
+  bindEquip(generalId, iid) {
+    const g = this.general(generalId)
+    if (!g) return '武将不存在'
+    const eq = this.equipment(iid)
+    if (!eq) return '装备不存在'
+    if (!g.equip) g.equip = { weapon: null, helmet: null, necklace: null, armor: null, belt: null, boots: null }
+    const holder = this.equipments.find(e => e.iid === g.equip[eq.type])
+    if (eq.boundTo && eq.boundTo !== generalId) {
+      const other = this.general(eq.boundTo)
+      return `【${equipName(eq)}】已被 ${other?.name || '其他武将'} 装备`
+    }
+    // 卸下原装备
+    if (holder) holder.boundTo = null
+    // 装上新装备
+    g.equip[eq.type] = iid
+    eq.boundTo = generalId
+    this._pushLog(`📜 ${g.name} 装备【${equipName(eq)}】`)
+    this.emit('generals', this.generals)
+    this.emit('equipments', this.equipments)
+    return null
+  }
+
+  /** 卸下武将某槽位的装备 */
+  unbindEquip(generalId, type) {
+    const g = this.general(generalId)
+    if (!g || !g.equip) return
+    const iid = g.equip[type]
+    if (!iid) return
+    const eq = this.equipment(iid)
+    if (eq) eq.boundTo = null
+    g.equip[type] = null
+    this._pushLog(`📜 ${g.name} 卸下装备${eq ? `【${equipName(eq)}】` : ''}`)
+    this.emit('generals', this.generals)
+    this.emit('equipments', this.equipments)
+  }
+
+  /**
+   * 销毁装备，按品质返还玉石。若装备中会先自动卸下。
+   * @returns {{success:true, jade:number} | {error:string}}
+   */
+  dismissEquipment(iid) {
+    const idx = this.equipments.findIndex(e => e.iid === iid)
+    if (idx === -1) return { error: '装备不存在' }
+    const eq = this.equipments[idx]
+    if (eq.boundTo) this.unbindEquip(eq.boundTo, eq.type)
+    const jade = EQUIP_DISMISS_JADE[eq.quality] ?? 0
+    this.equipments.splice(idx, 1)
+    this.res.jade = (this.res.jade || 0) + jade
+    this._pushLog(`🗑️ 销毁【${equipName(eq)}】，获得 ${jade} 玉石`)
+    this.emit('equipments', this.equipments)
+    this.emit('resources', this.res)
+    return { success: true, jade }
+  }
+
+  /** 计算武将某属性的装备加成总和 */
+  equipBonus(g, attr) {
+    if (!g.equip) return 0
+    let sum = 0
+    for (const type of EQUIP_TYPES.map(t => t.id)) {
+      const iid = g.equip[type]
+      if (!iid) continue
+      const eq = this.equipment(iid)
+      if (eq && eq.attr === attr) sum += equipValue(eq)
+    }
+    return sum
   }
 
   /** 给武将绑定战法。返回错误信息或 null。若该将已有战法则先自动换下（换下的自动回可用池） */
@@ -296,18 +469,21 @@ export class GameState extends Emitter {
   }
 
   /**
-   * 遣散武将，无视等级、觉醒、状态。
-   * @returns {{success:true} | {error:string}}
+   * 遣散武将，无视等级、觉醒、状态。按品质产出玉石（见 docs/slg-战法升级与扩展设计.md 6.6）。
+   * @returns {{success:true, jade:number} | {error:string}}
    */
   dismissGeneral(id) {
     const idx = this.generals.findIndex(g => g.id === id)
     if (idx === -1) return { error: '武将不存在' }
     const g = this.generals[idx]
     if (g.state === 'marching') return { error: `${g.name} 正在行军中，无法遣散` }
+    const jade = DISMISS_JADE[g.quality] ?? 1
     this.generals.splice(idx, 1)
-    this._pushLog(`🗑️ 遣散 ${g.name}`)
+    this.res.jade = (this.res.jade || 0) + jade
+    this._pushLog(`🗑️ 遣散 ${g.name}（${GENERAL_QUALITY[g.quality]?.name || ''}），获得 ${jade} 玉石`)
     this.emit('generals', this.generals)
-    return { success: true }
+    this.emit('resources', this.res)
+    return { success: true, jade }
   }
 
   /**
@@ -317,6 +493,10 @@ export class GameState extends Emitter {
    * - 阵容已满且抽到新武将 → 转为觉醒一名同池随机已有武将（不浪费）
    */
   recruitGeneral() {
+    // 需求 3：武将名额上限检查——满员后无法继续招募（即使抽到重复也禁止）
+    if (this.generals.length >= MAX_GENERALS) {
+      return { error: `武将名额已满（${MAX_GENERALS}/${MAX_GENERALS}），请先遣散武将` }
+    }
     const free = this.freeRecruits > 0
     if (!free && this.res.coin < RECRUIT_COST_COIN) return { error: `铜币不足（需 ${RECRUIT_COST_COIN}）` }
     if (free) this.freeRecruits--
@@ -328,20 +508,27 @@ export class GameState extends Emitter {
     const tpl = (pool.length ? pool : RECRUITABLE_GENERALS)[
       Math.floor(Math.random() * (pool.length ? pool.length : RECRUITABLE_GENERALS.length))]
 
-    const owned = this.general(tpl.id)
     let result
-    if (!owned && this.generals.length < MAX_GENERALS) {
-      // 首名武将（开局免费招募所得）自带起始兵力，付费招募的武将则需另行征兵
-      const g = makeGeneral(tpl, free && this.generals.length === 0)
-      this.generals.push(g)
-      this._pushLog(`🎲 招募新武将 ${g.name}（${GENERAL_QUALITY[g.quality].name}）`)
-      result = { type: 'new', name: g.name, quality: g.quality, general: g }
+    // 需求 1：自动转换玉石开关——开启后普通/精良武将直接转为玉石，不入列也不觉醒
+    if (this.autoJadeCommon && (quality === 'common' || quality === 'rare')) {
+      const jade = DISMISS_JADE[quality] ?? 1
+      this.res.jade = (this.res.jade || 0) + jade
+      this._pushLog(`💎 ${tpl.name}（${GENERAL_QUALITY[quality].name}）自动转换为 ${jade} 玉石`)
+      result = { type: 'jade', name: tpl.name, quality, jade }
     } else {
-      // 觉醒目标：已拥有则本人，否则（阵容满）随机一名已有武将
-      const target = owned || this.generals[Math.floor(Math.random() * this.generals.length)]
-      const gain = this._awaken(target)
-      this._pushLog(`✨ ${target.name} 觉醒（武+${gain.atk} 防+${gain.def}，第 ${target.awaken} 次）`)
-      result = { type: 'awaken', name: target.name, quality: target.quality, general: target }
+      const owned = this.general(tpl.id)
+      if (owned) {
+        // 需求 2：已拥有武将自动进阶（觉醒）
+        const gain = this._awaken(owned)
+        this._pushLog(`✨ ${owned.name} 觉醒（武+${gain.atk} 防+${gain.def}，第 ${owned.awaken} 次）`)
+        result = { type: 'awaken', name: owned.name, quality: owned.quality, general: owned }
+      } else {
+        // 新武将入列（此时已确保未满员）
+        const g = makeGeneral(tpl, free && this.generals.length === 0)
+        this.generals.push(g)
+        this._pushLog(`🎲 招募新武将 ${g.name}（${GENERAL_QUALITY[g.quality].name}）`)
+        result = { type: 'new', name: g.name, quality: g.quality, general: g }
+      }
     }
     this.emit('resources', this.res)
     this.emit('generals', this.generals)
@@ -508,18 +695,19 @@ export class GameState extends Emitter {
 
     // 多对多同场混战：攻方每名武将、守方每队守将都是独立战斗单位，
     // 全场按速度排序逐个行动（见 battle.js）。实战属性在此折算：
-    // 等级加成 +(lv-1)*2×成长 + 铁匠坊全属性；速度另叠兵种加成（骑兵 +30，与行军同口径）。
+    // 等级加成 +(lv-1)*2×成长 + 铁匠坊全属性 + 装备主属性；速度另叠兵种加成（骑兵 +30，与行军同口径）。
     const total = gens.reduce((s, g) => s + g.troops, 0)
     const forgeBonus = FORGE_STAT_PER_LEVEL * this.buildings.forge
-    const effAtk = g => g.atk + (g.lv - 1) * LEVELUP_ATK * growthOf(g.quality) + forgeBonus
-    const effDef = g => g.def + (g.lv - 1) * LEVELUP_DEF * growthOf(g.quality) + forgeBonus
-    const effInt = g => g.int + forgeBonus
-    const effSpd = g => g.spd + (TROOP_TYPES[g.troopType]?.marchSpeed || 0) + forgeBonus
+    const effAtk = g => g.atk + (g.lv - 1) * LEVELUP_ATK * growthOf(g.quality) + forgeBonus + this.equipBonus(g, 'atk')
+    const effDef = g => g.def + (g.lv - 1) * LEVELUP_DEF * growthOf(g.quality) + forgeBonus + this.equipBonus(g, 'def')
+    const effInt = g => g.int + forgeBonus + this.equipBonus(g, 'int')
+    const effSpd = g => g.spd + (TROOP_TYPES[g.troopType]?.marchSpeed || 0) + forgeBonus + this.equipBonus(g, 'spd')
 
     const atkUnits = gens.map(g => ({
       key: g.id, name: g.name,
       atk: effAtk(g), def: effDef(g), int: effInt(g), spd: effSpd(g),
       troops: g.troops, troopType: g.troopType, skillId: g.skillId || null,
+      skillLv: this.skillLevel(g.skillId),
     }))
     // 守将单位：一队 = 一名武将，模板缺失的队伍跳过（不参战也不掉兵）
     const guardDefs = t.guards
@@ -541,13 +729,17 @@ export class GameState extends Emitter {
     const totalAtkLoss = r.atkLoss
     const totalExp = r.exp
 
-    // 伤亡逐将落账（谁被打谁掉兵）；经验按输出占比分（无输出则按出兵比例兜底）
+    // 伤亡逐将落账（谁被打谁掉兵）；经验分配 = 输出占比 70% + 出兵占比 30%
+    // （纯控制/承伤流武将也能分到经验；守军空虚时 totalDealt=0 退化为纯出兵比例）
     const totalDealt = r.units.atk.reduce((s, u) => s + u.dealt, 0)
     gens.forEach((g) => {
       const u = r.units.atk.find(u => u.key === g.id)
       if (!u) return
+      const preTroops = g.troops                       // 战前出兵（兜底/混合分配用，须在更新前记录）
       g.troops = u.troops
-      const share = totalDealt > 0 ? u.dealt / totalDealt : g.troops / Math.max(1, total)
+      const share = totalDealt > 0
+        ? (u.dealt / totalDealt) * 0.7 + (preTroops / total) * 0.3
+        : preTroops / total
       this._gainExp(g, Math.round(totalExp * share))
     })
     // 守军伤损直接落账（胜则全灭清零，天然抹掉回复带来的小数残余）
@@ -704,10 +896,14 @@ export class GameState extends Emitter {
       }
     }
     const data = {
-      v: 7, seed: this.seed, savedAt: Date.now(), now: this.now,
+      v: 9, seed: this.seed, savedAt: Date.now(), now: this.now,
       res: this.res, cityLv: this.cityLv,
       freeRecruits: this.freeRecruits,
+      autoJadeCommon: !!this.autoJadeCommon,
       skills: this.skills.slice(),
+      skillLevels: { ...this.skillLevels },
+      equipments: this.equipments.map(e => ({ ...e })),
+      _equipSeq: this._equipSeq,
       buildings: { ...this.buildings },
       generals: this.generals.map(g => ({
         id: g.id, name: g.name, quality: g.quality, troopType: g.troopType, faction: g.faction,
@@ -715,6 +911,8 @@ export class GameState extends Emitter {
         // int 参与战斗（智力战法）且会被升级/觉醒加成，必须持久化（旧档缺省时回退模板值）
         lv: g.lv, exp: Math.round(g.exp), troops: g.troops, atk: g.atk, def: g.def, int: g.int,
         stamina: Math.round(g.stamina), awaken: g.awaken || 0, skillId: g.skillId || null,
+        // v9+ 武将装备槽：6 类 iid（旧档缺省时回退空槽）
+        equip: { ...(g.equip || { weapon: null, helmet: null, necklace: null, armor: null, belt: null, boots: null }) },
       })),
       owned,
       marches: this.marches,
@@ -749,8 +947,15 @@ export class GameState extends Emitter {
     gs.buildings = { ...gs.buildings, ...(data.buildings || {}) }
     // v4+ 才有免费招募次数；v1~v3 旧存档已获得过起手三武将，不再补送
     gs.freeRecruits = data.v >= 4 ? (data.freeRecruits ?? 0) : 0
+    // v9+ 招募开关：旧档缺省 false
+    gs.autoJadeCommon = data.autoJadeCommon === true
     // v7+ 才有战法仓库；从 v6 迁移的旧档保留构造时随机发的 3 个（data.skills 缺省）
     if (data.skills) gs.skills = data.skills.slice()
+    // v8+ 才有战法等级；v6/v7 旧档缺省 {}，所有战法默认 Lv.1
+    if (data.skillLevels) gs.skillLevels = { ...data.skillLevels }
+    // v9+ 才有装备仓库；旧档缺省空仓库，武将装备槽在 Object.assign 后由 makeGeneral 兜底为空槽
+    if (data.equipments) gs.equipments = data.equipments.map(e => ({ ...e }))
+    if (data._equipSeq) gs._equipSeq = data._equipSeq
 
     for (const sg of data.generals || []) {
       let g = gs.general(sg.id)
@@ -763,7 +968,12 @@ export class GameState extends Emitter {
       }
       // v1/v2 存档无 stamina/awaken 字段：Object.assign 不会覆盖，保留 makeGeneral 的默认
       Object.assign(g, sg)
+      // v8 旧档无 equip 字段：补默认空槽（避免后续 equipBonus/g.equip.xxx 访问报错）
+      if (!g.equip) g.equip = { weapon: null, helmet: null, necklace: null, armor: null, belt: null, boots: null }
     }
+    // V2.0 战法精简迁移：旧 ID → 新 ID（17 旧战法收缩为 7 保留战法）
+    // 武将 skillId、gs.skills 仓库、gs.skillLevels 等级一并迁移；等级取 max 避免回退
+    _migrateV2Skills(gs)
     for (const o of data.owned || []) {
       const t = gs.tileAt(o.x, o.y)
       if (!t) continue
@@ -813,5 +1023,55 @@ export class GameState extends Emitter {
       gs._pushLog(`⏳ 离线收益已结算（${Math.round(gameSecs / 3600 * 10) / 10} 游戏小时）`)
     }
     return gs
+  }
+}
+
+// V2.0 战法精简迁移表：17 个旧战法 ID → 7 个保留战法 ID
+// 删除的旧战法按属性/类型映射到保留代表：武力单体→力劈、速度单体→疾风、智力单体→火攻、
+// 武力群体→箭雨（旋风）、智力群体→落雷（毒计）、追击→连击、控制→谎报
+const SKILL_MIGRATION_V2 = {
+  huikan:  'lipi',     mengji:  'lipi',     tuci:    'lipi',
+  jianta:  'jifeng',   tuxi:    'jifeng',
+  shuigong:'huogong',  tianlei: 'huogong',
+  xuanfeng:'jianyu',
+  duji:    'luolei',
+  zhuiji:  'lianji',   hengsao: 'lianji',
+  weishe:  'huangbao', mizhen:  'huangbao', jiaoxie: 'huangbao',
+}
+
+/**
+ * V2.0 战法精简迁移：在 GameState.load() 末尾调用，把旧战法 ID 迁移到新 ID。
+ * 1) 武将 skillId 旧 ID → 新 ID
+ * 2) gs.skills 仓库去重（旧+新合并到新 ID）
+ * 3) gs.skillLevels 等级迁移（同新 ID 取 max，避免回退）
+ * 4) 过滤掉迁移后仍不在 SKILLS 字典中的无效 ID（保险）
+ */
+function _migrateV2Skills(gs) {
+  // 1) 武将 skillId 迁移
+  for (const g of gs.generals) {
+    if (g.skillId && SKILL_MIGRATION_V2[g.skillId]) {
+      g.skillId = SKILL_MIGRATION_V2[g.skillId]
+    }
+  }
+  // 2) skills 仓库去重迁移
+  if (Array.isArray(gs.skills) && gs.skills.length) {
+    const seen = new Set()
+    const next = []
+    for (const id of gs.skills) {
+      const nid = SKILL_MIGRATION_V2[id] || id
+      if (!getSkill(nid)) continue            // 保险：跳过未知 ID
+      if (!seen.has(nid)) { seen.add(nid); next.push(nid) }
+    }
+    gs.skills = next
+  }
+  // 3) skillLevels 等级迁移（同新 ID 取 max）
+  if (gs.skillLevels && Object.keys(gs.skillLevels).length) {
+    const next = {}
+    for (const [id, lv] of Object.entries(gs.skillLevels)) {
+      const nid = SKILL_MIGRATION_V2[id] || id
+      if (!getSkill(nid)) continue            // 保险：跳过未知 ID
+      next[nid] = Math.max(next[nid] || 0, lv)
+    }
+    gs.skillLevels = next
   }
 }

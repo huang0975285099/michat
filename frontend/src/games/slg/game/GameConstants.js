@@ -44,6 +44,7 @@ export const RESOURCES = {
   wood:  { name: '木材', icon: '🌲' },
   iron:  { name: '铁矿', icon: '⛏️' },
   stone: { name: '石料', icon: '🧱' },
+  jade:  { name: '玉石', icon: '💎' },
 }
 
 // 地块每小时产量 = level * BASE_YIELD_PER_LEVEL（npcCity 为每种资源各产一半）
@@ -144,8 +145,13 @@ export const AWAKEN_INT = 3
 export const AWAKEN_SPD = 3
 // ── 武将数值来源 ──────────────────────────────────────────────────────────────
 // 参照《三国志》系列（Koei 历代综合评价，非某单一版本）的五维：统率/武力/智力/政治/魅力（0~100），
-// 换算为本游戏字段：atk=武力  def=统率  int=智力（新增，供后续玩法/展示用，暂不参与战斗结算）
+// 换算为本游戏字段：atk=武力  def=统率  int=智力（现已参战：驱动智力战法伤害，见 skills.js）
 //   spd = round((政治+魅力)/2)  —— 谋主/主公类角色政治魅力高，出手快但攻防偏低，形成「快而脆」的差异化定位。
+// ⚠ 平衡修正（战法系统上线后）：原分档评分 score=atk*0.5+def*0.35+spd*0.15 不含智力、过度偏重武力，
+//   导致纯武力莽夫被抬进高档但实战偏弱（智力/速度/防御崩盘），出现「精英<稀有、稀有<普通」的抽卡倒挂。
+//   在不改分档/阵营/兵种分布的前提下，对以下武将「抬底垫属性」（保武力不变，只补被卡死的速/智/防）：
+//   典韦/张飞/周泰/马超/许褚/文丑/夏侯惇/董卓/华雄 补速度与智力下限；华佗/貂蝉（武力近乎为 0 的废将）
+//   小幅补武/防至可战。故个别武将数值已偏离纯历史评价，以玩法平衡为准。
 // 品质/tier 分档规则（每档同时满足两条约束）：
 //   1) 阵营 魏/蜀/吴/群 各占 1/4（传说各1、精英各2、稀有各3、普通各4；守将 tier5/4 各占2，tier3/2/1 各占1）
 //   2) 兵种 枪/盾/弓/骑 各占 1/4（同上比例）
@@ -169,12 +175,12 @@ export const RECRUITABLE_GENERALS = [
   // === Elite (精英) - 8个（阵营/兵种各占2）===
   { id: 'guanyu',     name: '关羽',   quality: 'elite', faction: 'shu', troopType: 'cavalry', atk: 97,  def: 90, int: 75, spd: 79 },
   { id: 'taishici',   name: '太史慈', quality: 'elite', faction: 'wu',  troopType: 'bow',     atk: 91,  def: 84, int: 56, spd: 61 },
-  { id: 'dianwei',    name: '典韦',   quality: 'elite', faction: 'wei', troopType: 'shield',  atk: 96,  def: 68, int: 30, spd: 26 },
-  { id: 'zhangfei',   name: '张飞',   quality: 'elite', faction: 'shu', troopType: 'spear',   atk: 98,  def: 78, int: 30, spd: 38 },
-  { id: 'pangde',     name: '庞德',   quality: 'elite', faction: 'wei', troopType: 'spear',   atk: 94,  def: 78, int: 56, spd: 53 },
+  { id: 'dianwei',    name: '典韦',   quality: 'elite', faction: 'wei', troopType: 'shield',  atk: 96,  def: 72, int: 44, spd: 46 },
+  { id: 'zhangfei',   name: '张飞',   quality: 'elite', faction: 'shu', troopType: 'spear',   atk: 98,  def: 78, int: 40, spd: 46 },
+  { id: 'simayi',     name: '司马懿', quality: 'elite', faction: 'wei', troopType: 'spear',   atk: 64,  def: 91, int: 97,  spd: 83 },
   { id: 'zhanghe',    name: '张郃',   quality: 'elite', faction: 'qun', troopType: 'bow',     atk: 90,  def: 88, int: 77, spd: 64 },
-  { id: 'zhoutai',    name: '周泰',   quality: 'elite', faction: 'wu',  troopType: 'shield',  atk: 91,  def: 75, int: 32, spd: 43 },
-  { id: 'machao',     name: '马超',   quality: 'elite', faction: 'qun', troopType: 'cavalry', atk: 97,  def: 82, int: 33, spd: 48 },
+  { id: 'zhoutai',    name: '周泰',   quality: 'elite', faction: 'wu',  troopType: 'shield',  atk: 91,  def: 75, int: 46, spd: 52 },
+  { id: 'machao',     name: '马超',   quality: 'elite', faction: 'qun', troopType: 'cavalry', atk: 97,  def: 82, int: 46, spd: 54 },
 
   // === Rare (稀有) - 12个（阵营/兵种各占3）===
   { id: 'zhaoyun',    name: '赵云',   quality: 'rare', faction: 'shu', troopType: 'cavalry', atk: 96, def: 91, int: 76, spd: 79 },
@@ -183,11 +189,11 @@ export const RECRUITABLE_GENERALS = [
   { id: 'zhouyu',     name: '周瑜',   quality: 'rare', faction: 'wu',  troopType: 'bow',     atk: 71, def: 96, int: 95, spd: 86 },
   { id: 'weiyi',      name: '魏延',   quality: 'rare', faction: 'shu', troopType: 'spear',   atk: 90, def: 83, int: 58, spd: 48 },
   { id: 'ganning',    name: '甘宁',   quality: 'rare', faction: 'wu',  troopType: 'bow',     atk: 93, def: 78, int: 55, spd: 47 },
-  { id: 'xuchu',      name: '许褚',   quality: 'rare', faction: 'wei', troopType: 'spear',   atk: 96, def: 65, int: 25, spd: 26 },
+  { id: 'xuchu',      name: '许褚',   quality: 'rare', faction: 'wei', troopType: 'spear',   atk: 96, def: 70, int: 42, spd: 46 },
   { id: 'chengpu',    name: '程普',   quality: 'rare', faction: 'wu',  troopType: 'shield',  atk: 83, def: 85, int: 58, spd: 63 },
-  { id: 'wenchou',    name: '文丑',   quality: 'rare', faction: 'qun', troopType: 'cavalry', atk: 93, def: 69, int: 24, spd: 28 },
-  { id: 'xiahoudun',  name: '夏侯惇', quality: 'rare', faction: 'wei', troopType: 'shield',  atk: 94, def: 70, int: 32, spd: 34 },
-  { id: 'dongzhuo',   name: '董卓',   quality: 'rare', faction: 'qun', troopType: 'shield',  atk: 88, def: 60, int: 15, spd: 23 },
+  { id: 'wenchou',    name: '文丑',   quality: 'rare', faction: 'qun', troopType: 'cavalry', atk: 93, def: 69, int: 42, spd: 46 },
+  { id: 'xiahoudun',  name: '夏侯惇', quality: 'rare', faction: 'wei', troopType: 'shield',  atk: 94, def: 70, int: 44, spd: 46 },
+  { id: 'dongzhuo',   name: '董卓',   quality: 'rare', faction: 'qun', troopType: 'shield',  atk: 88, def: 66, int: 42, spd: 44 },
   { id: 'zhangjiao',  name: '张角',   quality: 'rare', faction: 'qun', troopType: 'bow',     atk: 56, def: 77, int: 90, spd: 77 },
 
   // === Common (普通) - 16个（阵营/兵种各占4）===
@@ -200,13 +206,13 @@ export const RECRUITABLE_GENERALS = [
   { id: 'yuwen',      name: '于禁',   quality: 'common', faction: 'wei', troopType: 'spear',   atk: 83,  def: 82, int: 62, spd: 50 },
   { id: 'madai',      name: '马岱',   quality: 'common', faction: 'shu', troopType: 'cavalry', atk: 83,  def: 75, int: 52,  spd: 43 },
   { id: 'guanxing',   name: '关兴',   quality: 'common', faction: 'shu', troopType: 'cavalry', atk: 83,  def: 71, int: 48,  spd: 48 },
-  { id: 'huaxiong',   name: '华雄',   quality: 'common', faction: 'qun', troopType: 'cavalry', atk: 90,  def: 67, int: 34,  spd: 30 },
-  { id: 'simayi',     name: '司马懿', quality: 'common', faction: 'wei', troopType: 'shield',  atk: 54,  def: 91, int: 97,  spd: 83 },
+  { id: 'huaxiong',   name: '华雄',   quality: 'common', faction: 'qun', troopType: 'cavalry', atk: 90,  def: 67, int: 42,  spd: 44 },
+  { id: 'pangde',     name: '庞德',   quality: 'common', faction: 'wei', troopType: 'shield',  atk: 94,  def: 78, int: 56, spd: 53 },
   { id: 'lusu',       name: '鲁肃',   quality: 'common', faction: 'wu',  troopType: 'shield',  atk: 55,  def: 80, int: 88,  spd: 85 },
   { id: 'jiling',     name: '纪灵',   quality: 'common', faction: 'qun', troopType: 'spear',   atk: 80,  def: 62, int: 40,  spd: 38 },
   { id: 'huangzhong', name: '黄忠',   quality: 'common', faction: 'shu', troopType: 'bow',     atk: 91,  def: 78, int: 57, spd: 54 },
-  { id: 'diaochan',   name: '貂蝉',   quality: 'common', faction: 'qun', troopType: 'bow',     atk: 20,  def: 10, int: 66,  spd: 69 },
-  { id: 'huatuo',     name: '华佗',   quality: 'common', faction: 'qun', troopType: 'shield',  atk: 6,   def: 10, int: 94,  spd: 45 },
+  { id: 'diaochan',   name: '貂蝉',   quality: 'common', faction: 'qun', troopType: 'bow',     atk: 38,  def: 42, int: 70,  spd: 74 },
+  { id: 'huatuo',     name: '华佗',   quality: 'common', faction: 'qun', troopType: 'shield',  atk: 32,  def: 46, int: 94,  spd: 55 },
 ];
 
 // ── 守将池（仅守地用，不进抽卡池）───────────────────────────────────────────
@@ -348,8 +354,47 @@ export function npcCityLootOf(level) {
 export const GARRISON_REGEN_PER_HOUR = 0.1
 
 // ── 初始资源 ────────────────────────────────────────────────────────────────
-export const INITIAL_RESOURCES = { coin: 1000, grain: 2000, wood: 500, iron: 200, stone: 500 }
+export const INITIAL_RESOURCES = { coin: 1000, grain: 2000, wood: 500, iron: 200, stone: 500, jade: 0 }
 export const INITIAL_TROOPS = 100   // 每名初始武将的起始兵力（=1级基础带兵上限，开局不超编）
+
+// ── 玉石经济（战法系统，见 docs/slg-战法升级与扩展设计.md 6.6）─────────────────
+// 玉石：销毁武将产出，用于战法兑换与升级。非地块产出资源，仅由遣散武将获得。
+export const DISMISS_JADE = {
+  basic: 1, common: 2, rare: 5, elite: 10, legend: 20,
+}
+export const SKILL_MAX_LEVEL = 10
+
+// ── 装备系统（见 docs/slg-装备系统设计.md）─────────────────────────────────
+// 6 种装备槽位，每名武将每种类型最多装 1 件。
+export const EQUIP_TYPES = [
+  { id: 'weapon',   name: '武器', icon: '⚔️' },
+  { id: 'helmet',   name: '头盔', icon: '⛑️' },
+  { id: 'necklace', name: '项链', icon: '📿' },
+  { id: 'armor',    name: '铠甲', icon: '🛡️' },
+  { id: 'belt',     name: '腰带', icon: '🟫' },
+  { id: 'boots',    name: '靴子', icon: '🥾' },
+]
+// 装备属性：与武将四维对齐
+export const EQUIP_ATTRS = {
+  atk: { name: '武力', icon: '⚔' },
+  def: { name: '统率', icon: '🛡' },
+  int: { name: '智力', icon: '🧠' },
+  spd: { name: '速度', icon: '💨' },
+}
+// 装备品质：与武将品质共用概率（rate），但 basic 不进装备池。
+// value=Lv.1 主属性，step=每级增量，costBase=升级铜币基础（消耗 = costBase × 当前等级）
+export const EQUIP_QUALITY = {
+  common: { name: '普通', color: '#bdbdbd', rate: 50, value: 5,  step: 1, costBase: 200  },
+  rare:   { name: '精良', color: '#4fc3f7', rate: 30, value: 10, step: 2, costBase: 500  },
+  elite:  { name: '精锐', color: '#ba68c8', rate: 15, value: 18, step: 3, costBase: 1200 },
+  legend: { name: '王牌', color: '#ffb300', rate: 5,  value: 30, step: 5, costBase: 3000 },
+}
+export const EQUIP_MAX_LEVEL = 10
+export const EQUIP_DRAW_COST = 2000   // 抽装备单次消耗铜币
+// 销毁装备返还玉石：按品质阶梯（与武将遣散同口径，装备档更高）
+export const EQUIP_DISMISS_JADE = {
+  common: 5, rare: 10, elite: 30, legend: 50,
+}
 
 // 存档 key
 export const SAVE_KEY = 'slg:save:v1'

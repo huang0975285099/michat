@@ -12,9 +12,14 @@ import {
   STAMINA_MAX, MARCH_STAMINA_COST, STAMINA_REGEN_PER_HOUR,
   GENERAL_QUALITY, MAX_GENERALS, RECRUIT_COST_COIN, AWAKEN_ATK, AWAKEN_DEF, AWAKEN_INT, AWAKEN_SPD,
   TROOP_TYPES, counterMult, findGeneralTemplate, guardStat, MAX_MARCH_PARTY,
+  SKILL_MAX_LEVEL,
+  EQUIP_TYPES, EQUIP_QUALITY, EQUIP_MAX_LEVEL, EQUIP_DRAW_COST, EQUIP_DISMISS_JADE,
 } from '../GameConstants.js'
 import { GameState } from '../core/GameState.js'
-import { getSkill } from '../core/skills.js'
+import { getSkill, BINDABLE_SKILLS, skillLevelAt, skillStatLine } from '../core/skills.js'
+import {
+  equipValue, equipUpgradeCost, equipMaxed, equipName, equipDesc,
+} from '../core/equipment.js'
 
 const FONT = "'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
 const TOPBAR_H = 40
@@ -178,7 +183,9 @@ export class UIScene extends Phaser.Scene {
     this.bottomBtns = [
       this._circleBtn('🏠', () => this.game.events.emit('center-on', this.state.spawn)),
       this._circleBtn('👥', () => this._openGenerals()),
-      this._circleBtn('📜', () => this._openLog()),
+      this._circleBtn('🎒', () => this._openEquipWarehouse()),
+      this._circleBtn('📜', () => this._openSkillWarehouse()),
+      this._circleBtn('📊', () => this._openLog()),
       this._circleBtn('⚙️', () => this._openSettings()),
     ]
     this._layoutBottombar()
@@ -578,6 +585,119 @@ export class UIScene extends Phaser.Scene {
     })
   }
 
+  // ── 弹窗：战法仓库（兑换 + 升级）─────────────────────────────────────────
+  // 顶部展示玉石余额；列表分两段：
+  //   1) 已拥有战法：显示当前等级，按钮为「升级」（满级置灰）
+  //   2) 可兑换战法：按钮为「兑换」（玉石不足置灰）
+  // 升级消耗 = cost × 当前等级；兑换消耗 = cost。
+
+  _openSkillWarehouse() {
+    const owned = this.state.ownedSkills()
+    const ownedSet = new Set(owned)
+    const buyable = BINDABLE_SKILLS.filter(s => !ownedSet.has(s.id))
+    const rowCount = owned.length + buyable.length
+    const rowH = 82
+    const sw = this.scale.width, sh = this.scale.height
+    const w = Math.min(sw - 24, 460)
+    const headerH = 58, footerH = 26
+    const listVH = Math.min(rowCount * rowH, (sh - 100) - headerH - footerH)
+    const h = headerH + Math.max(listVH, rowH) + footerH
+    const rw = w - 24
+    this._openModal(w, h, (panel) => {
+      panel.add(this.add.text(0, -h / 2 + 12, '📜 战法仓库', style(15, '#ffffff', true)).setOrigin(0.5, 0))
+      const jade = Math.floor(this.state.res.jade || 0)
+      panel.add(this.add.text(0, -h / 2 + 34, `💎 玉石 ${fmt(jade)}`,
+        style(12, '#ffd54f', true)).setOrigin(0.5, 0))
+
+      if (rowCount === 0) {
+        panel.add(this.add.text(0, 0, '暂无战法\n（遣散武将或下方兑换可获得）',
+          { ...style(12, '#888888'), align: 'center' }).setOrigin(0.5))
+        panel.add(this._button(0, h / 2 - 22, 120, 26, '关闭', COLOR.btnGrey, true,
+          () => this._closeModal()))
+        return
+      }
+
+      const content = this._makeScrollRegion(
+        sw / 2 - w / 2 + 12, sh / 2 - h / 2 + headerH, w - 24, listVH, rowCount * rowH + 8)
+
+      // 第 1 段：已拥有战法（升级）
+      owned.forEach((sid, i) => {
+        const sk = getSkill(sid)
+        if (!sk) return
+        const lv = this.state.skillLevel(sid)
+        const cy = i * rowH + rowH / 2
+        const half = rowH - 8
+        const row = this._row(content, cy, rw, half, false, null)
+        row.x = rw / 2
+        const holder = this.state.skillBoundTo(sid)
+        // 第1行：名称 + 等级 (左) | 持有者 (右)
+        row.add(this.add.text(-rw / 2 + 10, -half / 2 + 9,
+          `【${sk.name}】  Lv.${lv}/${SKILL_MAX_LEVEL}`,
+          style(13, '#ffffff', true)).setOrigin(0, 0.5))
+        if (holder) {
+          row.add(this.add.text(rw / 2 - 12, -half / 2 + 9, `已绑 ${holder.name}`,
+            style(10, '#81c784')).setOrigin(1, 0.5))
+        }
+        // 第2行：当前 → 下级 关键数值（核心：让玩家看到升级收益）
+        const maxed = lv >= SKILL_MAX_LEVEL
+        const curLine = skillStatLine(sk, lv)
+        const nextLine = maxed ? '' : skillStatLine(sk, lv + 1)
+        const dataColor = maxed ? '#9e9e9e' : '#a5d6a7'
+        const dataText = maxed
+          ? `当前 ${curLine}（已满级）`
+          : `Lv.${lv} ${curLine}  →  Lv.${lv + 1} ${nextLine}`
+        row.add(this.add.text(-rw / 2 + 10, -8, dataText,
+          style(10, dataColor)).setOrigin(0, 0.5))
+        // 第3行：升级花费 (右偏左) + 升级按钮 (右)
+        const upCost = (sk.cost || 0) * lv
+        const sub = maxed ? '已满级' : `升级 💎${upCost}`
+        row.add(this.add.text(rw / 2 - 92, half / 2 - 9, sub,
+          style(10, maxed ? '#9e9e9e' : (jade < upCost ? '#ef9a9a' : '#9ccc9c')))
+          .setOrigin(1, 0.5))
+        const canUp = !maxed && jade >= upCost
+        row.add(this._button(rw / 2 - 48, half / 2 - 12, 76, 24,
+          maxed ? '满级' : '升级', COLOR.btnAmber, canUp, () => {
+            const r = this.state.upgradeSkill(sid)
+            if (r.error) this._toast(r.error, COLOR.toastWarn)
+            else { this._toast(`【${sk.name}】升至 ${r.level} 级`, COLOR.toastWin); this._openSkillWarehouse() }
+          }))
+      })
+
+      // 第 2 段：可兑换战法（兑换）— 显示 Lv.1 数据让玩家判断价值
+      const offset = owned.length * rowH
+      buyable.forEach((sk, j) => {
+        const cy = offset + j * rowH + rowH / 2
+        const half = rowH - 8
+        const row = this._row(content, cy, rw, half, false, null)
+        row.x = rw / 2
+        row.add(this.add.text(-rw / 2 + 10, -half / 2 + 9,
+          `【${sk.name}】`, style(13, '#ffd54f', true)).setOrigin(0, 0.5))
+        row.add(this.add.text(rw / 2 - 12, -half / 2 + 9, '未拥有',
+          style(10, '#9e9e9e')).setOrigin(1, 0.5))
+        // Lv.1 数据 + 描述
+        const lv1Line = skillStatLine(sk, 1)
+        row.add(this.add.text(-rw / 2 + 10, -8, `Lv.1 ${lv1Line}`,
+          style(10, '#a5d6a7')).setOrigin(0, 0.5))
+        row.add(this._ellipsisText(sk.desc, style(9, '#9e9e9e'), rw - 24)
+          .setPosition(-rw / 2 + 10, 12).setOrigin(0, 0.5))
+        const cost = sk.cost || 0
+        row.add(this.add.text(rw / 2 - 92, half / 2 - 9, `兑换 💎${cost}`,
+          style(10, jade < cost ? '#ef9a9a' : '#9ccc9c')).setOrigin(1, 0.5))
+        const canBuy = jade >= cost
+        row.add(this._button(rw / 2 - 48, half / 2 - 12, 76, 24,
+          '兑换', COLOR.btnGreen, canBuy, () => {
+            const r = this.state.buySkill(sk.id)
+            if (r.error) this._toast(r.error, COLOR.toastWarn)
+            else { this._toast(`兑换【${sk.name}】成功`, COLOR.toastWin); this._openSkillWarehouse() }
+          }))
+      })
+
+      panel.add(this.add.text(0, h / 2 - 16,
+        '遣散武将产出玉石 · 升级消耗 = 兑换价 × 当前等级',
+        style(10, '#9e9e9e')).setOrigin(0.5, 0))
+    })
+  }
+
   // ── 弹窗：战法绑定 ───────────────────────────────────────────────────────
   // 列出仓库全部战法：可用的点按即绑定（自动换下原战法）；当前武将已装备的点按解绑；
   // 已被其他武将占用的置灰并注明持有者。一将一法、一法一将。
@@ -655,8 +775,8 @@ export class UIScene extends Phaser.Scene {
       panel.add(this.add.text(-w / 2 + 14, -h / 2 + 14, '武将', style(15, '#ffffff', true)).setOrigin(0, 0))
       panel.add(this.add.text(-w / 2 + 60, -h / 2 + 16,
         `${gens.length}/${MAX_GENERALS}`, style(11, '#9e9e9e')).setOrigin(0, 0))
-      // 招募入口
-      panel.add(this._button(w / 2 - 58, -h / 2 + 23, 96, 28, '🎲 招募', COLOR.btnAmber, true,
+      // 招募入口（抽装备入口已移至「装备仓库」面板右上角）
+      panel.add(this._button(w / 2 - 52, -h / 2 + 23, 92, 28, '🎲 招募', COLOR.btnAmber, true,
         () => { this._recruitResult = null; this._openRecruit() }))
 
       const content = this._makeScrollRegion(
@@ -677,9 +797,9 @@ export class UIScene extends Phaser.Scene {
         const awaken = g.awaken ? `✦${g.awaken} ` : ''
         const gt = TROOP_TYPES[g.troopType]
 
-        // 布局分区：左头像 + 中间信息 + 右按钮列
+        // 布局分区：左头像（含装备按钮）+ 中间信息 + 右按钮列
         const btnW = 62, btnGap = 8
-        const avatarSize = half - 12
+        const avatarSize = 56                  // 头像缩小，给下方装备按钮留空间
         const avatarX = -rw / 2 + 8
         const infoLeft = avatarX + avatarSize + 10
         const infoRight = rw / 2 - btnW - btnGap - 2
@@ -696,6 +816,15 @@ export class UIScene extends Phaser.Scene {
           row.add(this.add.text(avatarX + avatarSize - 2, -half / 2 + 8, gt.icon,
             style(11)).setOrigin(1, 0))
         }
+
+        // ── 头像下方：配装备按钮 ──
+        const equipCount = EQUIP_TYPES.reduce((s, t) => s + (g.equip?.[t.id] ? 1 : 0), 0)
+        row.add(this._button(avatarX + avatarSize / 2, half / 2 - 13, avatarSize, 22,
+          equipCount ? `装备${equipCount}/6` : '配装备',
+          equipCount ? COLOR.btnAmber : COLOR.btnGrey, true, () => {
+            if (!this._rowVisibleInScroll(cy)) return
+            this._openEquipManage(g.id)
+          }))
 
         // ── 右上：名字 + 等级 + 品质标签 ──
         row.add(this.add.text(infoLeft, -half / 2 + 12,
@@ -772,7 +901,7 @@ export class UIScene extends Phaser.Scene {
   // ── 弹窗：招募（抽卡）────────────────────────────────────────────────────
 
   _openRecruit() {
-    const w = Math.min(this.scale.width - 24, 360), h = 250
+    const w = Math.min(this.scale.width - 24, 360), h = 300
     this._openModal(w, h, (panel) => {
       panel.add(this.add.text(0, -h / 2 + 16, '🎲 招募武将', style(16, '#ffffff', true)).setOrigin(0.5, 0))
 
@@ -782,16 +911,38 @@ export class UIScene extends Phaser.Scene {
         .map(q => `${q.name} ${q.rate}%`).join('    ')
       panel.add(this.add.text(0, -h / 2 + 46, rates, style(11, '#9e9e9e')).setOrigin(0.5, 0))
 
+      // 自动转换玉石开关（普通/精良 → 玉石）
+      const autoJade = !!this.state.autoJadeCommon
+      panel.add(this._button(0, -h / 2 + 78, 280, 26,
+        `💎 自动转换 普通/精良 → 玉石：${autoJade ? '开启' : '关闭'}`,
+        autoJade ? COLOR.btnAmber : COLOR.btnGrey, true, () => {
+          this.state.autoJadeCommon = !this.state.autoJadeCommon
+          this.state.save()
+          this._openRecruit()
+        }))
+
       // 结果显示区
       const res = this._recruitResult
-      const resY = -6
+      const resY = -10
       const free = this.state.freeRecruits > 0
+      const full = this.state.generals.length >= MAX_GENERALS
       if (res) {
         const q = GENERAL_QUALITY[res.quality] || GENERAL_QUALITY.common
-        panel.add(this.add.text(0, resY - 18,
-          res.type === 'new' ? '获得新武将！' : '武将觉醒！', style(13, '#dddddd')).setOrigin(0.5))
-        panel.add(this.add.text(0, resY + 8,
-          `${q.name} · ${res.name}`, style(20, q.color, true)).setOrigin(0.5))
+        const title = res.type === 'new' ? '获得新武将！' :
+          res.type === 'awaken' ? '武将觉醒！' : '已转换为玉石'
+        panel.add(this.add.text(0, resY - 18, title, style(13, '#dddddd')).setOrigin(0.5))
+        if (res.type === 'jade') {
+          panel.add(this.add.text(0, resY + 8,
+            `${q.name} · ${res.name}\n💎 +${res.jade} 玉石`,
+            { ...style(18, q.color, true), align: 'center' }).setOrigin(0.5))
+        } else {
+          panel.add(this.add.text(0, resY + 8,
+            `${q.name} · ${res.name}`, style(20, q.color, true)).setOrigin(0.5))
+        }
+      } else if (full) {
+        panel.add(this.add.text(0, resY,
+          `⚠️ 武将名额已满（${MAX_GENERALS}/${MAX_GENERALS}）\n请先遣散武将后再招募`,
+          { ...style(12, '#ff8a65'), align: 'center' }).setOrigin(0.5))
       } else if (free) {
         panel.add(this.add.text(0, resY,
           `剩余 ${this.state.freeRecruits} 次免费招募机会\n重复武将转为觉醒（武+${AWAKEN_ATK} 防+${AWAKEN_DEF} 智+${AWAKEN_INT} 速+${AWAKEN_SPD} ×品质成长）`,
@@ -802,10 +953,11 @@ export class UIScene extends Phaser.Scene {
           { ...style(12, '#9e9e9e'), align: 'center' }).setOrigin(0.5))
       }
 
-      // 招募按钮
-      const canAfford = free || this.state.res.coin >= RECRUIT_COST_COIN
+      // 招募按钮（满员时禁用）
+      const canAfford = !full && (free || this.state.res.coin >= RECRUIT_COST_COIN)
       panel.add(this._button(0, h / 2 - 58, 200, 36,
-        free ? '免费招募' : `招募（${RESOURCES.coin.icon}${RECRUIT_COST_COIN}）`, COLOR.btnAmber, canAfford, () => {
+        free ? '免费招募' : `招募（${RESOURCES.coin.icon}${RECRUIT_COST_COIN}）`,
+        COLOR.btnAmber, canAfford, () => {
           const r = this.state.recruitGeneral()
           if (r.error) { this._toast(r.error, COLOR.toastWarn); return }
           this._recruitResult = r
@@ -815,6 +967,278 @@ export class UIScene extends Phaser.Scene {
         this._recruitResult = null
         this._openGenerals()
       }))
+    })
+  }
+
+  // ── 弹窗：抽装备 ─────────────────────────────────────────────────────────
+
+  _openEquipDraw() {
+    const w = Math.min(this.scale.width - 24, 360), h = 250
+    this._openModal(w, h, (panel) => {
+      panel.add(this.add.text(0, -h / 2 + 16, '✨ 抽装备', style(16, '#ffffff', true)).setOrigin(0.5, 0))
+      panel.add(this.add.text(0, -h / 2 + 48,
+        `单次消耗 ${RESOURCES.coin.icon}${EQUIP_DRAW_COST} · 当前 ${RESOURCES.coin.icon}${Math.floor(this.state.res.coin)}`,
+        style(12, '#ffd54f')).setOrigin(0.5, 0))
+      panel.add(this.add.text(0, -h / 2 + 76,
+        '品质概率与武将招募一致（普通 50% / 精良 30% / 精锐 15% / 王牌 5%）',
+        style(10, '#9e9e9e')).setOrigin(0.5, 0))
+      panel.add(this.add.text(0, -h / 2 + 96,
+        '随机类型（6 种）× 随机主属性（武/防/智/速）',
+        style(10, '#9e9e9e')).setOrigin(0.5, 0))
+
+      const canAfford = this.state.res.coin >= EQUIP_DRAW_COST
+      panel.add(this._button(0, h / 2 - 58, 200, 36,
+        `抽装备（${RESOURCES.coin.icon}${EQUIP_DRAW_COST}）`, COLOR.btnAmber, canAfford, () => {
+          const r = this.state.drawEquipment()
+          if (r.error) { this._toast(r.error, COLOR.toastWarn); return }
+          this._equipDrawResult = r.eq
+          this._openEquipDraw()   // 重建以显示结果
+        }))
+
+      // 显示上次抽取结果
+      if (this._equipDrawResult) {
+        const eq = this._equipDrawResult
+        const qColor = EQUIP_QUALITY[eq.quality].color
+        panel.add(this.add.text(0, 0,
+          `✨ 抽得【${equipName(eq)}】`, style(15, qColor, true)).setOrigin(0.5, 0.5))
+        panel.add(this.add.text(0, 26,
+          equipDesc(eq), style(12, '#ffffff')).setOrigin(0.5, 0.5))
+      }
+
+      panel.add(this._button(0, h / 2 - 20, 120, 28, '返回仓库', COLOR.btnGrey, true, () => {
+        this._equipDrawResult = null
+        this._openEquipWarehouse()
+      }))
+    })
+  }
+
+  // ── 弹窗：武将装备管理 ───────────────────────────────────────────────────
+
+  _openEquipManage(generalId) {
+    const g = this.state.general(generalId)
+    if (!g) return
+    const sw = this.scale.width, sh = this.scale.height
+    const w = Math.min(sw - 24, 420)
+    const rowH = 56
+    const headerH = 46, footerH = 28
+    const listVH = Math.min(EQUIP_TYPES.length * rowH, (sh - 100) - headerH - footerH)
+    const h = headerH + listVH + footerH
+    const rw = w - 24
+    this._openModal(w, h, (panel) => {
+      panel.add(this.add.text(-w / 2 + 14, -h / 2 + 14,
+        `📜 ${g.name} 装备`, style(15, '#ffffff', true)).setOrigin(0, 0))
+      panel.add(this.add.text(-w / 2 + 110, -h / 2 + 16,
+        `武${Math.round(g.atk)} 防${Math.round(g.def)} 智${Math.round(g.int)} 速${Math.round(g.spd)}`,
+        style(11, '#9e9e9e')).setOrigin(0, 0))
+
+      const content = this._makeScrollRegion(
+        sw / 2 - w / 2 + 12, sh / 2 - h / 2 + headerH, w - 24, listVH, EQUIP_TYPES.length * rowH)
+      EQUIP_TYPES.forEach((typeDef, i) => {
+        const cy = i * rowH + rowH / 2
+        const half = rowH - 8
+        const row = this.add.container(rw / 2, cy)
+        const bg = this.add.graphics()
+        bg.fillStyle(COLOR.rowBg, 0.95)
+        bg.fillRoundedRect(-rw / 2, -half / 2, rw, half, 6)
+        row.add(bg)
+        content.add(row)
+
+        const iid = g.equip?.[typeDef.id]
+        const eq = iid ? this.state.equipment(iid) : null
+        const qColor = eq ? EQUIP_QUALITY[eq.quality].color : '#9e9e9e'
+
+        // 类型名 + 图标
+        row.add(this.add.text(-rw / 2 + 10, -half / 2 + 9,
+          `${typeDef.icon} ${typeDef.name}`, style(13, '#ffffff', true)).setOrigin(0, 0.5))
+
+        if (eq) {
+          // 已装备：显示装备名 + 属性 + 等级
+          row.add(this.add.text(-rw / 2 + 90, -half / 2 + 9,
+            equipName(eq), style(12, qColor, true)).setOrigin(0, 0.5))
+          row.add(this.add.text(-rw / 2 + 90, half / 2 - 10,
+            `${equipDesc(eq)}`, style(11, '#e8e8e8')).setOrigin(0, 0.5))
+          // 卸下按钮
+          row.add(this._button(rw / 2 - 40, 0, 70, 24, '卸下', COLOR.btnGrey, true, () => {
+            if (!this._rowVisibleInScroll(cy)) return
+            this.state.unbindEquip(g.id, typeDef.id)
+            this._openEquipManage(g.id)
+          }))
+        } else {
+          // 空槽：显示「未装备」+ 选择按钮
+          const avail = this.state.availableEquipments(typeDef.id)
+          row.add(this.add.text(-rw / 2 + 90, 0,
+            avail.length ? `未装备（仓库 ${avail.length} 件可选）` : '未装备（仓库无此类装备）',
+            style(11, '#9e9e9e')).setOrigin(0, 0.5))
+          row.add(this._button(rw / 2 - 40, 0, 70, 24, '选择',
+            avail.length ? COLOR.btnAmber : COLOR.btnGrey, avail.length > 0, () => {
+              if (!this._rowVisibleInScroll(cy)) return
+              this._openEquipPick(g.id, typeDef.id)
+            }))
+        }
+      })
+
+      panel.add(this.add.text(0, h / 2 - 16,
+        '同类型装备只能装 1 件 · 同件装备只能被 1 个武将绑定',
+        style(10, '#9e9e9e')).setOrigin(0.5))
+    })
+  }
+
+  /** 装备选择子面板：列出仓库内某类型可用装备 */
+  _openEquipPick(generalId, type) {
+    const g = this.state.general(generalId)
+    const typeDef = EQUIP_TYPES.find(t => t.id === type)
+    const avail = this.state.availableEquipments(type)
+    const sw = this.scale.width, sh = this.scale.height
+    const w = Math.min(sw - 24, 380)
+    const rowH = 48
+    const headerH = 46, footerH = 28
+    const listVH = Math.min(avail.length * rowH, (sh - 100) - headerH - footerH)
+    const h = headerH + listVH + footerH
+    const rw = w - 24
+    this._openModal(w, h, (panel) => {
+      panel.add(this.add.text(0, -h / 2 + 14,
+        `选择${typeDef.icon}${typeDef.name}`, style(15, '#ffffff', true)).setOrigin(0.5, 0))
+
+      const content = this._makeScrollRegion(
+        sw / 2 - w / 2 + 12, sh / 2 - h / 2 + headerH, w - 24, listVH, avail.length * rowH)
+      avail.forEach((eq, i) => {
+        const cy = i * rowH + rowH / 2
+        const half = rowH - 8
+        const row = this.add.container(rw / 2, cy)
+        const bg = this.add.graphics()
+        bg.fillStyle(COLOR.rowBg, 0.95)
+        bg.fillRoundedRect(-rw / 2, -half / 2, rw, half, 6)
+        row.add(bg)
+        content.add(row)
+
+        const qColor = EQUIP_QUALITY[eq.quality].color
+        row.add(this.add.text(-rw / 2 + 10, 0,
+          equipName(eq), style(13, qColor, true)).setOrigin(0, 0.5))
+        row.add(this.add.text(-rw / 2 + 180, 0,
+          equipDesc(eq), style(11, '#e8e8e8')).setOrigin(0, 0.5))
+        row.add(this._button(rw / 2 - 40, 0, 70, 24, '装备', COLOR.btnGreen, true, () => {
+          if (!this._rowVisibleInScroll(cy)) return
+          const err = this.state.bindEquip(g.id, eq.iid)
+          if (err) { this._toast(err, COLOR.toastWarn); return }
+          this._openEquipManage(g.id)
+        }))
+      })
+
+      panel.add(this._button(0, h / 2 - 16, 100, 24, '返回', COLOR.btnGrey, true, () => {
+        this._openEquipManage(g.id)
+      }))
+    })
+  }
+
+  // ── 弹窗：装备仓库（底部 🎒 入口，分 tab 浏览 + 升级）─────────────────────
+
+  _openEquipWarehouse() {
+    if (!this._equipTab) this._equipTab = 'all'
+    const tab = this._equipTab
+    const all = this.state.ownedEquipments()
+    const equips = tab === 'all' ? all : all.filter(e => e.type === tab)
+
+    const sw = this.scale.width, sh = this.scale.height
+    const w = Math.min(sw - 16, 460)
+    const tabs = [{ id: 'all', name: '全部', icon: '📦' }, ...EQUIP_TYPES]
+    const tabH = 32
+    const headerH = 50 + tabH, footerH = 28
+    const rowH = 56
+    const listVH = Math.min(Math.max(equips.length, 1) * rowH, (sh - 100) - headerH - footerH)
+    const h = headerH + listVH + footerH
+    const rw = w - 24
+    this._openModal(w, h, (panel) => {
+      panel.add(this.add.text(-w / 2 + 14, -h / 2 + 14,
+        '🎒 装备仓库', style(15, '#ffffff', true)).setOrigin(0, 0))
+      panel.add(this.add.text(0, -h / 2 + 34,
+        `共 ${all.length} 件 · ${RESOURCES.coin.icon}${Math.floor(this.state.res.coin)}`,
+        style(11, '#ffd54f')).setOrigin(0.5, 0))
+      // 抽装备入口（原在「武将」面板，现移到本面板右上角）
+      panel.add(this._button(w / 2 - 52, -h / 2 + 23, 92, 28, '✨ 抽装备', COLOR.btnAmber, true,
+        () => this._openEquipDraw()))
+
+      // Tab 行
+      const tabY = -h / 2 + 50
+      const tabW = (w - 16) / tabs.length
+      tabs.forEach((t, i) => {
+        const x = -w / 2 + 8 + tabW / 2 + i * tabW
+        const active = tab === t.id
+        const tabBg = this.add.graphics()
+        tabBg.fillStyle(active ? 0x4a3a1a : 0x2c352a, 0.95)
+        tabBg.fillRoundedRect(-tabW / 2 + 2, -tabH / 2, tabW - 4, tabH, 6)
+        if (active) {
+          tabBg.lineStyle(1.5, 0xffd700, 0.8)
+          tabBg.strokeRoundedRect(-tabW / 2 + 2, -tabH / 2, tabW - 4, tabH, 6)
+        }
+        tabBg.x = x; tabBg.y = tabY
+        panel.add(tabBg)
+        panel.add(this.add.text(x, tabY, `${t.icon}${t.name}`,
+          style(11, active ? '#ffd700' : '#cccccc', active)).setOrigin(0.5))
+        panel.add(this.add.zone(x, tabY, tabW - 4, tabH)
+          .setInteractive({ useHandCursor: true })
+          .on('pointerup', () => {
+            this._equipTab = t.id
+            this._openEquipWarehouse()
+          }))
+      })
+
+      // 列表区
+      if (equips.length === 0) {
+        panel.add(this.add.text(0, 0, '该分类下暂无装备', style(13, '#9e9e9e')).setOrigin(0.5))
+      } else {
+        const content = this._makeScrollRegion(
+          sw / 2 - w / 2 + 12, sh / 2 - h / 2 + headerH, w - 24, listVH, equips.length * rowH)
+        equips.forEach((eq, i) => {
+          const cy = i * rowH + rowH / 2
+          const half = rowH - 8
+          const row = this.add.container(rw / 2, cy)
+          const bg = this.add.graphics()
+          bg.fillStyle(COLOR.rowBg, 0.95)
+          bg.fillRoundedRect(-rw / 2, -half / 2, rw, half, 6)
+          row.add(bg)
+          content.add(row)
+
+          const qColor = EQUIP_QUALITY[eq.quality].color
+          const bound = eq.boundTo ? this.state.general(eq.boundTo) : null
+          row.add(this.add.text(-rw / 2 + 10, -half / 2 + 9,
+            equipName(eq), style(13, qColor, true)).setOrigin(0, 0.5))
+          row.add(this.add.text(-rw / 2 + 180, -half / 2 + 9,
+            equipDesc(eq), style(11, '#e8e8e8')).setOrigin(0, 0.5))
+          row.add(this.add.text(-rw / 2 + 180, half / 2 - 10,
+            bound ? `已装备：${bound.name}` : '仓库中',
+            style(10, '#9e9e9e')).setOrigin(0, 0.5))
+
+          const maxed = equipMaxed(eq)
+          const cost = equipUpgradeCost(eq)
+          const canAfford = this.state.res.coin >= cost
+          const btnLabel = maxed ? '满级' : `${RESOURCES.coin.icon}${cost}`
+          row.add(this._button(rw / 2 - 40, -13, 70, 20, btnLabel,
+            maxed ? COLOR.btnGrey : COLOR.btnAmber, !maxed && canAfford, () => {
+              if (!this._rowVisibleInScroll(cy)) return
+              const r = this.state.upgradeEquipment(eq.iid)
+              if (r.error) { this._toast(r.error, COLOR.toastWarn); return }
+              this._toast(`【${equipName(eq)}】升至 ${r.level} 级`, COLOR.toastInfo)
+              this._openEquipWarehouse()   // 重建刷新
+            }))
+          // 销毁按钮：按品质返还玉石（已装备的会先自动卸下）
+          const jadeBack = EQUIP_DISMISS_JADE[eq.quality] ?? 0
+          row.add(this._button(rw / 2 - 40, 13, 70, 20, `💎${jadeBack}`, COLOR.btnGrey, true, () => {
+            if (!this._rowVisibleInScroll(cy)) return
+            this._openConfirm(
+              `确定销毁【${equipName(eq)}】？${bound ? `\n当前装备在 ${bound.name} 身上，将自动卸下` : ''}\n返还 ${jadeBack} 玉石，不可恢复`,
+              () => {
+                const r = this.state.dismissEquipment(eq.iid)
+                if (r.error) { this._toast(r.error, COLOR.toastWarn); return }
+                this._toast(`销毁成功，获得 ${r.jade} 玉石`, COLOR.toastWin)
+                this._openEquipWarehouse()
+              })
+          }))
+        })
+      }
+
+      panel.add(this.add.text(0, h / 2 - 16,
+        '升级消耗 = 品质基础 × 当前等级',
+        style(10, '#9e9e9e')).setOrigin(0.5))
     })
   }
 
@@ -858,6 +1282,13 @@ export class UIScene extends Phaser.Scene {
             if (err) this._toast(err, COLOR.toastWarn)
             else this._openBuildings()   // 重建刷新
           }))
+        // 铁匠坊专属「打造」入口：跳转装备仓库
+        if (type === 'forge') {
+          row.add(this._button(rw / 2 - 48, half / 2 - 14, 76, 24,
+            '🔨 打造', COLOR.btnGreen, true, () => {
+              this._openEquipWarehouse()
+            }))
+        }
       })
       panel.add(this.add.text(0, h / 2 - 18,
         '建筑等级不可超过主城等级', style(11, '#9e9e9e')).setOrigin(0.5))
@@ -1052,13 +1483,30 @@ export class UIScene extends Phaser.Scene {
         return { indent: 22, color: '#ce93d8', text: `${e.actor} 陷入【${e.statusName}】（${e.value}回合）` }
       case 'status_skip':
         return { indent: 16, color: '#ce93d8', text: `${e.actor} 受【${e.statusName}】影响，无法行动` }
+      case 'heal':
+        return { indent: 22, color: '#81d4fa', text: `${e.actor} 受【${e.skillName}】治疗 +${e.value}` }
+      case 'buff_add': {
+        const sign = e.value > 0 ? '+' : ''
+        const attrName = { atk:'武力', def:'统率', int:'智力', spd:'速度' }[e.attr] || e.attr
+        return { indent: 22, color: '#a5d6a7', text: `${e.actor} 受【${e.skillName}】增益 ${attrName}${sign}${e.value}%（${e.duration}回合）` }
+      }
+      case 'debuff_add': {
+        const attrName = { atk:'武力', def:'统率', int:'智力', spd:'速度' }[e.attr] || e.attr
+        return { indent: 22, color: '#ef9a9a', text: `${e.actor} 受【${e.skillName}】减益 ${attrName}${e.value}%（${e.duration}回合）` }
+      }
+      case 'lifesteal':
+        return { indent: 22, color: '#ef9a9a', text: `${e.actor} 吸血 +${e.value}` }
+      case 'condition_met':
+        return { indent: 22, color: '#ff8a65', text: `${e.actor} 触发【残血爆发】倍率 ×${e.conditionMult}` }
       case 'damage': {
         // 克制标注（×1.25 克制 / ×0.85 被克）；战力值已含倍率/克制/浮动
         const counterNote = Math.abs((e.counter ?? 1) - 1) > 0.001 ? (e.counter > 1 ? ' 克制' : ' 被克') : ''
         // 标出该次伤害来自「普攻」还是某个战法，避免同一武将的战法伤害与普攻伤害看不出区别
         const src = e.skill === 'normal_attack' ? '普攻' : (e.skillName || '战法')
+        // 防御显示目标「防御属性」（恒定值），不再是随兵力缩水的防御战力（旧档 defPow 兜底）
+        const defShown = e.defStat ?? e.defPow ?? 0
         return { indent: 22, color: mine ? good : bad,
-          text: `[${src}] ${e.actor}→${e.target} 战力${Math.round(e.atkPow)} vs 防${Math.round(e.defPow)} ×${e.ratio.toFixed(2)}${counterNote} → -${e.value}${e.targetLeft <= 0 ? '（阵亡）' : ''}` }
+          text: `[${src}] ${e.actor}→${e.target} 战力${Math.round(e.atkPow)} vs 防御${Math.round(defShown)} ×${e.ratio.toFixed(2)}${counterNote} → -${e.value}${e.targetLeft <= 0 ? '（阵亡）' : ''}` }
       }
       default:
         return null   // round/action/normal_attack/death/status_remove 不单独成行
