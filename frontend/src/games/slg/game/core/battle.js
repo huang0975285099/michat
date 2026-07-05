@@ -61,7 +61,10 @@ export function resolveBattle(attackers, defenders, seed = 1) {
     statuses: {},                       // statusId → 剩余可跳过次数
     buffs:   { atk: [], def: [], int: [], spd: [] },   // 增益列表：[{value, duration}]
     debuffs: { atk: [], def: [], int: [], spd: [] },   // 减益列表：[{value, duration}]
-    healed: 0,                          // 累计治疗量（用于战报统计）
+    healed: 0,                          // 累计接受治疗量（doHeal 给目标累加）
+    lifesteal: 0,                       // 累计吸血回复量（lifesteal 给自身累加）
+    buffCast: 0, debuffCast: 0,         // 施加增益/减益次数
+    conditionMet: 0,                    // 残血爆发等条件触发次数
     dealt: 0, taken: 0, skillFire: 0, extra: 0, control: 0,
   })).filter(u => u.start > 0)
 
@@ -101,6 +104,7 @@ export function resolveBattle(attackers, defenders, seed = 1) {
     let mult = skill.mult || 1
     if (skill.condition === 'low_hp' && u.troops < u.start * 0.5) {
       mult *= (skill.conditionMult || 1.5)
+      u.conditionMet++
       events.push({ type: 'condition_met', side: u.side, actor: u.name, actorKey: u.key,
         condition: skill.condition, conditionMult: skill.conditionMult || 1.5 })
     }
@@ -136,8 +140,9 @@ export function resolveBattle(attackers, defenders, seed = 1) {
         u.troops = Math.min(u.start, u.troops + steal)
         const real = u.troops - before
         if (real > 0) {
-          u.healed += real
+          u.lifesteal += real
           events.push({ type: 'lifesteal', side: u.side, actor: u.name, actorKey: u.key,
+            skill: skill.id, skillName: skill.name,
             value: real, targetLeft: u.troops })
         }
       }
@@ -177,6 +182,9 @@ export function resolveBattle(attackers, defenders, seed = 1) {
       ? alive(u.side === 'atk' ? atkUnits : defUnits)
       : alive(u.side === 'atk' ? defUnits : atkUnits)
     if (!targets.length) return
+    // 战报统计：发动者记一次「增益/减益施放」（按施放次数计，不按目标数）
+    if (side === 'ally') u.buffCast++
+    else u.debuffCast++
     const count = Math.min(skill.targetCount || 1, targets.length)
     const pool = targets.slice()
     for (let n = 0; n < count; n++) {
@@ -341,7 +349,8 @@ export function resolveBattle(attackers, defenders, seed = 1) {
 function unitResults(units) {
   return units.map(u => ({
     key: u.key, name: u.name, start: u.start, troops: u.troops,
-    dealt: u.dealt, taken: u.taken, healed: u.healed,
+    dealt: u.dealt, taken: u.taken, healed: u.healed, lifesteal: u.lifesteal,
     skillFire: u.skillFire, extra: u.extra, control: u.control,
+    buffCast: u.buffCast, debuffCast: u.debuffCast, conditionMet: u.conditionMet,
   }))
 }

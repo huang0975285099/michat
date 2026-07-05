@@ -10,9 +10,9 @@ import {
   CITY_MAX_LEVEL, territoryCap, cityUpgradeCost,
   troopCapOf, expToLevel, GENERAL_MAX_LEVEL,
   GENERAL_QUALITY, RECRUITABLE_GENERALS, findGeneralTemplate,
-  RECRUIT_COST_COIN, MAX_GENERALS, AWAKEN_ATK, AWAKEN_DEF, AWAKEN_INT, AWAKEN_SPD, FREE_RECRUIT_COUNT,
-  growthOf, LEVELUP_ATK, LEVELUP_DEF, LEVELUP_INT, LEVELUP_SPD,
-  RECRUIT_COST_PER_TROOP, tileMarchSeconds, MARCH_REF_SPEED, TROOP_TYPES,
+  RECRUIT_COST_COIN, MAX_GENERALS, AWAKEN_ATK, AWAKEN_DEF, AWAKEN_INT, AWAKEN_POL, AWAKEN_CHA, FREE_RECRUIT_COUNT,
+  growthOf, LEVELUP_ATK, LEVELUP_DEF, LEVELUP_INT, LEVELUP_POL, LEVELUP_CHA, calcSpd,
+  getRecruitCostPerTroop, tileMarchSeconds, MARCH_REF_SPEED, TROOP_TYPES,
   MAX_MARCH_PARTY,
   npcCityLootOf, GARRISON_REGEN_PER_HOUR,
   BUILDINGS, BUILDING_MAX_LEVEL, buildingUpgradeCost,
@@ -49,7 +49,8 @@ function makeGeneral(tpl, starter = false) {
   return {
     id: tpl.id, name: tpl.name, quality: tpl.quality || 'common',
     troopType: tpl.troopType || 'spear', faction: tpl.faction || null,
-    atk: tpl.atk, def: tpl.def, spd: tpl.spd, int: tpl.int,
+    atk: tpl.atk, def: tpl.def, int: tpl.int, pol: tpl.pol, cha: tpl.cha,
+    spd: calcSpd(tpl),
     lv: 1, exp: 0, troops: starter ? INITIAL_TROOPS : 0, state: 'idle',
     stamina: STAMINA_MAX, awaken: 0, skillId: null,   // 绑定的主动战法（第二期由绑定 UI 设置）
     equip: { weapon: null, helmet: null, necklace: null, armor: null, belt: null, boots: null },   // 6 槽装备 iid
@@ -446,7 +447,8 @@ export class GameState extends Emitter {
     const cap = this.troopCap(g)
     count = Math.min(count, cap - g.troops)
     if (count <= 0) return '已达带兵上限'
-    const cost = { grain: count * RECRUIT_COST_PER_TROOP.grain, iron: count * RECRUIT_COST_PER_TROOP.iron, wood: count * RECRUIT_COST_PER_TROOP.wood }
+    const unit = getRecruitCostPerTroop(this.cityLv)
+    const cost = { grain: count * unit.grain, iron: count * unit.iron, wood: count * unit.wood }
     for (const [k, v] of Object.entries(cost)) {
       if (this.res[k] < v) return `${RESOURCES[k].name}不足（需 ${v}）`
     }
@@ -522,7 +524,7 @@ export class GameState extends Emitter {
       if (owned) {
         // 需求 2：已拥有武将自动进阶（觉醒）
         const gain = this._awaken(owned)
-        this._pushLog(`✨ ${owned.name} 觉醒（武+${gain.atk} 防+${gain.def}，第 ${owned.awaken} 次）`)
+        this._pushLog(`✨ ${owned.name} 觉醒（五维提升，第 ${owned.awaken} 次）`)
         result = { type: 'awaken', name: owned.name, quality: owned.quality, general: owned }
       } else {
         // 新武将入列（此时已确保未满员）
@@ -545,12 +547,15 @@ export class GameState extends Emitter {
       atk: Math.round(AWAKEN_ATK * gr * 10) / 10,
       def: Math.round(AWAKEN_DEF * gr * 10) / 10,
       int: Math.round(AWAKEN_INT * gr * 10) / 10,
-      spd: Math.round(AWAKEN_SPD * gr * 10) / 10,
+      pol: Math.round(AWAKEN_POL * gr * 10) / 10,
+      cha: Math.round(AWAKEN_CHA * gr * 10) / 10,
     }
     g.atk += gain.atk
     g.def += gain.def
     g.int += gain.int
-    g.spd += gain.spd
+    g.pol += gain.pol
+    g.cha += gain.cha
+    g.spd = calcSpd(g)
     return gain
   }
 
@@ -702,8 +707,10 @@ export class GameState extends Emitter {
     const forgeBonus = FORGE_STAT_PER_LEVEL * this.buildings.forge
     const effAtk = g => g.atk + (g.lv - 1) * LEVELUP_ATK * growthOf(g.quality) + forgeBonus + this.equipBonus(g, 'atk')
     const effDef = g => g.def + (g.lv - 1) * LEVELUP_DEF * growthOf(g.quality) + forgeBonus + this.equipBonus(g, 'def')
-    const effInt = g => g.int + forgeBonus + this.equipBonus(g, 'int')
-    const effSpd = g => g.spd + (TROOP_TYPES[g.troopType]?.marchSpeed || 0) + forgeBonus + this.equipBonus(g, 'spd')
+    // 智力/速度也补齐等级加成（系数 4，与 effAtk/effDef 对齐 guardStat 的 +4×成长/级）
+    // spd 是五维平均值（无独立 LEVELUP_SPD），按 cha 同口径计算（与 pol/cha 升级加成一致）
+    const effInt = g => g.int + (g.lv - 1) * LEVELUP_INT * growthOf(g.quality) + forgeBonus + this.equipBonus(g, 'int')
+    const effSpd = g => g.spd + (g.lv - 1) * LEVELUP_CHA * growthOf(g.quality) + (TROOP_TYPES[g.troopType]?.marchSpeed || 0) + forgeBonus + this.equipBonus(g, 'spd')
 
     const atkUnits = gens.map(g => ({
       key: g.id, name: g.name,
@@ -720,7 +727,15 @@ export class GameState extends Emitter {
       atk: guardStat(tpl.atk, gd.lv, tpl.quality),
       def: guardStat(tpl.def, gd.lv, tpl.quality),
       int: guardStat(tpl.int, gd.lv, tpl.quality),
-      spd: guardStat(tpl.spd, gd.lv, tpl.quality) + (TROOP_TYPES[tpl.troopType]?.marchSpeed || 0),
+      pol: guardStat(tpl.pol, gd.lv, tpl.quality),
+      cha: guardStat(tpl.cha, gd.lv, tpl.quality),
+      spd: calcSpd({
+        atk: guardStat(tpl.atk, gd.lv, tpl.quality),
+        def: guardStat(tpl.def, gd.lv, tpl.quality),
+        int: guardStat(tpl.int, gd.lv, tpl.quality),
+        pol: guardStat(tpl.pol, gd.lv, tpl.quality),
+        cha: guardStat(tpl.cha, gd.lv, tpl.quality),
+      }) + (TROOP_TYPES[tpl.troopType]?.marchSpeed || 0),
       troops: gd.troops, troopType: tpl.troopType,
     }))
 
@@ -764,7 +779,9 @@ export class GameState extends Emitter {
       spd: Math.round(base.spd), spdEff: Math.round(eff.spd),
       int: Math.round(base.int), intEff: Math.round(eff.int),
       start: u.start, end: u.troops, dealt: u.dealt, taken: u.taken,
+      healed: u.healed, lifesteal: u.lifesteal,
       skillFire: u.skillFire, extra: u.extra, control: u.control,
+      buffCast: u.buffCast, debuffCast: u.debuffCast, conditionMet: u.conditionMet,
     })
     const report = {
       v: 2, names, outcome, exp: totalExp,
@@ -849,12 +866,13 @@ export class GameState extends Emitter {
       g.exp -= expToLevel(g.lv)
       g.lv++
       // 升级属性提升 = 基础值 × 品质成长值（品质越高成长越快）
-      // int/spd 仅用于展示，不参与战斗结算
       const gr = growthOf(g.quality)
       g.atk += Math.round(LEVELUP_ATK * gr * 10) / 10
       g.def += Math.round(LEVELUP_DEF * gr * 10) / 10
       g.int += Math.round(LEVELUP_INT * gr * 10) / 10
-      g.spd += Math.round(LEVELUP_SPD * gr * 10) / 10
+      g.pol += Math.round(LEVELUP_POL * gr * 10) / 10
+      g.cha += Math.round(LEVELUP_CHA * gr * 10) / 10
+      g.spd = calcSpd(g)
       this._pushLog(`⭐ ${g.name} 升至 ${g.lv} 级`)
     }
   }
@@ -909,9 +927,10 @@ export class GameState extends Emitter {
       buildings: { ...this.buildings },
       generals: this.generals.map(g => ({
         id: g.id, name: g.name, quality: g.quality, troopType: g.troopType, faction: g.faction,
+        // spd 由五维平均值计算得出，存档时一并保存便于旧档兼容，加载后会重算
         spd: g.spd,
-        // int 参与战斗（智力战法）且会被升级/觉醒加成，必须持久化（旧档缺省时回退模板值）
-        lv: g.lv, exp: Math.round(g.exp), troops: g.troops, atk: g.atk, def: g.def, int: g.int,
+        lv: g.lv, exp: Math.round(g.exp), troops: g.troops,
+        atk: g.atk, def: g.def, int: g.int, pol: g.pol, cha: g.cha,
         stamina: Math.round(g.stamina), awaken: g.awaken || 0, skillId: g.skillId || null,
         // v9+ 武将装备槽：6 类 iid（旧档缺省时回退空槽）
         equip: { ...(g.equip || { weapon: null, helmet: null, necklace: null, armor: null, belt: null, boots: null }) },
@@ -972,6 +991,13 @@ export class GameState extends Emitter {
       Object.assign(g, sg)
       // v8 旧档无 equip 字段：补默认空槽（避免后续 equipBonus/g.equip.xxx 访问报错）
       if (!g.equip) g.equip = { weapon: null, helmet: null, necklace: null, armor: null, belt: null, boots: null }
+      // spd 由五维平均值得出；旧档可能缺失 pol/cha，用模板补齐后重算
+      const tpl = findGeneralTemplate(g.id)
+      if (tpl) {
+        if (g.pol === undefined) g.pol = tpl.pol
+        if (g.cha === undefined) g.cha = tpl.cha
+        g.spd = calcSpd(g)
+      }
     }
     // V2.0 战法精简迁移：旧 ID → 新 ID（17 旧战法收缩为 7 保留战法）
     // 武将 skillId、gs.skills 仓库、gs.skillLevels 等级一并迁移；等级取 max 避免回退
