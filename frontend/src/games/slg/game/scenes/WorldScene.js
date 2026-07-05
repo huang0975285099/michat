@@ -10,6 +10,16 @@ const CLICK_TOLERANCE = 8      // px：区分点击与拖拽
 const MIN_ZOOM = 0.4
 const MAX_ZOOM = 2.5
 const AUTOSAVE_MS = 10000
+const LEVEL_FONT = "'Segoe UI', 'Microsoft YaHei', sans-serif"
+
+// 等级徽章底色：低级绿→高级红，一眼区分强弱地块
+function levelBadgeColor(lv) {
+  if (lv <= 2) return 0x4caf50
+  if (lv <= 4) return 0x9ccc65
+  if (lv <= 6) return 0xffca28
+  if (lv <= 8) return 0xff7043
+  return 0xe53935
+}
 
 // 颜色调亮/调暗工具（factor<1 变暗，>1 变亮），用于地块与面板的渐变立体感
 function shade(color, factor) {
@@ -92,9 +102,9 @@ export class WorldScene extends Phaser.Scene {
         const g = this.make.graphics({ add: false })
         this._drawTileBase(g, def.color)
         this._drawMotif(g, type)
-        if (def.passable) this._drawLevelPips(g, lv)
-        g.generateTexture(key, T, T)
-        g.destroy()
+        // 注意：必须走 RenderTexture 烘焙，Graphics.generateTexture() 在 WebGL 下会漏渲染
+        // fillGradientStyle 填充（纯色 fillStyle/lineStyle 不受影响），直接生成会导致地块显示透明。
+        this._bakeTileTexture(key, g, def.passable ? lv : null)
       }
     }
     // 主城贴图
@@ -123,8 +133,7 @@ export class WorldScene extends Phaser.Scene {
       g.lineBetween(T * 0.5, T * 0.02, T * 0.5, T * 0.16)
       g.fillStyle(0xd43a3a, 1)
       g.fillTriangle(T * 0.5, T * 0.03, T * 0.5, T * 0.13, T * 0.72, T * 0.08)
-      g.generateTexture('t_playerCity', T, T)
-      g.destroy()
+      this._bakeTileTexture('t_playerCity', g, null)
     }
   }
 
@@ -138,8 +147,8 @@ export class WorldScene extends Phaser.Scene {
     g.lineStyle(1, light, 0.55)
     g.lineBetween(1, 1, T - 1, 1)
     g.lineBetween(1, 1, 1, T - 1)
-    // 外边缘暗线（减淡，避免压暗地块）
-    g.lineStyle(1, 0x000000, 0.18)
+    // 外边缘暗线（比早期版本加深，让格子边界更清晰、地貌不糊成一片）
+    g.lineStyle(1, 0x000000, 0.32)
     g.strokeRect(0.5, 0.5, T - 1, T - 1)
   }
 
@@ -192,13 +201,17 @@ export class WorldScene extends Phaser.Scene {
         g.beginPath(); g.arc(T * 0.68, T * 0.72, T * 0.13, 0, Math.PI); g.fillPath()
         break
       case 'mountain':
-        // 山体明暗面 + 雪顶
-        g.fillStyle(0x4a423a, 1)
+        // 山体明暗面 + 雪顶 + 轮廓线（避免与灰绿底色糊在一起）
+        g.fillStyle(0x3a332c, 1)
         g.fillTriangle(T * 0.5, T * 0.18, T * 0.2, T * 0.8, T * 0.5, T * 0.8)
-        g.fillStyle(0x7a7068, 1)
+        g.fillStyle(0x8a8078, 1)
         g.fillTriangle(T * 0.5, T * 0.18, T * 0.5, T * 0.8, T * 0.8, T * 0.8)
         g.fillStyle(0xffffff, 0.9)
         g.fillTriangle(T * 0.5, T * 0.18, T * 0.42, T * 0.36, T * 0.58, T * 0.36)
+        g.lineStyle(1.2, 0x1f1a14, 0.55)
+        g.beginPath()
+        g.moveTo(T * 0.2, T * 0.8); g.lineTo(T * 0.5, T * 0.18); g.lineTo(T * 0.8, T * 0.8)
+        g.strokePath()
         break
       case 'copper': {
         // 岩堆 + 铜矿脉高光：深色矿石块上嵌橙铜色矿点
@@ -252,17 +265,42 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  _drawLevelPips(g, lv) {
-    // 1~10 级：每行最多 5 个点，超出折到上一行（48px 地块放不下 10 个横排点）
-    for (let i = 0; i < lv; i++) {
-      const col = i % 5, row = Math.floor(i / 5)
-      const px = T - 6 - col * 7
-      const py = T - 6 - row * 7
-      g.fillStyle(0x000000, 0.5)
-      g.fillCircle(px, py, 3)
-      g.fillStyle(0xffd700, 1)
-      g.fillCircle(px, py, 2.4)
+  /** 把地块底图（+ 可选右下角等级徽章）合成进最终纹理。
+   *  除了徽章需要 Text（Graphics 画不了字）之外，这里也是 fillGradientStyle 的必经烘焙路径——
+   *  见调用处注释，lv 传 null 时只烘焙底图不加徽章（湖泊/主城等无等级贴图）。 */
+  _bakeTileTexture(key, g, lv) {
+    const rt = this.make.renderTexture({ width: T, height: T }, false)
+    rt.draw(g, 0, 0)
+    g.destroy()
+
+    if (lv == null) {
+      rt.saveTexture(key)
+      rt.destroy()
+      return
     }
+
+    const badgeW = lv >= 10 ? 20 : 15, badgeH = 14
+    const bx = T - badgeW - 2, by = T - badgeH - 2
+    const badgeG = this.make.graphics({ add: false })
+    badgeG.fillStyle(0x000000, 0.4)
+    badgeG.fillRoundedRect(bx + 1, by + 1.5, badgeW, badgeH, 4)
+    badgeG.fillStyle(levelBadgeColor(lv), 1)
+    badgeG.fillRoundedRect(bx, by, badgeW, badgeH, 4)
+    badgeG.lineStyle(1, 0xffffff, 0.6)
+    badgeG.strokeRoundedRect(bx, by, badgeW, badgeH, 4)
+    rt.draw(badgeG, 0, 0)
+    badgeG.destroy()
+
+    const txt = this.make.text({
+      text: String(lv),
+      style: { fontFamily: LEVEL_FONT, fontSize: '11px', color: '#1a1408', fontStyle: 'bold' },
+    }, false)
+    txt.setOrigin(0.5)
+    rt.draw(txt, bx + badgeW / 2, by + badgeH / 2)
+    txt.destroy()
+
+    rt.saveTexture(key)
+    rt.destroy()
   }
 
   // ── 地图铺设 ──────────────────────────────────────────────────────────────

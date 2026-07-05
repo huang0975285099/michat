@@ -12,7 +12,8 @@ import {
   GENERAL_QUALITY, RECRUITABLE_GENERALS, findGeneralTemplate,
   RECRUIT_COST_COIN, MAX_GENERALS, AWAKEN_ATK, AWAKEN_DEF, AWAKEN_INT, AWAKEN_SPD, FREE_RECRUIT_COUNT,
   growthOf, LEVELUP_ATK, LEVELUP_DEF, LEVELUP_INT, LEVELUP_SPD,
-  RECRUIT_GRAIN_PER_TROOP, tileMarchSeconds, MARCH_REF_SPEED, TROOP_TYPES, counterMult,
+  RECRUIT_GRAIN_PER_TROOP, tileMarchSeconds, MARCH_REF_SPEED, TROOP_TYPES,
+  MAX_MARCH_PARTY,
   npcCityLootOf, GARRISON_REGEN_PER_HOUR,
   BUILDINGS, BUILDING_MAX_LEVEL, buildingUpgradeCost,
   GRANARY_YIELD_PER_LEVEL, BARRACKS_CAP_PER_LEVEL, TRAINING_EXP_PER_LEVEL, FORGE_STAT_PER_LEVEL,
@@ -22,6 +23,7 @@ import {
 import { generateMap } from './MapGenerator.js'
 import { findPath } from './pathfind.js'
 import { resolveBattle } from './battle.js'
+import { getSkill, BINDABLE_SKILLS } from './skills.js'
 
 // 轻量事件发射器（不依赖 Phaser，保持核心层纯净）
 class Emitter {
@@ -44,7 +46,7 @@ function makeGeneral(tpl, starter = false) {
     troopType: tpl.troopType || 'spear', faction: tpl.faction || null,
     atk: tpl.atk, def: tpl.def, spd: tpl.spd, int: tpl.int,
     lv: 1, exp: 0, troops: starter ? INITIAL_TROOPS : 0, state: 'idle',
-    stamina: STAMINA_MAX, awaken: 0,
+    stamina: STAMINA_MAX, awaken: 0, skillId: null,   // 绑定的主动战法（第二期由绑定 UI 设置）
   }
 }
 
@@ -65,6 +67,7 @@ export class GameState extends Emitter {
     this.cityLv = 1
     this.buildings = { granary: 1, barracks: 1, training: 1, forge: 1 }
     this.generals = []
+    this.skills = []           // 战法仓库：拥有的战法 id（每种仅一份；绑定关系存在各武将 g.skillId 上）
     this.freeRecruits = FREE_RECRUIT_COUNT   // 开局赠送的免费招募次数（不占铜币）
     this.marches = []          // { id, generalIds:[], from, to, departAt, arriveAt, phase:'out'|'back' }
     this.log = []              // 战报/事件日志（最近 50 条）
@@ -81,6 +84,59 @@ export class GameState extends Emitter {
     // 游戏内时钟（秒）。tick 按 TIME_SCALE 推进。
     this.now = 0
     this._acc = 0              // 产出结算的秒级累加器
+
+    this._grantStarterSkills(3)   // 开局随机发 3 个战法进仓库（load() 会用存档覆盖）
+  }
+
+  // ── 战法仓库 & 绑定 ─────────────────────────────────────────────────────────
+  // 每种战法仅一份，存在 this.skills；某战法是否「已绑定」由是否有武将 g.skillId 指向它决定。
+  // 绑定规则：一将至多 1 法、一法至多绑 1 将；解绑/销毁武将后战法自动回到可用池（仍在仓库里）。
+
+  _grantStarterSkills(n) {
+    const pool = BINDABLE_SKILLS.map(s => s.id)
+    for (let i = pool.length - 1; i > 0; i--) {   // Fisher-Yates
+      const j = Math.floor(Math.random() * (i + 1));[pool[i], pool[j]] = [pool[j], pool[i]]
+    }
+    this.skills = pool.slice(0, Math.min(n, pool.length))
+  }
+
+  /** 仓库全部战法 id */
+  ownedSkills() { return this.skills.slice() }
+  /** 某战法当前绑定的武将（无则 null） */
+  skillBoundTo(skillId) { return this.generals.find(g => g.skillId === skillId) || null }
+  /** 未被任何武将绑定、可自由绑定的战法 id */
+  availableSkills() { return this.skills.filter(id => !this.skillBoundTo(id)) }
+
+  /** 获得一个战法进仓库（第三期兑换用；已有则忽略） */
+  grantSkill(skillId) {
+    if (!getSkill(skillId) || this.skills.includes(skillId)) return
+    this.skills.push(skillId)
+    this.emit('skills', this.skills)
+  }
+
+  /** 给武将绑定战法。返回错误信息或 null。若该将已有战法则先自动换下（换下的自动回可用池） */
+  bindSkill(generalId, skillId) {
+    const g = this.general(generalId)
+    if (!g) return '武将不存在'
+    if (!this.skills.includes(skillId)) return '尚未拥有该战法'
+    const holder = this.skillBoundTo(skillId)
+    if (holder && holder.id !== generalId) return `【${getSkill(skillId)?.name}】已绑定 ${holder.name}`
+    g.skillId = skillId
+    this._pushLog(`📜 ${g.name} 装备战法【${getSkill(skillId)?.name}】`)
+    this.emit('generals', this.generals)
+    this.emit('skills', this.skills)
+    return null
+  }
+
+  /** 解绑武将战法，战法回到可用池 */
+  unbindSkill(generalId) {
+    const g = this.general(generalId)
+    if (!g || !g.skillId) return
+    const name = getSkill(g.skillId)?.name
+    g.skillId = null
+    this._pushLog(`📜 ${g.name} 卸下战法${name ? `【${name}】` : ''}`)
+    this.emit('generals', this.generals)
+    this.emit('skills', this.skills)
   }
 
   // ── 时钟 ──────────────────────────────────────────────────────────────────
@@ -374,6 +430,7 @@ export class GameState extends Emitter {
   march(generalIds, tx, ty) {
     const ids = Array.isArray(generalIds) ? generalIds : [generalIds]
     if (!ids.length) return '请选择出征武将'
+    if (ids.length > MAX_MARCH_PARTY) return `最多同时出征 ${MAX_MARCH_PARTY} 队`
     const gens = []
     for (const id of ids) {
       const g = this.general(id)
@@ -449,119 +506,87 @@ export class GameState extends Emitter {
       return
     }
 
-    // 攻方军团：兵力 = 各将之和；武/防/速按出兵比例加权（含等级战时加成 +(lv-1)*2）+ 铁匠坊全属性；
-    // 速度 = 全队最慢（合击迁就短板）。克制随敌将兵种逐场重算，见下方循环。
-    const troopsBefore = gens.map(g => g.troops)
-    const total = troopsBefore.reduce((s, n) => s + n, 0)
-    const shares = troopsBefore.map(n => n / total)
+    // 多对多同场混战：攻方每名武将、守方每队守将都是独立战斗单位，
+    // 全场按速度排序逐个行动（见 battle.js）。实战属性在此折算：
+    // 等级加成 +(lv-1)*2×成长 + 铁匠坊全属性；速度另叠兵种加成（骑兵 +30，与行军同口径）。
+    const total = gens.reduce((s, g) => s + g.troops, 0)
     const forgeBonus = FORGE_STAT_PER_LEVEL * this.buildings.forge
     const effAtk = g => g.atk + (g.lv - 1) * LEVELUP_ATK * growthOf(g.quality) + forgeBonus
     const effDef = g => g.def + (g.lv - 1) * LEVELUP_DEF * growthOf(g.quality) + forgeBonus
     const effInt = g => g.int + forgeBonus
-    // 战斗先手速度 = 基础速 + 兵种加成（骑兵 +30，与行军同口径）+ 铁匠坊
     const effSpd = g => g.spd + (TROOP_TYPES[g.troopType]?.marchSpeed || 0) + forgeBonus
-    const armyDef = gens.reduce((s, g, i) => s + shares[i] * effDef(g), 0)
-    const armySpd = Math.min(...gens.map(effSpd))
 
-    // 多队连战：按守将队伍顺序逐场结算，攻方兵力跨场继承；某场非胜立即中止
-    const battles = []
-    let remaining = total
-    let outcome = 'win'
-    let totalAtkLoss = 0
-    let totalExp = 0
-    for (const gd of t.guards) {
-      if (gd.troops <= 0) continue
-      const tpl = findGeneralTemplate(gd.id)
-      if (!tpl) continue
-      // 攻方武力对该敌将兵种的克制逐将加权；守将对攻方混编的克制按出兵比例加权（方向互反）
-      const atkCounter = gens.reduce((s, g, i) => s + shares[i] * counterMult(g.troopType, tpl.troopType), 0)
-      const defCounter = gens.reduce((s, g, i) => s + shares[i] * counterMult(tpl.troopType, g.troopType), 0)
-      const armyAtk = gens.reduce((s, g, i) =>
-        s + shares[i] * effAtk(g) * counterMult(g.troopType, tpl.troopType), 0)
-      const armyInt = gens.reduce((s, g, i) => s + shares[i] * effInt(g), 0)
-      // 守将属性（含等级加成，与展示口径一致）与实战值（atk 叠克制、spd 叠骑兵先手加成）
-      const gAtkAttr = guardStat(tpl.atk, gd.lv, tpl.quality)
-      const gDefAttr = guardStat(tpl.def, gd.lv, tpl.quality)
-      const gSpdAttr = guardStat(tpl.spd, gd.lv, tpl.quality)
-      const gIntAttr = guardStat(tpl.int, gd.lv, tpl.quality)
-      const guardSpd = gSpdAttr + (TROOP_TYPES[tpl.troopType]?.marchSpeed || 0)
-      const r = resolveBattle(
-        { atk: armyAtk, def: armyDef, int: armyInt, spd: armySpd, troops: remaining },
-        { atk: gAtkAttr * defCounter, def: gDefAttr, spd: guardSpd, troops: gd.troops },
-      )
-      // 准备回合数据：双方「属性（基础，卡面口径）」→「实战（叠加各类加成后）」
-      const atkAttr = gens.reduce((s, g, i) => s + shares[i] * g.atk, 0)
-      const defAttr = gens.reduce((s, g, i) => s + shares[i] * g.def, 0)
-      const intAttr = gens.reduce((s, g, i) => s + shares[i] * g.int, 0)
-      const spdAttrArmy = Math.min(...gens.map(g => g.spd))
-      const prep = {
-        our: {
-          atk: Math.round(atkAttr), atkEff: Math.round(armyAtk),
-          def: Math.round(defAttr), defEff: Math.round(armyDef),
-          spd: Math.round(spdAttrArmy), spdEff: Math.round(armySpd),
-          int: Math.round(intAttr), intEff: Math.round(armyInt),
-          troops: r.atkStart,
-        },
-        foe: {
-          atk: Math.round(gAtkAttr), atkEff: Math.round(gAtkAttr * defCounter),
-          def: Math.round(gDefAttr), defEff: Math.round(gDefAttr),
-          spd: Math.round(gSpdAttr), spdEff: Math.round(guardSpd),
-          int: Math.round(gIntAttr), intEff: Math.round(gIntAttr),
-          troops: r.defStart,
-        },
-      }
-      battles.push({
-        enemy: {
-          name: tpl.name, quality: tpl.quality, lv: gd.lv, troopType: tpl.troopType,
-          atk: Math.round(gAtkAttr), def: Math.round(gDefAttr),
-          spd: Math.round(gSpdAttr), int: Math.round(gIntAttr),
-        },
-        // 兵种克制倍率（我方攻击 / 守军攻击），供战报「完整」模式展示相克关系
-        atkCounter, defCounter, armySpd: Math.round(armySpd), prep,
-        outcome: r.outcome, first: r.first, rounds: r.rounds,
-        atkStart: r.atkStart, defStart: r.defStart, atkLoss: r.atkLoss, defLoss: r.defLoss,
-      })
-      remaining -= r.atkLoss
-      totalAtkLoss += r.atkLoss
-      totalExp += r.exp
-      // 胜则守将队伍全灭（清零，避免回复带来的小数残余变成杀不死的「幽灵兵」）；否则扣减剩余
-      gd.troops = r.outcome === 'win' ? 0 : Math.max(0, gd.troops - r.defLoss)
-      if (r.outcome !== 'win') { outcome = r.outcome; break }
-    }
+    const atkUnits = gens.map(g => ({
+      key: g.id, name: g.name,
+      atk: effAtk(g), def: effDef(g), int: effInt(g), spd: effSpd(g),
+      troops: g.troops, troopType: g.troopType, skillId: g.skillId || null,
+    }))
+    // 守将单位：一队 = 一名武将，模板缺失的队伍跳过（不参战也不掉兵）
+    const guardDefs = t.guards
+      .map((gd, i) => ({ gd, i, tpl: findGeneralTemplate(gd.id) }))
+      .filter(x => x.tpl && x.gd.troops > 0)
+    const defUnits = guardDefs.map(({ gd, i, tpl }) => ({
+      key: `${gd.id}:${i}`, name: tpl.name,
+      atk: guardStat(tpl.atk, gd.lv, tpl.quality),
+      def: guardStat(tpl.def, gd.lv, tpl.quality),
+      int: guardStat(tpl.int, gd.lv, tpl.quality),
+      spd: guardStat(tpl.spd, gd.lv, tpl.quality) + (TROOP_TYPES[tpl.troopType]?.marchSpeed || 0),
+      troops: gd.troops, troopType: tpl.troopType,
+    }))
 
-    // 伤亡与经验按出兵比例分摊（多场累计后一次分摊）
-    const losses = troopsBefore.map(n => Math.floor(totalAtkLoss * n / total))
-    let left = totalAtkLoss - losses.reduce((s, n) => s + n, 0)
-    for (let i = 0; left > 0 && i < gens.length; i++) {
-      const room = troopsBefore[i] - losses[i]
-      const add = Math.min(room, left)
-      losses[i] += add
-      left -= add
-    }
-    gens.forEach((g, i) => {
-      g.troops -= losses[i]
-      this._gainExp(g, Math.round(totalExp * troopsBefore[i] / total))
+    // 战斗种子：由存档种子 + 行军 ID + 目标坐标确定 —— 同存档同输入必同结果（回放/离线一致）
+    const battleSeed = (Math.imul(this.seed | 0, 0x9E3779B1) ^ Math.imul(m.id, 0x85EBCA6B) ^ (t.x * 8887 + t.y * 2971)) >>> 0
+    const r = resolveBattle(atkUnits, defUnits, battleSeed)
+    const outcome = r.outcome
+    const totalAtkLoss = r.atkLoss
+    const totalExp = r.exp
+
+    // 伤亡逐将落账（谁被打谁掉兵）；经验按输出占比分（无输出则按出兵比例兜底）
+    const totalDealt = r.units.atk.reduce((s, u) => s + u.dealt, 0)
+    gens.forEach((g) => {
+      const u = r.units.atk.find(u => u.key === g.id)
+      if (!u) return
+      g.troops = u.troops
+      const share = totalDealt > 0 ? u.dealt / totalDealt : g.troops / Math.max(1, total)
+      this._gainExp(g, Math.round(totalExp * share))
     })
-
-    const multiTeam = t.guards.length > 1
-    if (outcome !== 'win' && multiTeam) {
-      // 多队地块未一次全灭：守军全部重整回满（不进回复列表）
-      const teamMax = garrisonOf(t.level, t.type) / t.guards.length
-      for (const gd of t.guards) gd.troops = teamMax
-      this.damaged.delete(t)
-    } else if (outcome !== 'win') {
-      // 单队地块：挫伤保留，随时间回复
-      this.damaged.add(t)
-    }
+    // 守军伤损直接落账（胜则全灭清零，天然抹掉回复带来的小数残余）
+    guardDefs.forEach(({ gd, i }) => {
+      const u = r.units.def.find(u => u.key === `${gd.id}:${i}`)
+      if (u) gd.troops = u.troops
+    })
+    // 同场混战后不再有「多队未一次全灭回满」的惩罚：败/平一律保留伤损，随时间回复
+    if (outcome !== 'win') this.damaged.add(t)
     t.garrison = t.guards.reduce((s, gd) => s + gd.troops, 0)
 
     const typeName = TILE_TYPES[t.type].name
-    const enemyNames = battles.length ? battles.map(b => b.enemy.name).join('、') : '空虚守军'
+    const enemyNames = guardDefs.length ? guardDefs.map(x => x.tpl.name).join('、') : '空虚守军'
+    // 战报 v2：双方阵容卡（基础属性→实战属性 + 兵力/输出/承伤/战法统计）+ 逐回合事件流
+    const unitCard = (u, base, eff, quality, lv, troopType, skillId) => ({
+      key: u.key, name: u.name, quality, lv, troopType,
+      skill: skillId ? getSkill(skillId)?.name || null : null,
+      atk: Math.round(base.atk), atkEff: Math.round(eff.atk),
+      def: Math.round(base.def), defEff: Math.round(eff.def),
+      spd: Math.round(base.spd), spdEff: Math.round(eff.spd),
+      int: Math.round(base.int), intEff: Math.round(eff.int),
+      start: u.start, end: u.troops, dealt: u.dealt, taken: u.taken,
+      skillFire: u.skillFire, extra: u.extra, control: u.control,
+    })
     const report = {
-      names, outcome, battles, exp: totalExp,
-      atkStart: total, atkLossTotal: totalAtkLoss,
-      defStart: battles.reduce((s, b) => s + b.defStart, 0),
-      defLossTotal: battles.reduce((s, b) => s + b.defLoss, 0),
+      v: 2, names, outcome, exp: totalExp,
+      atkStart: r.atkStart, atkLossTotal: r.atkLoss,
+      defStart: r.defStart, defLossTotal: r.defLoss,
+      our: r.units.atk.map(u => {
+        const g = gens.find(g => g.id === u.key)
+        return unitCard(u, g, { atk: effAtk(g), def: effDef(g), spd: effSpd(g), int: effInt(g) },
+          g.quality, g.lv, g.troopType, g.skillId)
+      }),
+      foe: r.units.def.map(u => {
+        const { gd, tpl } = guardDefs.find(x => `${x.gd.id}:${x.i}` === u.key)
+        const eff = defUnits.find(d => d.key === u.key)
+        return unitCard(u, tpl, eff, tpl.quality, gd.lv, tpl.troopType, null)
+      }),
+      rounds: r.rounds,
       tile: { x: t.x, y: t.y, type: typeName, level: t.level },
     }
     if (outcome === 'win') {
@@ -580,12 +605,12 @@ export class GameState extends Emitter {
         this._pushLog(`⚠️ ${names} 战胜但领地已满，未能占领 (${t.x},${t.y})`, report)
       }
     } else {
-      const last = battles[battles.length - 1]
-      const resetNote = multiTeam ? '，守军已重整回满' : `（守军余 ${Math.floor(t.garrison)}）`
+      const survivors = report.foe.filter(u => u.end > 0).map(u => u.name).join('、') || enemyNames
+      const note = `（守军余 ${Math.floor(t.garrison)}）`
       if (outcome === 'draw') {
-        this._pushLog(`⚔️ ${names} 与 ${last.enemy.name} 激战 ${last.rounds.length} 回合未分胜负，攻打 ${typeName} Lv.${t.level} (${t.x},${t.y}) 无功而返${resetNote}`, report)
+        this._pushLog(`⚔️ ${names} 与 ${survivors} 激战 ${r.rounds.length} 回合未分胜负，攻打 ${typeName} Lv.${t.level} (${t.x},${t.y}) 无功而返${note}`, report)
       } else {
-        this._pushLog(`💀 ${names} 进攻 ${typeName} Lv.${t.level} (${t.x},${t.y}) 被 ${last.enemy.name} 击退，损失 ${totalAtkLoss} 兵${resetNote}`, report)
+        this._pushLog(`💀 ${names} 进攻 ${typeName} Lv.${t.level} (${t.x},${t.y}) 被 ${survivors} 击退，损失 ${totalAtkLoss} 兵${note}`, report)
       }
     }
     this.emit('battle', { tile: { x: t.x, y: t.y }, outcome, general: names })
@@ -679,15 +704,17 @@ export class GameState extends Emitter {
       }
     }
     const data = {
-      v: 6, seed: this.seed, savedAt: Date.now(), now: this.now,
+      v: 7, seed: this.seed, savedAt: Date.now(), now: this.now,
       res: this.res, cityLv: this.cityLv,
       freeRecruits: this.freeRecruits,
+      skills: this.skills.slice(),
       buildings: { ...this.buildings },
       generals: this.generals.map(g => ({
         id: g.id, name: g.name, quality: g.quality, troopType: g.troopType, faction: g.faction,
         spd: g.spd,
-        lv: g.lv, exp: Math.round(g.exp), troops: g.troops, atk: g.atk, def: g.def,
-        stamina: Math.round(g.stamina), awaken: g.awaken || 0,
+        // int 参与战斗（智力战法）且会被升级/觉醒加成，必须持久化（旧档缺省时回退模板值）
+        lv: g.lv, exp: Math.round(g.exp), troops: g.troops, atk: g.atk, def: g.def, int: g.int,
+        stamina: Math.round(g.stamina), awaken: g.awaken || 0, skillId: g.skillId || null,
       })),
       owned,
       marches: this.marches,
@@ -710,8 +737,9 @@ export class GameState extends Emitter {
   static load() {
     let data
     try { data = JSON.parse(localStorage.getItem(SAVE_KEY)) } catch { return null }
-    // 地图生成器已重构，旧存档（v1~v5）的 seed 会生成不一致地图，直接开始新局
-    if (!data || data.v !== 6) return null
+    // 地图生成器已重构，旧存档（v1~v5）的 seed 会生成不一致地图，直接开始新局。
+    // v6（战法系统前）与 v7 地图口径一致，可平滑迁移。
+    if (!data || data.v < 6) return null
 
     const gs = new GameState(data.seed)
     gs.now = data.now || 0
@@ -721,6 +749,8 @@ export class GameState extends Emitter {
     gs.buildings = { ...gs.buildings, ...(data.buildings || {}) }
     // v4+ 才有免费招募次数；v1~v3 旧存档已获得过起手三武将，不再补送
     gs.freeRecruits = data.v >= 4 ? (data.freeRecruits ?? 0) : 0
+    // v7+ 才有战法仓库；从 v6 迁移的旧档保留构造时随机发的 3 个（data.skills 缺省）
+    if (data.skills) gs.skills = data.skills.slice()
 
     for (const sg of data.generals || []) {
       let g = gs.general(sg.id)

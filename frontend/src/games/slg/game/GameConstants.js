@@ -28,8 +28,8 @@ export const TILE_TYPES = {
   plain:    { name: '平原', res: 'grain', color: 0x9fb96e, passable: true },
   farm:     { name: '农田', res: 'grain', color: 0xc9b458, passable: true },
   forest:   { name: '森林', res: 'wood',  color: 0x4e7a3b, passable: true },
-  hill:     { name: '丘陵', res: 'stone', color: 0xa89a7e, passable: true },
-  mountain: { name: '山地', res: 'iron',  color: 0x8a8078, passable: true },
+  hill:     { name: '丘陵', res: 'stone', color: 0xb59872, passable: true },
+  mountain: { name: '山地', res: 'iron',  color: 0x8d8f96, passable: true },
   // 铜矿地：产铜币（res:'coin'）。铜币基础人人有份（level*COIN_YIELD_PER_LEVEL=20），铜矿地再叠加
   // level*BASE_YIELD_PER_LEVEL=100，合计每级 120 铜币 —— 约普通地 6 倍的铜矿产出速度。
   copper:   { name: '铜矿', res: 'coin',  color: 0xd07b3a, passable: true },
@@ -115,9 +115,10 @@ export function counterMult(atkType, defType) {
   if (TROOP_TYPES[defType]?.beats === atkType) return COUNTER_MULT_WEAK
   return 1
 }
-// ── 战斗结算（逐回合，双方互击 + 速度先攻）───────────────────────────────────
+// ── 战斗结算（多对多回合制：全场按速度排序逐将行动，见 core/battle.js）───────
 export const BATTLE_MAX_ROUNDS = 10        // 最多打 10 回合，仍未分胜负则判平
-export const BATTLE_ROUND_ATTRITION = 0.3  // 每回合按攻防战力比造成的兵力损耗系数
+export const BATTLE_ROUND_ATTRITION = 0.3  // 单次攻击按攻防战力比造成的兵力损耗系数
+export const MAX_MARCH_PARTY = 3           // 单次出征最多同行武将（队伍）数
 
 // ── 武将 ────────────────────────────────────────────────────────────────────
 // 品质分档（招募抽卡的概率与展示色）。basic 仅守将用，rate=0 不进抽卡池。

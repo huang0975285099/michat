@@ -11,9 +11,10 @@ import {
   GRANARY_YIELD_PER_LEVEL, BARRACKS_CAP_PER_LEVEL, TRAINING_EXP_PER_LEVEL, FORGE_STAT_PER_LEVEL,
   STAMINA_MAX, MARCH_STAMINA_COST, STAMINA_REGEN_PER_HOUR,
   GENERAL_QUALITY, MAX_GENERALS, RECRUIT_COST_COIN, AWAKEN_ATK, AWAKEN_DEF, AWAKEN_INT, AWAKEN_SPD,
-  TROOP_TYPES, counterMult, findGeneralTemplate, guardStat,
+  TROOP_TYPES, counterMult, findGeneralTemplate, guardStat, MAX_MARCH_PARTY,
 } from '../GameConstants.js'
 import { GameState } from '../core/GameState.js'
+import { getSkill } from '../core/skills.js'
 
 const FONT = "'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
 const TOPBAR_H = 40
@@ -508,7 +509,7 @@ export class UIScene extends Phaser.Scene {
     const w = Math.min(this.scale.width - 24, 380)
     const h = 52 + gens.length * rowH + 74
     this._openModal(w, h, (panel) => {
-      panel.add(this.add.text(0, -h / 2 + 14, '选择出征武将（可多选合击）',
+      panel.add(this.add.text(0, -h / 2 + 14, `选择出征武将（最多 ${MAX_MARCH_PARTY} 队合击）`,
         style(15, '#ffffff', true)).setOrigin(0.5, 0))
 
       gens.forEach((g, i) => {
@@ -519,6 +520,7 @@ export class UIScene extends Phaser.Scene {
         const picked = pick.has(g.id)
         const row = this._row(panel, y, w - 24, rowH - 8, enabled, () => {
           if (picked) pick.delete(g.id)
+          else if (pick.size >= MAX_MARCH_PARTY) { this._toast(`最多同时出征 ${MAX_MARCH_PARTY} 队`, COLOR.toastWarn); return }
           else pick.add(g.id)
           this._openMarchSelect(true)   // 重建刷新勾选态
         })
@@ -573,6 +575,68 @@ export class UIScene extends Phaser.Scene {
           if (err) this._toast(err, COLOR.toastWarn)
           else { this._closeModal(); this._refreshTilePanel() }
         }))
+    })
+  }
+
+  // ── 弹窗：战法绑定 ───────────────────────────────────────────────────────
+  // 列出仓库全部战法：可用的点按即绑定（自动换下原战法）；当前武将已装备的点按解绑；
+  // 已被其他武将占用的置灰并注明持有者。一将一法、一法一将。
+
+  _openSkillBind(generalId) {
+    const g = this.state.general(generalId)
+    if (!g) return
+    const owned = this.state.ownedSkills()
+    const rowH = 58
+    const sw = this.scale.width, sh = this.scale.height
+    const w = Math.min(sw - 24, 400)
+    const headerH = 50, footerH = 20
+    const listH = Math.max(rowH, Math.min(owned.length * rowH, sh - 160 - headerH - footerH))
+    const h = headerH + listH + footerH
+    this._openModal(w, h, (panel) => {
+      const cur = g.skillId ? getSkill(g.skillId) : null
+      panel.add(this.add.text(0, -h / 2 + 12, `${g.name} · 配置战法`, style(15, '#ffffff', true)).setOrigin(0.5, 0))
+      panel.add(this.add.text(0, -h / 2 + 32,
+        cur ? `当前：【${cur.name}】（点它可解绑）` : '当前：无战法',
+        style(11, cur ? '#ffd54f' : '#9e9e9e')).setOrigin(0.5, 0))
+
+      if (!owned.length) {
+        panel.add(this.add.text(0, 0, '仓库暂无战法\n（销毁武将/玉石兑换可获得）',
+          { ...style(12, '#888888'), align: 'center' }).setOrigin(0.5))
+        panel.add(this._button(0, h / 2 - 30, 120, 26, '关闭', COLOR.btnGrey, true, () => this._closeModal()))
+        return
+      }
+
+      const content = this._makeScrollRegion(
+        sw / 2 - w / 2 + 14, sh / 2 - h / 2 + headerH, w - 28, listH, owned.length * rowH)
+      owned.forEach((sid, i) => {
+        const sk = getSkill(sid)
+        const holder = this.state.skillBoundTo(sid)
+        const mine = holder && holder.id === generalId
+        const other = holder && holder.id !== generalId
+        const rw = w - 28, half = rowH - 8
+        const y = i * rowH + rowH / 2
+        const row = this._row(content, y, rw, half, !other, () => {
+          if (!this._rowVisibleInScroll(y)) return   // 滚动出视区的行不响应点击
+          if (mine) { this.state.unbindSkill(generalId); this._openGenerals() }
+          else {
+            const err = this.state.bindSkill(generalId, sid)
+            if (err) this._toast(err, COLOR.toastWarn)
+            else this._openGenerals()
+          }
+        })
+        // _row 把容器放在 content 局部 x=0（=滚动区左缘），须右移半个行宽居中
+        row.x = rw / 2
+        const nameColor = mine ? '#ffd54f' : (other ? '#777777' : '#ffffff')
+        row.add(this.add.text(-rw / 2 + 12, -half / 2 + 8, `【${sk.name}】`,
+          style(13, nameColor, true)).setOrigin(0, 0))
+        // 右上角状态标签
+        const tag = mine ? '已装备' : (other ? `已绑 ${holder.name}` : '可装备')
+        const tagColor = mine ? '#66bb6a' : (other ? '#ef5350' : '#81c784')
+        row.add(this.add.text(rw / 2 - 12, -half / 2 + 8, tag, style(11, tagColor, true)).setOrigin(1, 0))
+        // 描述
+        row.add(this._ellipsisText(sk.desc, style(10, '#9e9e9e'), rw - 24)
+          .setPosition(-rw / 2 + 12, -half / 2 + 26).setOrigin(0, 0))
+      })
     })
   }
 
@@ -672,17 +736,24 @@ export class UIScene extends Phaser.Scene {
           `体力 ${Math.floor(st)}/${STAMINA_MAX}`,
           style(9, stRatio > 0.6 ? '#ffffff' : '#a0e0a0', true)).setOrigin(1, 0))
 
-        // ── 右侧按钮列：补兵 + 销毁 ──
+        // ── 右侧按钮列：补兵 + 战法 + 销毁 ──
         const btnX = rw / 2 - btnW / 2 - 2
         const canRecruit = g.state === 'idle' && g.troops < cap
-        row.add(this._button(btnX, -14, btnW, 24, '补满兵',
+        row.add(this._button(btnX, -26, btnW, 22, '补满兵',
           COLOR.btnGreen, canRecruit, () => {
             if (!this._rowVisibleInScroll(cy)) return
             const err = this.state.recruit(g.id, cap - g.troops)
             if (err) this._toast(err, COLOR.toastWarn)
             else this._openGenerals()
           }))
-        row.add(this._button(btnX, 16, btnW, 24, '销毁',
+        // 战法：绑定则显示战法名（琥珀），未绑定显示「配战法」（灰）
+        const boundSkill = g.skillId ? getSkill(g.skillId) : null
+        row.add(this._button(btnX, 0, btnW, 22, boundSkill ? boundSkill.name : '配战法',
+          boundSkill ? COLOR.btnAmber : COLOR.btnGrey, true, () => {
+            if (!this._rowVisibleInScroll(cy)) return
+            this._openSkillBind(g.id)
+          }))
+        row.add(this._button(btnX, 26, btnW, 22, '销毁',
           COLOR.btnGrey, true, () => {
             if (!this._rowVisibleInScroll(cy)) return
             this._openConfirm(`确定销毁 ${g.name}？\n等级与觉醒将一并清除且不可恢复`, () => {
@@ -913,10 +984,94 @@ export class UIScene extends Phaser.Scene {
     return { rows, height: y }
   }
 
+  /** 战报 v2（多对多同场混战）：双方阵容卡 + 逐回合（简洁=兵力汇总 / 完整=逐次出手明细） */
+  _layoutBattleRowsV2(report, mode) {
+    const rows = []
+    let y = 0
+    // 双方阵容卡：名字/等级/兵种（品质色）+ 属性（基础→实战）+ 兵力与输出/承伤
+    const sv = (base, eff) => (base === eff || eff == null) ? `${base}` : `${base}→${eff}`
+    const roster = (title, units, color) => {
+      rows.push({ x: 0, y: y + 2, text: title, size: 12, color, bold: true, origin: 0 })
+      y += 20
+      units.forEach((u) => {
+        const q = GENERAL_QUALITY[u.quality] || GENERAL_QUALITY.common
+        const ti = TROOP_TYPES[u.troopType]
+        const dead = u.end <= 0
+        const skillTag = u.skill ? `  【${u.skill}】` : ''
+        rows.push({ x: 10, y,
+          text: `${ti ? ti.icon : ''}${u.name} Lv.${u.lv}${skillTag}   兵 ${u.start} → ${u.end}${dead ? '（阵亡）' : ''}`,
+          size: 11, color: dead ? '#ef5350' : q.color, bold: true, origin: 0 })
+        y += 15
+        // 战法统计（有绑定战法或触发过才显示），帮玩家看谁脸黑
+        const stat = []
+        if (u.skillFire) stat.push(`战法${u.skillFire}次`)
+        if (u.extra) stat.push(`连击${u.extra}次`)
+        if (u.control) stat.push(`控制${u.control}次`)
+        const statTail = stat.length ? ` · ${stat.join(' ')}` : ''
+        rows.push({ x: 16, y,
+          text: `武${sv(u.atk, u.atkEff)} 防${sv(u.def, u.defEff)} 速${sv(u.spd, u.spdEff)} 智${sv(u.int, u.intEff)} · 输出${u.dealt} 承伤${u.taken}${statTail}`,
+          size: 10, color: '#9e9e9e', origin: 0 })
+        y += 17
+      })
+      y += 4
+    }
+    roster('我方阵容', report.our || [], '#a5d6a7')
+    roster('守军阵容', report.foe || [], '#ef9a9a')
+
+    ;(report.rounds || []).forEach((r) => {
+      if (mode === 'simple') {
+        rows.push({ x: 10, y, text: `第${r.round}回合   我方 ${r.atkTroops}（-${r.atkLoss}）    守军 ${r.defTroops}（-${r.defLoss}）`,
+          size: 11, color: '#dddddd', origin: 0 })
+        y += 22
+      } else {
+        rows.push({ x: 10, y, text: `第${r.round}回合`, size: 11, color: '#ffd54f', bold: true, origin: 0 })
+        y += 14
+        ;(r.events || []).forEach((e) => {
+          const line = this._battleEventText(e)
+          if (!line) return
+          rows.push({ x: line.indent, y, text: line.text, size: 10, color: line.color, origin: 0 })
+          y += 16
+        })
+      }
+    })
+    return { rows, height: y }
+  }
+
+  /** 把一条 BattleEvent 翻成战报里的一行文字（返回 null = 该事件不单独成行，如 action_start/end） */
+  _battleEventText(e) {
+    const mine = e.side === 'atk'
+    const good = '#a5d6a7', bad = '#ef9a9a'
+    switch (e.type) {
+      case 'skill_trigger':
+        return { indent: 16, color: '#ffd54f', text: `${e.actor} 发动【${e.skillName}】` }
+      case 'skill_failed':
+        return { indent: 16, color: '#777777', text: `${e.actor} 【${e.skillName}】未发动` }
+      case 'extra_attack':
+        return { indent: 16, color: '#ffd54f', text: `${e.actor} 触发【${e.skillName}】追加攻击` }
+      case 'status_add':
+        return { indent: 22, color: '#ce93d8', text: `${e.actor} 陷入【${e.statusName}】（${e.value}回合）` }
+      case 'status_skip':
+        return { indent: 16, color: '#ce93d8', text: `${e.actor} 受【${e.statusName}】影响，无法行动` }
+      case 'damage': {
+        // 克制标注（×1.25 克制 / ×0.85 被克）；战力值已含倍率/克制/浮动
+        const counterNote = Math.abs((e.counter ?? 1) - 1) > 0.001 ? (e.counter > 1 ? ' 克制' : ' 被克') : ''
+        // 标出该次伤害来自「普攻」还是某个战法，避免同一武将的战法伤害与普攻伤害看不出区别
+        const src = e.skill === 'normal_attack' ? '普攻' : (e.skillName || '战法')
+        return { indent: 22, color: mine ? good : bad,
+          text: `[${src}] ${e.actor}→${e.target} 战力${Math.round(e.atkPow)} vs 防${Math.round(e.defPow)} ×${e.ratio.toFixed(2)}${counterNote} → -${e.value}${e.targetLeft <= 0 ? '（阵亡）' : ''}` }
+      }
+      default:
+        return null   // round/action/normal_attack/death/status_remove 不单独成行
+    }
+  }
+
   _openBattleReport(report) {
+    const isV2 = report.v === 2
     const battles = report.battles || []
     const mode = this._reportMode || 'simple'   // 'simple' | 'full'
-    const { rows, height: contentH } = this._layoutBattleRows(battles, mode)
+    const { rows, height: contentH } = isV2
+      ? this._layoutBattleRowsV2(report, mode)
+      : this._layoutBattleRows(battles, mode)
     const sw = this.scale.width, sh = this.scale.height
     const w = Math.min(sw - 24, 380)
     const headerH = 78
@@ -939,9 +1094,11 @@ export class UIScene extends Phaser.Scene {
         style(14, outcomeInfo.color, true)).setOrigin(1, 0))
       // 头部对阵行：我方武将 vs 守将（兵种图标+名字+等级），末尾附地块信息。
       // 双传说地块 + 多将合击时该行可能超宽，用省略号截断保证不溢出面板（守将完整信息在下方敌将卡里）。
-      const guardRoster = battles.length
-        ? battles.map(b => `${TROOP_TYPES[b.enemy.troopType]?.icon || ''}${b.enemy.name}Lv.${b.enemy.lv}`).join('、')
-        : '空虚守军'
+      const guardRoster = isV2
+        ? ((report.foe || []).map(u => `${TROOP_TYPES[u.troopType]?.icon || ''}${u.name}Lv.${u.lv}`).join('、') || '空虚守军')
+        : (battles.length
+          ? battles.map(b => `${TROOP_TYPES[b.enemy.troopType]?.icon || ''}${b.enemy.name}Lv.${b.enemy.lv}`).join('、')
+          : '空虚守军')
       const rosterLine = `${report.names}  vs  ${guardRoster}  ·  ${report.tile.type}Lv.${report.tile.level}(${report.tile.x},${report.tile.y})`
       const rt = this._ellipsisText(rosterLine, style(11, '#9e9e9e'), w - 28)
       rt.setPosition(-w / 2 + 14, -h / 2 + 38).setOrigin(0, 0)
