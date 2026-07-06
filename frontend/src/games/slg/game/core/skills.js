@@ -134,13 +134,16 @@ export const SKILLS = {
 
   // 8. 青囊（智力治疗我军，新机制 heal）
   // 平衡：原 mult 1.5 使单次回复≈施法者 70% 兵力，全战法第一（审计 S 档最高）→ 降到 1.0
+  // 回复量公式（casterPower，见 battle.js）：施法者当前兵力 ×(1+施法者智力/150)× 倍率 × BATTLE_ROUND_ATTRITION，
+  // 只吃「施法者」智力，与目标属性无关；智力越高/兵力越多回复越多；倍率 1.00x 起，每级 +0.05（Lv.10 = 1.45x）；
+  // 结果封顶目标入场兵力 30%（BATTLE_HEAL_RATE_MAX），超出部分溢出浪费。
   qingnang: {
     id: 'qingnang', name: '青囊', timing: 'beforeAction', rate: 30, rateStep: 2,
     attribute: 'int', mult: 1.0, multStep: 0.05,
     target: 'random_ally', targetCount: 1,
     effect: 'heal', useCounter: false, maxLevel: 10,
     tier: 'A', cost: SKILL_TIER_COST.A,
-    desc: '30% 概率治疗随机 1 名我军，回复量基于施法者智力与当前兵力（单次回复不超过目标入场兵力的 30%）',
+    desc: '30% 概率治疗随机 1 名我军，回复量随施法者智力与当前兵力提升（智力越高回复越多），单次回复不超过目标入场兵力的 30%',
   },
 
   // 9. 激励（增益我军武力，新机制 buff）
@@ -262,13 +265,15 @@ export const SKILLS = {
   // 19. 凯歌（团队驱散+治疗，新机制 cleanse）—— 清除我军减益/持续伤害效果并附带治疗，克制减益/DOT 体系。
   // 平衡：初版 targetCount:3 时纯治疗部分就把均值审计拉到 2167（全战法第一），驱散只是附加价值还没算；
   // 3 目标团体治疗相当于青囊(1目标)的 ~2.4 倍，收窄到 2 目标、mult 0.8→0.65 后落回 S 档正常区间。
+  // 治疗部分与青囊同一套 casterPower 公式（同吃「施法者」智力，与目标属性无关），只是倍率更低（0.65x 起，
+  // 每级 +0.03，Lv.10 = 0.92x）、目标数更多（2 人而非 1 人），同样封顶各自目标入场兵力 30%。
   kaige: {
     id: 'kaige', name: '凯歌', timing: 'beforeAction', rate: 25, rateStep: 2,
     attribute: 'int', mult: 0.65, multStep: 0.03,
     target: 'random_ally', targetCount: 2,
     effect: 'cleanse', maxLevel: 10,
     tier: 'S', cost: SKILL_TIER_COST.S,
-    desc: '25% 概率为我军最多 2 名清除全部减益/持续伤害效果，并治疗少量兵力',
+    desc: '25% 概率为我军最多 2 名清除全部减益/持续伤害效果，并按施法者智力治疗少量兵力（智力越高回复越多）',
   },
 
   // 20. 复仇（受击反击，新机制 timing:'onHit' + effect:'counter'）—— 全战法中唯一「被动反应」类，

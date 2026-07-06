@@ -13,7 +13,7 @@ import {
   GENERAL_QUALITY, MAX_GENERALS, RECRUIT_COST_COIN, AWAKEN_ATK, AWAKEN_DEF, AWAKEN_INT,
   TROOP_TYPES, counterMult, findGeneralTemplate, guardStat, calcSpd, MAX_MARCH_PARTY,
   FORMATION_SIZE, MAX_FORMATIONS,
-  SKILL_MAX_LEVEL,
+  SKILL_MAX_LEVEL, SKILL_SLOT2_LEVEL, MAX_SKILL_SLOTS,
   EQUIP_TYPES, EQUIP_QUALITY, EQUIP_MAX_LEVEL, EQUIP_DRAW_COST, EQUIP_DISMISS_JADE,
 } from '../GameConstants.js'
 import { GameState } from '../core/GameState.js'
@@ -34,8 +34,10 @@ const COLOR = {
 
 function fmt(n) {
   n = Math.floor(n || 0)
-  if (n >= 100000000) return (n / 100000000).toFixed(1) + '亿'
-  if (n >= 10000) return (n / 10000).toFixed(1) + '万'
+  // 先在整数域四舍五入到「0.1万/0.1亿」再 /10，避免 (n/10000).toFixed(1) 在 x.x5 边界因二进制浮点
+  // 表示误差（如 1.15 实际存的是 1.1499999999999999）导致的四舍五入错误（该错才是本次排查的问题）
+  if (n >= 100000000) return (Math.round(n / 10000000) / 10).toFixed(1) + '亿'
+  if (n >= 10000) return (Math.round(n / 1000) / 10).toFixed(1) + '万'
   return String(n)
 }
 
@@ -843,23 +845,42 @@ export class UIScene extends Phaser.Scene {
   }
 
   // ── 弹窗：战法绑定 ───────────────────────────────────────────────────────
-  // 列出仓库全部战法：可用的点按即绑定（自动换下原战法）；当前武将已装备的点按解绑；
-  // 已被其他武将占用的置灰并注明持有者。一将一法、一法一将。
+  // 列出仓库全部战法：可用的点按即绑定，当前槽位已装备的点按解绑；已被其他武将（或本将
+  // 另一槽位）占用的置灰并注明。一将至多 2 法（20 级解锁第 2 槽）、一法至多绑 1 将 1 槽。
+  // 顶部两个槽位 tab 可切换正在配置的槽位；槽 2 未解锁时置灰不可点。
 
-  _openSkillBind(generalId) {
+  _openSkillBind(generalId, slot) {
     const g = this.state.general(generalId)
     if (!g) return
+    const slots = this.state.skillSlotsOf(g)
+    if (slot === undefined) slot = this._skillBindSlot ?? 0
+    if (slot >= slots) slot = 0
+    this._skillBindSlot = slot
+    const skillIds = g.skillIds || [null, null]
     const owned = this.state.ownedSkills()
     const rowH = 58
     const sw = this.scale.width, sh = this.scale.height
     const w = Math.min(sw - 24, 400)
-    const headerH = 50, footerH = 20
-    const listH = Math.max(rowH, Math.min(owned.length * rowH, sh - 160 - headerH - footerH))
+    const headerH = 74, footerH = 20
+    const listH = Math.max(rowH, Math.min(owned.length * rowH, sh - 180 - headerH - footerH))
     const h = headerH + listH + footerH
     this._openModal(w, h, (panel) => {
-      const cur = g.skillId ? getSkill(g.skillId) : null
+      const cur = skillIds[slot] ? getSkill(skillIds[slot]) : null
       panel.add(this.add.text(0, -h / 2 + 12, `${g.name} · 配置战法`, style(15, '#ffffff', true)).setOrigin(0.5, 0))
-      panel.add(this.add.text(0, -h / 2 + 32,
+
+      // 槽位 tab：槽 2 需达到 SKILL_SLOT2_LEVEL 级
+      const tabW = 110, tabGap = 8
+      for (let s = 0; s < MAX_SKILL_SLOTS; s++) {
+        const locked = s >= slots
+        const boundName = skillIds[s] ? getSkill(skillIds[s])?.name : null
+        const label = locked ? `战法②🔒Lv.${SKILL_SLOT2_LEVEL}` : `战法${s === 0 ? '①' : '②'}${boundName ? ` ${boundName}` : ''}`
+        const active = s === slot
+        panel.add(this._button(-tabW / 2 - tabGap / 2 + s * (tabW + tabGap), -h / 2 + 34, tabW, 22,
+          label, active ? COLOR.btnAmber : COLOR.btnGrey, !locked, () => {
+            this._openSkillBind(generalId, s)
+          }))
+      }
+      panel.add(this.add.text(0, -h / 2 + 54,
         cur ? `当前：【${cur.name}】（点它可解绑）` : '当前：无战法',
         style(11, cur ? '#ffd54f' : '#9e9e9e')).setOrigin(0.5, 0))
 
@@ -875,27 +896,31 @@ export class UIScene extends Phaser.Scene {
       owned.forEach((sid, i) => {
         const sk = getSkill(sid)
         const holder = this.state.skillBoundTo(sid)
-        const mine = holder && holder.id === generalId
+        const boundSlot = skillIds.indexOf(sid)
+        const mineThisSlot = boundSlot === slot
+        const mineOtherSlot = boundSlot !== -1 && boundSlot !== slot
         const other = holder && holder.id !== generalId
+        const clickable = mineThisSlot || (!other && !mineOtherSlot)
         const rw = w - 28, half = rowH - 8
         const y = i * rowH + rowH / 2
-        const row = this._row(content, y, rw, half, !other, () => {
+        const row = this._row(content, y, rw, half, clickable, () => {
           if (!this._rowVisibleInScroll(y)) return   // 滚动出视区的行不响应点击
-          if (mine) { this.state.unbindSkill(generalId); this._openGenerals() }
+          if (mineThisSlot) { this.state.unbindSkill(generalId, slot); this._openSkillBind(generalId, slot) }
+          else if (mineOtherSlot) { this._toast(`【${sk.name}】已装备在另一槽位`, COLOR.toastWarn) }
           else {
-            const err = this.state.bindSkill(generalId, sid)
+            const err = this.state.bindSkill(generalId, sid, slot)
             if (err) this._toast(err, COLOR.toastWarn)
-            else this._openGenerals()
+            else this._openSkillBind(generalId, slot)
           }
         })
         // _row 把容器放在 content 局部 x=0（=滚动区左缘），须右移半个行宽居中
         row.x = rw / 2
-        const nameColor = mine ? '#ffd54f' : (other ? '#777777' : '#ffffff')
+        const nameColor = mineThisSlot ? '#ffd54f' : ((other || mineOtherSlot) ? '#777777' : '#ffffff')
         row.add(this.add.text(-rw / 2 + 12, -half / 2 + 8, `【${sk.name}】`,
           style(13, nameColor, true)).setOrigin(0, 0))
         // 右上角状态标签
-        const tag = mine ? '已装备' : (other ? `已绑 ${holder.name}` : '可装备')
-        const tagColor = mine ? '#66bb6a' : (other ? '#ef5350' : '#81c784')
+        const tag = mineThisSlot ? '已装备' : (mineOtherSlot ? '另一槽位' : (other ? `已绑 ${holder.name}` : '可装备'))
+        const tagColor = mineThisSlot ? '#66bb6a' : ((other || mineOtherSlot) ? '#ef5350' : '#81c784')
         row.add(this.add.text(rw / 2 - 12, -half / 2 + 8, tag, style(11, tagColor, true)).setOrigin(1, 0))
         // 描述
         row.add(this._ellipsisText(sk.desc, style(10, '#9e9e9e'), rw - 24)
@@ -1031,10 +1056,12 @@ export class UIScene extends Phaser.Scene {
             if (err) this._toast(err, COLOR.toastWarn)
             else this._openGenerals()
           }))
-        // 战法：绑定则显示战法名（琥珀），未绑定显示「配战法」（灰）
-        const boundSkill = g.skillId ? getSkill(g.skillId) : null
-        row.add(this._button(btnX, 0, btnW, 22, boundSkill ? boundSkill.name : '配战法',
-          boundSkill ? COLOR.btnAmber : COLOR.btnGrey, true, () => {
+        // 战法：绑定则显示战法名（2 个都绑则「名1+1」），未绑定显示「配战法」（灰）
+        const boundNames = (g.skillIds || []).filter(Boolean).map(id => getSkill(id)?.name).filter(Boolean)
+        const skillBtnLabel = boundNames.length === 2 ? `${boundNames[0]}+1`
+          : (boundNames[0] || '配战法')
+        row.add(this._button(btnX, 0, btnW, 22, skillBtnLabel,
+          boundNames.length ? COLOR.btnAmber : COLOR.btnGrey, true, () => {
             if (!this._rowVisibleInScroll(cy)) return
             this._openSkillBind(g.id)
           }))

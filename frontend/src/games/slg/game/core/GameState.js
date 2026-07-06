@@ -8,7 +8,7 @@ import {
   BASE_YIELD_PER_LEVEL, COIN_YIELD_PER_LEVEL,
   garrisonOf, guardStat,
   CITY_MAX_LEVEL, territoryCap, cityUpgradeCost,
-  troopCapOf, expToLevel, GENERAL_MAX_LEVEL,
+  troopCapOf, expToLevel, GENERAL_MAX_LEVEL, maxSkillSlots, MAX_SKILL_SLOTS, SKILL_SLOT2_LEVEL,
   GENERAL_QUALITY, RECRUITABLE_GENERALS, findGeneralTemplate,
   RECRUIT_COST_COIN, MAX_GENERALS, AWAKEN_ATK, AWAKEN_DEF, AWAKEN_INT, AWAKEN_POL, AWAKEN_CHA, FREE_RECRUIT_COUNT,
   growthOf, LEVELUP_ATK, LEVELUP_DEF, LEVELUP_INT, LEVELUP_POL, LEVELUP_CHA, calcSpd,
@@ -52,7 +52,7 @@ function makeGeneral(tpl, starter = false) {
     atk: tpl.atk, def: tpl.def, int: tpl.int, pol: tpl.pol, cha: tpl.cha,
     spd: calcSpd(tpl),
     lv: 1, exp: 0, troops: starter ? INITIAL_TROOPS : 0, state: 'idle',
-    stamina: STAMINA_MAX, awaken: 0, skillId: null,   // 绑定的主动战法（第二期由绑定 UI 设置）
+    stamina: STAMINA_MAX, awaken: 0, skillIds: [null, null],   // 绑定的主动战法（2 槽，第2槽需20级解锁）
     equip: { weapon: null, helmet: null, necklace: null, armor: null, belt: null, boots: null },   // 6 槽装备 iid
   }
 }
@@ -74,7 +74,7 @@ export class GameState extends Emitter {
     this.cityLv = 1
     this.buildings = { granary: 1, barracks: 1, training: 1, forge: 1 }
     this.generals = []
-    this.skills = []           // 战法仓库：拥有的战法 id（每种仅一份；绑定关系存在各武将 g.skillId 上）
+    this.skills = []           // 战法仓库：拥有的战法 id（每种仅一份；绑定关系存在各武将 g.skillIds 上）
     this.skillLevels = {}      // 战法等级：{ skillId: level }，缺省=1。等级跟战法走、不跟武将走
     this.equipments = []       // 装备仓库：所有装备实例数组（绑定关系存在各武将 g.equip.{type} iid 上）
     this._equipSeq = 0         // 装备实例 iid 自增序号
@@ -104,8 +104,9 @@ export class GameState extends Emitter {
   }
 
   // ── 战法仓库 & 绑定 ─────────────────────────────────────────────────────────
-  // 每种战法仅一份，存在 this.skills；某战法是否「已绑定」由是否有武将 g.skillId 指向它决定。
-  // 绑定规则：一将至多 1 法、一法至多绑 1 将；解绑/销毁武将后战法自动回到可用池（仍在仓库里）。
+  // 每种战法仅一份，存在 this.skills；某战法是否「已绑定」由是否有武将 g.skillIds 指向它决定。
+  // 绑定规则：一将至多 maxSkillSlots(lv) 法（默认 1，20 级解锁第 2 槽）、一法至多绑 1 将；
+  // 解绑/销毁武将后战法自动回到可用池（仍在仓库里）。
 
   _grantStarterSkills(n) {
     const pool = BINDABLE_SKILLS.map(s => s.id)
@@ -118,7 +119,7 @@ export class GameState extends Emitter {
   /** 仓库全部战法 id */
   ownedSkills() { return this.skills.slice() }
   /** 某战法当前绑定的武将（无则 null） */
-  skillBoundTo(skillId) { return this.generals.find(g => g.skillId === skillId) || null }
+  skillBoundTo(skillId) { return this.generals.find(g => (g.skillIds || []).includes(skillId)) || null }
   /** 未被任何武将绑定、可自由绑定的战法 id */
   availableSkills() { return this.skills.filter(id => !this.skillBoundTo(id)) }
 
@@ -323,26 +324,36 @@ export class GameState extends Emitter {
     }
   }
 
-  /** 给武将绑定战法。返回错误信息或 null。若该将已有战法则先自动换下（换下的自动回可用池） */
-  bindSkill(generalId, skillId) {
+  /** 武将当前战法槽位数（1；20 级起 2） */
+  skillSlotsOf(g) { return maxSkillSlots(g.lv) }
+
+  /**
+   * 给武将指定槽位绑定战法。slot=0 为主槽（人人可用），slot=1 为副槽（需 20 级解锁）。
+   * 返回错误信息或 null。同一战法不可在同一武将的两个槽位重复装备。
+   */
+  bindSkill(generalId, skillId, slot = 0) {
     const g = this.general(generalId)
     if (!g) return '武将不存在'
     if (!this.skills.includes(skillId)) return '尚未拥有该战法'
+    if (slot < 0 || slot >= MAX_SKILL_SLOTS) return '战法槽位不存在'
+    if (slot >= maxSkillSlots(g.lv)) return `武将等级达到 ${SKILL_SLOT2_LEVEL} 级才能装备第二个战法`
     const holder = this.skillBoundTo(skillId)
     if (holder && holder.id !== generalId) return `【${getSkill(skillId)?.name}】已绑定 ${holder.name}`
-    g.skillId = skillId
+    if (!Array.isArray(g.skillIds)) g.skillIds = [null, null]
+    if (g.skillIds.some((id, i) => id === skillId && i !== slot)) return '该武将已在另一槽位装备此战法'
+    g.skillIds[slot] = skillId
     this._pushLog(`📜 ${g.name} 装备战法【${getSkill(skillId)?.name}】`)
     this.emit('generals', this.generals)
     this.emit('skills', this.skills)
     return null
   }
 
-  /** 解绑武将战法，战法回到可用池 */
-  unbindSkill(generalId) {
+  /** 解绑武将指定槽位战法，战法回到可用池 */
+  unbindSkill(generalId, slot = 0) {
     const g = this.general(generalId)
-    if (!g || !g.skillId) return
-    const name = getSkill(g.skillId)?.name
-    g.skillId = null
+    if (!g || !Array.isArray(g.skillIds) || !g.skillIds[slot]) return
+    const name = getSkill(g.skillIds[slot])?.name
+    g.skillIds[slot] = null
     this._pushLog(`📜 ${g.name} 卸下战法${name ? `【${name}】` : ''}`)
     this.emit('generals', this.generals)
     this.emit('skills', this.skills)
@@ -919,9 +930,10 @@ export class GameState extends Emitter {
     let finalWaveIdx = 0       // 最终结局发生在第几波（0 = 守军空虚未交战）
 
     // 战报 v2：双方阵容卡（基础属性→实战属性 + 兵力/输出/承伤/战法统计）
-    const unitCard = (u, base, eff, quality, lv, troopType, skillId) => ({
+    // skillIds：该单位携带的战法 id 数组（0~2 个，20 级武将可携带 2 个），展示时以顿号拼接
+    const unitCard = (u, base, eff, quality, lv, troopType, skillIds) => ({
       key: u.key, name: u.name, quality, lv, troopType,
-      skill: skillId ? getSkill(skillId)?.name || null : null,
+      skill: (skillIds || []).map(id => getSkill(id)?.name).filter(Boolean).join('、') || null,
       atk: Math.round(base.atk), atkEff: Math.round(eff.atk),
       def: Math.round(base.def), defEff: Math.round(eff.def),
       spd: Math.round(base.spd), spdEff: Math.round(eff.spd),
@@ -959,7 +971,7 @@ export class GameState extends Emitter {
             cha: guardStat(tpl.cha, gd.lv, tpl.quality),
           }) + (TROOP_TYPES[tpl.troopType]?.marchSpeed || 0),
           troops: gd.troops, troopType: tpl.troopType,
-          skillId, skillLv,
+          skills: skillId ? [{ id: skillId, lv: skillLv }] : [],
         }))
         const atkUnits = gens.map((g, idx) => {
           const e = effOf(g)
@@ -967,8 +979,8 @@ export class GameState extends Emitter {
             key: g.id, name: g.name,
             atk: e.atk, def: e.def, int: e.int, spd: e.spd,
             troops: atkCurrent[idx],   // 当前残余兵力入场
-            troopType: g.troopType, skillId: g.skillId || null,
-            skillLv: this.skillLevel(g.skillId),
+            troopType: g.troopType,
+            skills: (g.skillIds || []).filter(Boolean).map(id => ({ id, lv: this.skillLevel(id) })),
           }
         }).filter(u => u.troops > 0)   // 兵力为 0 的武将不参加下一波战斗
 
@@ -1016,7 +1028,7 @@ export class GameState extends Emitter {
           const eff = defUnits.find(d => d.key === `${gd.id}:${i}`)
           // tpl（招募池模板）不存 spd 字段（恒由 calcSpd 现算）：直接读 tpl.spd 会是 undefined
           // → Math.round 出 NaN → 存档 JSON 序列化后变 null → 战报显示「速null」
-          allFoeCards.push(unitCard(u, { ...tpl, spd: calcSpd(tpl) }, eff, tpl.quality, gd.lv, tpl.troopType, skillId))
+          allFoeCards.push(unitCard(u, { ...tpl, spd: calcSpd(tpl) }, eff, tpl.quality, gd.lv, tpl.troopType, skillId ? [skillId] : []))
         })
 
         totalAtkLoss += r.atkLoss
@@ -1060,7 +1072,7 @@ export class GameState extends Emitter {
         buffCast: s.buffCast, debuffCast: s.debuffCast, conditionMet: s.conditionMet,
         shielded: s.shielded, countered: s.countered, cleansed: s.cleansed,
       }
-      return unitCard(u, g, this.effStats(g), g.quality, g.lv, g.troopType, g.skillId)
+      return unitCard(u, g, this.effStats(g), g.quality, g.lv, g.troopType, (g.skillIds || []).filter(Boolean))
     })
     const report = {
       v: 2, names, outcome: finalOutcome, exp: totalExp,
@@ -1192,7 +1204,7 @@ export class GameState extends Emitter {
       }
     }
     const data = {
-      v: 10, seed: this.seed, savedAt: Date.now(), now: this.now,
+      v: 11, seed: this.seed, savedAt: Date.now(), now: this.now,
       res: this.res, cityLv: this.cityLv,
       freeRecruits: this.freeRecruits,
       firstRecruitDone: this._firstRecruitDone,
@@ -1209,7 +1221,9 @@ export class GameState extends Emitter {
         spd: g.spd,
         lv: g.lv, exp: Math.round(g.exp), troops: g.troops,
         atk: g.atk, def: g.def, int: g.int, pol: g.pol, cha: g.cha,
-        stamina: Math.round(g.stamina), awaken: g.awaken || 0, skillId: g.skillId || null,
+        stamina: Math.round(g.stamina), awaken: g.awaken || 0,
+        // v11+ 战法 2 槽（第2槽需20级解锁）；缺省补 [null,null]
+        skillIds: [g.skillIds?.[0] || null, g.skillIds?.[1] || null],
         // v9+ 武将装备槽：6 类 iid（旧档缺省时回退空槽）
         equip: { ...(g.equip || { weapon: null, helmet: null, necklace: null, armor: null, belt: null, boots: null }) },
       })),
@@ -1278,6 +1292,10 @@ export class GameState extends Emitter {
       Object.assign(g, sg)
       // v8 旧档无 equip 字段：补默认空槽（避免后续 equipBonus/g.equip.xxx 访问报错）
       if (!g.equip) g.equip = { weapon: null, helmet: null, necklace: null, armor: null, belt: null, boots: null }
+      // v11+ 才有 skillIds 数组；v6~v10 旧档为单一 skillId 字段，迁移进槽位 0
+      if (!Array.isArray(g.skillIds)) g.skillIds = [null, null]
+      if (sg.skillId && !g.skillIds[0] && !g.skillIds[1]) g.skillIds[0] = sg.skillId
+      delete g.skillId
       // spd 由五维平均值得出；旧档可能缺失 pol/cha，用模板补齐后重算
       const tpl = findGeneralTemplate(g.id)
       if (tpl) {
@@ -1374,24 +1392,28 @@ const OLD_SKILL_COSTS_V2 = {
 
 /**
  * V2.0 战法精简迁移：在 GameState.load() 末尾调用，把旧战法 ID 迁移到新 ID。
- * 1) 武将 skillId 旧 ID → 新 ID（同新 ID 冲突时只保留第一个，其余清空让玩家重绑）
+ * 1) 武将 skillIds 各槽位旧 ID → 新 ID（同新 ID 冲突时只保留第一个，其余清空让玩家重绑）
  * 2) gs.skills 仓库去重（旧+新合并到新 ID）
  * 3) gs.skillLevels 等级迁移（同新 ID 取 max，避免回退）
  * 4) 玉石补偿：仓库中重复映射导致丢失的旧战法按兑换价退还
  * 5) 过滤掉迁移后仍不在 SKILLS 字典中的无效 ID（保险）
  */
 function _migrateV2Skills(gs) {
-  // 1) 武将 skillId 迁移（处理冲突：同新 ID 只保留第一个武将，其余清空）
+  // 1) 武将 skillIds 各槽位迁移（处理冲突：同新 ID 只保留第一个武将/槽位，其余清空）
   const usedSkillIds = new Set()
   for (const g of gs.generals) {
-    if (!g.skillId) continue
-    const newId = SKILL_MIGRATION_V2[g.skillId] || g.skillId
-    if (!getSkill(newId)) { g.skillId = null; continue }   // 未知 ID 清空
-    if (usedSkillIds.has(newId)) {
-      g.skillId = null                                     // 冲突：清空，玩家需重新绑定
-    } else {
-      g.skillId = newId
-      usedSkillIds.add(newId)
+    if (!Array.isArray(g.skillIds)) g.skillIds = [null, null]
+    for (let slot = 0; slot < g.skillIds.length; slot++) {
+      const sid = g.skillIds[slot]
+      if (!sid) continue
+      const newId = SKILL_MIGRATION_V2[sid] || sid
+      if (!getSkill(newId)) { g.skillIds[slot] = null; continue }   // 未知 ID 清空
+      if (usedSkillIds.has(newId)) {
+        g.skillIds[slot] = null                                    // 冲突：清空，玩家需重新绑定
+      } else {
+        g.skillIds[slot] = newId
+        usedSkillIds.add(newId)
+      }
     }
   }
   // 2) skills 仓库去重迁移 + 统计丢失的旧战法（用于玉石补偿）

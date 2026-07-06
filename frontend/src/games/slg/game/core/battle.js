@@ -18,7 +18,8 @@
 import { BATTLE_MAX_ROUNDS, BATTLE_ROUND_ATTRITION, counterMult } from '../GameConstants.js'
 import { getSkill, NORMAL_ATTACK, STATUSES, skillLevelAt } from './skills.js'
 
-export const BATTLE_DMG_ATTR_DIVISOR = 150   // 属性对攻/防值的增幅分母（越小=属性差距越明显；100属性→×1.67）
+export const BATTLE_DMG_ATTR_DIVISOR = 150   // 攻击属性（武/智）对战力的增幅分母（越小=属性差距越明显；100属性→×1.67）
+export const BATTLE_DEF_ATTR_DIVISOR = 100    // 统率对减伤的增幅分母，比攻击方分母更小 → 统率更「肉」（100属性→×2）
 export const BATTLE_DMG_RATE_MIN = 0.05      // 伤害下限 = 当前兵力 5%（保证战斗推进，不出 0 伤）
 export const BATTLE_DMG_RATE_MAX = 0.80      // 伤害上限 = 「入场兵力」80%（防满血一击秒杀；残血仍可被收掉）
 export const BATTLE_HEAL_RATE_MAX = 0.30     // 单次治疗上限 = 目标入场兵力 30%（避免一口满血）
@@ -36,7 +37,8 @@ function mulberry32(seed) {
 
 /**
  * @typedef {{key?:string, name:string, atk:number, def:number, spd:number, int?:number,
- *            troops:number, troopType?:string, skillId?:string}} BattleUnit
+ *            troops:number, troopType?:string, skills?:Array<{id:string, lv?:number}>}} BattleUnit
+ *   skills：该单位携带的主动/被动战法（0~2 个，20 级武将可携带 2 个），每个独立判定发动
  *
  * @param {BattleUnit[]} attackers 进攻方武将（1~N 名）
  * @param {BattleUnit[]} defenders 防守方武将（1~N 名）
@@ -57,14 +59,15 @@ export function resolveBattle(attackers, defenders, seed = 1) {
   const mkUnits = (list, side) => list.map((u, i) => ({
     side, idx: i, key: u.key ?? `${side}${i}`, name: u.name,
     atk: u.atk || 0, def: u.def || 0, spd: u.spd || 0, int: u.int || 0,
-    troopType: u.troopType || null, skillId: u.skillId || null, skillLv: u.skillLv || 1,
+    troopType: u.troopType || null,
+    skills: Array.isArray(u.skills) ? u.skills.filter(s => s && s.id) : [],   // 0~2 个战法，各自独立判定
     start: Math.round(u.troops), troops: Math.round(u.troops),
     statuses: {},                       // statusId → 剩余可跳过次数（控制类）
     dots: [],                           // 持续伤害/易伤：[{name, dmg, duration, vuln}]（沙暴等）
     buffs:   { atk: [], def: [], int: [], spd: [] },   // 增益列表：[{value, duration}]
     debuffs: { atk: [], def: [], int: [], spd: [] },   // 减益列表：[{value, duration}]
     shield: null,                       // 护盾（护佑）：{ amount, duration } | null，先扣盾量再扣兵力
-    pity: 0,                            // 憋气值（破釜沉舟等 pityStep 战法用）：每次未发动 +1，触发后清零
+    pity: {},                           // 憋气值（破釜沉舟等 pityStep 战法用）：{ skillId: 次数 }，每个战法独立累计，触发后清零
     healed: 0,                          // 累计接受治疗量（doHeal 给目标累加）
     lifesteal: 0,                       // 累计吸血回复量（lifesteal 给自身累加）
     buffCast: 0, debuffCast: 0,         // 施加增益/减益次数
@@ -147,8 +150,10 @@ export function resolveBattle(attackers, defenders, seed = 1) {
   // 单次命中结算（率土绝对伤害）。attribute 决定伤害类型：int=谋略，其余(武/速)=兵刃。
   // 兵刃伤害额外吃目标的「兵刃易伤」；谋略伤害不吃。lifesteal 按本次伤害回血。护盾优先吸收。
   // noCounter：跳过「受击反击」判定，防止复仇的反击命中再触发对方复仇形成无限连锁。
-  const resolveHit = (skill, u, target, attribute, mult, useCounter, events, noCounter = false) => {
-    if (target.troops <= 0) return
+  // comboBudget：多段命中（如破甲=兵刃+谋略）共享的入场兵力80%预算，避免单次触发内多段叠加绕开满血保护。
+  const resolveHit = (skill, u, target, attribute, mult, useCounter, events, noCounter = false, comboBudget = null) => {
+    if (target.troops <= 0) return 0
+    if (comboBudget && comboBudget.remaining <= 0) return 0   // 同一次多段命中的预算已打满，本段不再造成伤害
     const attrVal = effAttr(u, attribute)                  // buff/debuff 折算后的攻击属性
     const defVal  = effAttr(target, 'def')                 // 减益后目标的有效统率
     const counter = useCounter ? counterMult(u.troopType, target.troopType) : 1
@@ -159,11 +164,13 @@ export function resolveBattle(attackers, defenders, seed = 1) {
     // 攻击战力：攻击方兵力 × 属性折算 × 战法倍率 × 兵种克制 × 浮动（率土口径：输出由攻击方决定）
     const atkPow = u.troops * (1 + attrVal / BATTLE_DMG_ATTR_DIVISOR) * mult * counter * roll
     // 绝对伤害：战力经目标「统率」减免（目标兵力不参与减免 → 残血可被一击收掉）× 兵刃易伤
-    let dmg = BATTLE_ROUND_ATTRITION * atkPow / (1 + defVal / BATTLE_DMG_ATTR_DIVISOR) * vuln
+    let dmg = BATTLE_ROUND_ATTRITION * atkPow / (1 + defVal / BATTLE_DEF_ATTR_DIVISOR) * vuln
     // 上限 = 入场兵力 80%（防满血秒杀，最少两击；按入场兵力算 → 残血可收掉）；下限 = 当前兵力 5%
     dmg = Math.min(BATTLE_DMG_RATE_MAX * target.start, Math.max(BATTLE_DMG_RATE_MIN * troopsBefore, dmg))
-    let loss = Math.min(troopsBefore, Math.max(1, Math.round(dmg)))
+    if (comboBudget) dmg = Math.min(dmg, comboBudget.remaining)
+    let loss = Math.min(troopsBefore, Math.max(comboBudget ? 0 : 1, Math.round(dmg)))
     loss = shieldAbsorb(target, loss, events)
+    if (comboBudget) comboBudget.remaining -= loss
     target.troops -= loss
     u.dealt += loss
     target.taken += loss
@@ -187,12 +194,16 @@ export function resolveBattle(attackers, defenders, seed = 1) {
     if (target.troops <= 0) {
       events.push({ type: 'death', side: target.side, actor: target.name, actorKey: target.key })
     } else if (!noCounter) {
-      // 反应类战法（timing:'onHit'）：受击方存活时按其战法判定是否触发反应效果，反击命中禁止
+      // 反应类战法（timing:'onHit'）：受击方存活时按其战法逐个判定是否触发反应效果，反击命中禁止
       // 再触发（noCounter=true，防连锁死循环）。分支结构仿照 beforeAction 的 effect 派发表——
       // 目前只有 counter（复仇）一种 onHit 效果，以后新增别的 onHit 效果只需在这里加一个分支。
-      const tRaw = target.skillId ? getSkill(target.skillId) : null
-      const tSkill = tRaw ? skillLevelAt(tRaw, target.skillLv || 1) : null
-      if (tSkill && tSkill.timing === 'onHit' && rate(tSkill.rate)) {
+      // 一名武将可携带 2 个战法（20级解锁第2槽），若两个都是 onHit 类型则各自独立判定。
+      const tSkills = target.skills
+        .map(s => { const raw = getSkill(s.id); return raw ? skillLevelAt(raw, s.lv || 1) : null })
+        .filter(sk => sk && sk.timing === 'onHit')
+      for (const tSkill of tSkills) {
+        if (target.troops <= 0) break
+        if (!rate(tSkill.rate)) continue
         target.skillFire++
         events.push({ type: 'skill_trigger', side: target.side, actor: target.name, actorKey: target.key,
           skill: tSkill.id, skillName: tSkill.name })
@@ -202,6 +213,7 @@ export function resolveBattle(attackers, defenders, seed = 1) {
         }
       }
     }
+    return loss
   }
 
   // 一次攻击：随机取 min(count, 存活数) 个不重复目标，逐一结算。
@@ -229,8 +241,10 @@ export function resolveBattle(attackers, defenders, seed = 1) {
         tmult = applyLowHpMult(target, tmult, skill.targetConditionThreshold ?? 0.3, skill.targetConditionMult || 2,
           'target_condition_met', skill.targetCondition, events).mult
       }
+      // 多段命中共享同一份「入场兵力80%」预算：单段命中不受影响（comboBudget=null，行为不变）
+      const comboBudget = hits.length > 1 ? { remaining: BATTLE_DMG_RATE_MAX * target.start } : null
       for (const h of hits) {
-        resolveHit(skill, u, target, h.attribute, tmult, h.useCounter ?? skill.useCounter, events)
+        resolveHit(skill, u, target, h.attribute, tmult, h.useCounter ?? skill.useCounter, events, false, comboBudget)
         if (u.troops <= 0) break            // 双段命中（如破甲）第一段就被反击打死时，第二段不再打出
       }
     }
@@ -247,7 +261,7 @@ export function resolveBattle(attackers, defenders, seed = 1) {
       const target = pool.splice(Math.floor(rand() * pool.length), 1)[0]
       const defVal = effAttr(target, 'def')
       // 每回合伤害快照（率土绝对伤害口径，施加时定值），不随后续兵力/属性变化
-      const tickDmg = BATTLE_ROUND_ATTRITION * u.troops * (1 + attrVal / BATTLE_DMG_ATTR_DIVISOR) * (skill.mult || 1) / (1 + defVal / BATTLE_DMG_ATTR_DIVISOR)
+      const tickDmg = BATTLE_ROUND_ATTRITION * u.troops * (1 + attrVal / BATTLE_DMG_ATTR_DIVISOR) * (skill.mult || 1) / (1 + defVal / BATTLE_DEF_ATTR_DIVISOR)
       const dur = skill.duration || 2
       const existing = target.dots.find(d => d.name === skill.status)
       if (existing) {
@@ -487,18 +501,23 @@ export function resolveBattle(attackers, defenders, seed = 1) {
       if (!alive(u.side === 'atk' ? defUnits : atkUnits).length) break
 
       events.push({ type: 'action_start', side: u.side, actor: u.name, actorKey: u.key })
-      // 按武将携带等级解析战法实际数值（rate/mult/duration 随等级成长）
-      const rawSkill = u.skillId ? getSkill(u.skillId) : null
-      const skill = rawSkill ? skillLevelAt(rawSkill, u.skillLv || 1) : null
+      // 按武将携带等级解析战法实际数值（rate/mult/duration 随等级成长）。一名武将可携带 0~2 个
+      // 主动战法（20 级解锁第 2 槽），每个战法各自独立判定发动，互不影响，可能同回合都触发。
+      const skills = u.skills
+        .map(s => { const raw = getSkill(s.id); return raw ? skillLevelAt(raw, s.lv || 1) : null })
+        .filter(Boolean)
 
-      // ② 前置主动战法
-      if (skill && skill.timing === 'beforeAction') {
+      // ② 前置主动战法：按槽位顺序逐个判定
+      for (const skill of skills) {
+        if (skill.timing !== 'beforeAction') continue
+        if (u.troops <= 0) break   // 前一个战法引发的反击可能已把 u 打死
         // 憋气机制（破釜沉舟等 pityStep）：每次未发动 +pityStep 概率（封顶100%），触发后清零；
-        // 无 pityStep 的战法 effRate === skill.rate，行为与之前完全一致。
-        const effRate = skill.pityStep ? Math.min(100, skill.rate + u.pity * skill.pityStep) : skill.rate
+        // 每个战法独立累计憋气值，互不影响。无 pityStep 的战法 effRate === skill.rate。
+        const pity = u.pity[skill.id] || 0
+        const effRate = skill.pityStep ? Math.min(100, skill.rate + pity * skill.pityStep) : skill.rate
         if (rate(effRate)) {
           u.skillFire++
-          if (skill.pityStep) u.pity = 0
+          if (skill.pityStep) u.pity[skill.id] = 0
           events.push({ type: 'skill_trigger', side: u.side, actor: u.name, actorKey: u.key,
             skill: skill.id, skillName: skill.name })
           if (skill.effect === 'damage')        doAttack(skill, u, events)
@@ -510,7 +529,7 @@ export function resolveBattle(attackers, defenders, seed = 1) {
           else if (skill.effect === 'shield')   doShield(skill, u, events)
           else if (skill.effect === 'cleanse')  doCleanse(skill, u, events)
         } else {
-          if (skill.pityStep) u.pity++
+          if (skill.pityStep) u.pity[skill.id] = pity + 1
           events.push({ type: 'skill_failed', side: u.side, actor: u.name, actorKey: u.key,
             skill: skill.id, skillName: skill.name })
         }
@@ -521,14 +540,16 @@ export function resolveBattle(attackers, defenders, seed = 1) {
         events.push({ type: 'normal_attack', side: u.side, actor: u.name, actorKey: u.key })
         doAttack(NORMAL_ATTACK, u, events)
 
-        // ④ 普攻后追击战法（连击/追击/横扫）：追加一次带倍率的普攻（受兵种克制）
-        if (u.troops > 0 && skill && skill.timing === 'afterAttack' && skill.effect === 'extra_attack' && rate(skill.rate)) {
+        // ④ 普攻后追击战法（连击/鬼神等）：逐个判定，每个独立概率，可叠加触发多次追击
+        for (const skill of skills) {
+          if (skill.timing !== 'afterAttack' || skill.effect !== 'extra_attack') continue
+          if (u.troops <= 0) break
+          if (!rate(skill.rate)) continue
+          if (!alive(u.side === 'atk' ? defUnits : atkUnits).length) break
           u.extra++
           events.push({ type: 'extra_attack', side: u.side, actor: u.name, actorKey: u.key,
             skill: skill.id, skillName: skill.name })
-          if (u.troops > 0 && alive(u.side === 'atk' ? defUnits : atkUnits).length) {
-            doAttack({ ...NORMAL_ATTACK, mult: skill.mult || 1 }, u, events)
-          }
+          doAttack({ ...NORMAL_ATTACK, mult: skill.mult || 1 }, u, events)
         }
       }
 

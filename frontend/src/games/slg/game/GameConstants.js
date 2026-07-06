@@ -127,7 +127,7 @@ export function counterMult(atkType, defType) {
 }
 // ── 战斗结算（多对多回合制：全场按速度排序逐将行动，见 core/battle.js）───────
 export const BATTLE_MAX_ROUNDS = 10        // 最多打 10 回合，仍未分胜负则判平
-export const BATTLE_ROUND_ATTRITION = 0.3  // 单次攻击按攻防战力比造成的兵力损耗系数
+export const BATTLE_ROUND_ATTRITION = 0.2  // 单次攻击按攻防战力比造成的兵力损耗系数
 export const MAX_MARCH_PARTY = 3           // 单次出征最多同行武将（= 一个出征编队的上限）
 export const MAX_FORMATIONS = 4            // 玩家可保存的编队预设槽位数
 export const FORMATION_NAME_MAX_LEN = 6    // 编队名称最大字数
@@ -361,6 +361,10 @@ export function troopCapOf(lv) { return GENERAL_BASE_TROOP_CAP + (lv - 1) * 200 
 // 升级经验：升到下一级需要 lv*200 经验
 export function expToLevel(lv) { return lv * 200 }
 export const GENERAL_MAX_LEVEL = 20
+// 战法携带槽位：默认 1 个主动战法；武将等级达到 SKILL_SLOT2_LEVEL（=满级）解锁第 2 个槽位
+export const SKILL_SLOT2_LEVEL = GENERAL_MAX_LEVEL
+export const MAX_SKILL_SLOTS = 2
+export function maxSkillSlots(lv) { return lv >= SKILL_SLOT2_LEVEL ? MAX_SKILL_SLOTS : 1 }
 // 征兵花费：主城 <5 级时 1 兵 = 2 粮；>=5 级时 1 兵 = 2 粮 + 1 铁矿 + 1 木材
 export function getRecruitCostPerTroop(cityLv) {
   if (cityLv >= 5) return { grain: 3, iron: 1, wood: 1 }
