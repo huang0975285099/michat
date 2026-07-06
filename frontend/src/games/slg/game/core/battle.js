@@ -103,6 +103,36 @@ export function resolveBattle(attackers, defenders, seed = 1) {
   // 目标当前「兵刃易伤」加成（沙暴等 dot 记在 dots[].vuln 上；取最强，不叠加）
   const bianrenVuln = (target) => target.dots.reduce((m, d) => Math.max(m, d.vuln || 0), 0)
 
+  // 施法者战力（治疗/护盾共用的核心公式）：troops × (1+attr/150) × mult × 0.3。
+  // doHeal / doShield / doCleanse 都靠这一个数值决定各自的回复量/护盾量，改数值只用改这一处。
+  const casterPower = (u, attrVal, mult) =>
+    u.troops * (1 + attrVal / BATTLE_DMG_ATTR_DIVISOR) * (mult || 1) * BATTLE_ROUND_ATTRITION
+
+  // 治疗落地：rawHeal 封顶目标入场兵力 30%，应用到目标兵力并 push heal 事件；返回实际回复量。
+  // doHeal 的主循环与 doCleanse 的附带治疗都调用这同一份逻辑，避免两处各写一遍治疗公式。
+  const applyHeal = (skill, target, rawHeal, events) => {
+    const heal = Math.min(rawHeal, BATTLE_HEAL_RATE_MAX * target.start)
+    const before = target.troops
+    target.troops = Math.min(target.start, target.troops + Math.round(heal))
+    const real = target.troops - before
+    if (real > 0) {
+      target.healed += real
+      events.push({ type: 'heal', side: target.side, actor: target.name, actorKey: target.key,
+        skill: skill.id, skillName: skill.name, value: real, targetLeft: target.troops })
+    }
+    return real
+  }
+
+  // 残血类条件加成：entity（背水=施法者自身 / 斩杀=目标）当前兵力低于 entity.start×threshold 时，
+  // 倍率乘 bonusMult 并记录一次事件；否则原样返回 baseMult。自身条件(condition)与目标条件
+  // (targetCondition)结构完全一样，只是检查谁、事件类型不同，故合并成这一份判定，不再各写一份。
+  const applyLowHpMult = (entity, baseMult, threshold, bonusMult, eventType, conditionLabel, events) => {
+    if (entity.troops >= entity.start * threshold) return { mult: baseMult, applied: false }
+    events.push({ type: eventType, side: entity.side, actor: entity.name, actorKey: entity.key,
+      condition: conditionLabel, conditionMult: bonusMult })
+    return { mult: baseMult * bonusMult, applied: true }
+  }
+
   // 护盾吸收（护佑）：先扣盾量再扣兵力，返回护盾抵消后的实际损失。盾量归零不移除，等 tickShields 按 duration 到期清空。
   const shieldAbsorb = (target, rawLoss, events) => {
     if (!target.shield || target.shield.amount <= 0 || rawLoss <= 0) return rawLoss
@@ -157,15 +187,19 @@ export function resolveBattle(attackers, defenders, seed = 1) {
     if (target.troops <= 0) {
       events.push({ type: 'death', side: target.side, actor: target.name, actorKey: target.key })
     } else if (!noCounter) {
-      // 复仇（timing:'onHit'）：受击方存活时按其战法判定是否反击，反击命中禁止再触发（noCounter=true）
+      // 反应类战法（timing:'onHit'）：受击方存活时按其战法判定是否触发反应效果，反击命中禁止
+      // 再触发（noCounter=true，防连锁死循环）。分支结构仿照 beforeAction 的 effect 派发表——
+      // 目前只有 counter（复仇）一种 onHit 效果，以后新增别的 onHit 效果只需在这里加一个分支。
       const tRaw = target.skillId ? getSkill(target.skillId) : null
       const tSkill = tRaw ? skillLevelAt(tRaw, target.skillLv || 1) : null
-      if (tSkill && tSkill.timing === 'onHit' && tSkill.effect === 'counter' && rate(tSkill.rate)) {
+      if (tSkill && tSkill.timing === 'onHit' && rate(tSkill.rate)) {
         target.skillFire++
-        target.countered++
         events.push({ type: 'skill_trigger', side: target.side, actor: target.name, actorKey: target.key,
           skill: tSkill.id, skillName: tSkill.name })
-        resolveHit(tSkill, target, u, tSkill.attribute, tSkill.mult || 1, false, events, true)
+        if (tSkill.effect === 'counter') {
+          target.countered++
+          resolveHit(tSkill, target, u, tSkill.attribute, tSkill.mult || 1, false, events, true)
+        }
       }
     }
   }
@@ -177,13 +211,13 @@ export function resolveBattle(attackers, defenders, seed = 1) {
     if (!enemies.length) return
     const count = Math.min(skill.targetCount || 1, enemies.length)
     const pool = enemies.slice()
-    // condition：残血爆发（自身兵力 < 入场 50% 时倍率 ×conditionMult）
+    // condition：残血爆发（自身兵力 < 入场 conditionThreshold(默认50%) 时倍率 ×conditionMult）
     let mult = skill.mult || 1
-    if (skill.condition === 'low_hp' && u.troops < u.start * 0.5) {
-      mult *= (skill.conditionMult || 1.5)
-      u.conditionMet++
-      events.push({ type: 'condition_met', side: u.side, actor: u.name, actorKey: u.key,
-        condition: skill.condition, conditionMult: skill.conditionMult || 1.5 })
+    if (skill.condition === 'low_hp') {
+      const r = applyLowHpMult(u, mult, skill.conditionThreshold ?? 0.5, skill.conditionMult || 1.5,
+        'condition_met', skill.condition, events)
+      mult = r.mult
+      if (r.applied) u.conditionMet++
     }
     const hits = skill.hits || [{ attribute: skill.attribute, useCounter: skill.useCounter }]
     for (let n = 0; n < count; n++) {
@@ -191,10 +225,9 @@ export function resolveBattle(attackers, defenders, seed = 1) {
       const target = pool.splice(Math.floor(rand() * pool.length), 1)[0]
       // 处决判定（斩杀等 targetCondition）：目标当前兵力低于其入场兵力阈值时倍率暴增，按目标逐个判定
       let tmult = mult
-      if (skill.targetCondition === 'low_hp' && target.troops < target.start * (skill.targetConditionThreshold ?? 0.3)) {
-        tmult *= (skill.targetConditionMult || 2)
-        events.push({ type: 'target_condition_met', side: target.side, actor: target.name, actorKey: target.key,
-          condition: skill.targetCondition, conditionMult: skill.targetConditionMult || 2 })
+      if (skill.targetCondition === 'low_hp') {
+        tmult = applyLowHpMult(target, tmult, skill.targetConditionThreshold ?? 0.3, skill.targetConditionMult || 2,
+          'target_condition_met', skill.targetCondition, events).mult
       }
       for (const h of hits) {
         resolveHit(skill, u, target, h.attribute, tmult, h.useCounter ?? skill.useCounter, events)
@@ -225,7 +258,7 @@ export function resolveBattle(attackers, defenders, seed = 1) {
         target.dots.push({
           name: skill.status, dmg: tickDmg, duration: dur, vuln: skill.vulnPhysical || 0,
           attribute: skill.attribute,
-          casterSide: u.side, casterKey: u.key, casterName: u.name,
+          caster: u, casterName: u.name,           // 直接存施法者对象引用，tickDots 里 O(1) 取用，不必每回合重新扫单位数组
           skillId: skill.id, skillName: skill.name,
         })
       }
@@ -249,13 +282,12 @@ export function resolveBattle(attackers, defenders, seed = 1) {
           loss = shieldAbsorb(u, loss, events)
           u.troops -= loss
           u.taken += loss
-          // 把 dot 伤害计入施法者输出；若施法者已阵亡，伤害仍发生但统计不再累加
-          const caster = [...atkUnits, ...defUnits].find(x => x.side === d.casterSide && x.key === d.casterKey)
-          if (caster) caster.dealt += loss
+          // 把 dot 伤害计入施法者输出（直接读存好的对象引用，无需每回合重新扫单位数组）
+          d.caster.dealt += loss
           const isStrategy = d.attribute === 'int'
           events.push({
-            type: 'dot_damage', side: d.casterSide,
-            actor: d.casterName, actorKey: d.casterKey,
+            type: 'dot_damage', side: d.caster.side,
+            actor: d.casterName, actorKey: d.caster.key,
             target: u.name, targetKey: u.key,
             skill: d.skillId, skillName: d.skillName,
             status: d.name, statusName: STATUSES[d.name]?.name || d.name,
@@ -273,8 +305,7 @@ export function resolveBattle(attackers, defenders, seed = 1) {
     }
   }
 
-  // 治疗：从己方存活者中筛未满血者，随机选 count 个回复兵力。
-  // 治疗量公式与伤害对称：troops × (1 + attr/150) × mult × 0.3，确保不会过强。
+  // 治疗：从己方存活者中筛未满血者，随机选 count 个回复兵力（公式见 casterPower/applyHeal）。
   const doHeal = (skill, u, events) => {
     const allies = alive(u.side === 'atk' ? atkUnits : defUnits)
       .filter(a => a.troops < a.start)              // 仅未满血者
@@ -284,21 +315,11 @@ export function resolveBattle(attackers, defenders, seed = 1) {
     const attrVal = effAttr(u, skill.attribute)
     for (let n = 0; n < count; n++) {
       const target = pool.splice(Math.floor(rand() * pool.length), 1)[0]
-      let heal = u.troops * (1 + attrVal / BATTLE_DMG_ATTR_DIVISOR) * (skill.mult || 1) * BATTLE_ROUND_ATTRITION
-      // 单次治疗不能超过目标入场兵力的 30%，避免高智力/高兵力时一口回满
-      heal = Math.min(heal, BATTLE_HEAL_RATE_MAX * target.start)
-      const before = target.troops
-      target.troops = Math.min(target.start, target.troops + Math.round(heal))
-      const real = target.troops - before
-      if (real > 0) {
-        target.healed += real
-        events.push({ type: 'heal', side: target.side, actor: target.name, actorKey: target.key,
-          skill: skill.id, skillName: skill.name, value: real, targetLeft: target.troops })
-      }
+      applyHeal(skill, target, casterPower(u, attrVal, skill.mult), events)
     }
   }
 
-  // 护盾（护佑）：给随机 count 名我军罩上护盾，量 = 施法者兵力×(1+attr/150)×mult×0.3。
+  // 护盾（护佑）：给随机 count 名我军罩上护盾，量 = casterPower（与治疗同一套核心公式）。
   // 同名战法叠加取「盾量最大」覆盖、duration 取更长（与 buff/dot 一致的覆盖策略，不叠加膨胀）。
   const doShield = (skill, u, events) => {
     const allies = alive(u.side === 'atk' ? atkUnits : defUnits)
@@ -308,7 +329,7 @@ export function resolveBattle(attackers, defenders, seed = 1) {
     const attrVal = effAttr(u, skill.attribute)
     for (let n = 0; n < count; n++) {
       const target = pool.splice(Math.floor(rand() * pool.length), 1)[0]
-      const amount = Math.round(u.troops * (1 + attrVal / BATTLE_DMG_ATTR_DIVISOR) * (skill.mult || 1) * BATTLE_ROUND_ATTRITION)
+      const amount = Math.round(casterPower(u, attrVal, skill.mult))
       const dur = skill.duration || 2
       if (!target.shield) target.shield = { amount: 0, duration: 0 }
       if (amount >= target.shield.amount) target.shield.amount = amount
@@ -349,18 +370,7 @@ export function resolveBattle(attackers, defenders, seed = 1) {
         events.push({ type: 'cleanse', side: target.side, actor: target.name, actorKey: target.key,
           skill: skill.id, skillName: skill.name })
       }
-      if (target.troops < target.start) {
-        let heal = u.troops * (1 + attrVal / BATTLE_DMG_ATTR_DIVISOR) * (skill.mult || 1) * BATTLE_ROUND_ATTRITION
-        heal = Math.min(heal, BATTLE_HEAL_RATE_MAX * target.start)
-        const before = target.troops
-        target.troops = Math.min(target.start, target.troops + Math.round(heal))
-        const real = target.troops - before
-        if (real > 0) {
-          target.healed += real
-          events.push({ type: 'heal', side: target.side, actor: target.name, actorKey: target.key,
-            skill: skill.id, skillName: skill.name, value: real, targetLeft: target.troops })
-        }
-      }
+      if (target.troops < target.start) applyHeal(skill, target, casterPower(u, attrVal, skill.mult), events)
     }
   }
 

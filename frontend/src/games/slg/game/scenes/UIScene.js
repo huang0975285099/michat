@@ -267,11 +267,15 @@ export class UIScene extends Phaser.Scene {
     if (this.sel) this._buildTilePanel()
   }
 
-  _closeTilePanel() {
-    this.sel = null
+  _hideTilePanel() {
     this.tileC?.destroy()
     this.tileC = null
     this._tileRect = null
+  }
+
+  _closeTilePanel() {
+    this.sel = null
+    this._hideTilePanel()
     this.game.events.emit('clear-selection')
   }
 
@@ -413,7 +417,7 @@ export class UIScene extends Phaser.Scene {
   // ── 模态弹窗框架 ──────────────────────────────────────────────────────────
 
   _openModal(w, h, build) {
-    this._closeTilePanel()
+    this._hideTilePanel()
     this._closeModal()
     const sw = this.scale.width, sh = this.scale.height
     const root = this.add.container(0, 0).setDepth(DEPTH.modal)
@@ -594,7 +598,7 @@ export class UIScene extends Phaser.Scene {
         !!pickedForm, () => {
           const err = this.state.marchFormation(this._marchFormPick, this.sel.x, this.sel.y)
           if (err) this._toast(err, COLOR.toastWarn)
-          else { this._closeModal(); this._refreshTilePanel() }
+          else { this._closeModal(); this._closeTilePanel() }
         }))
     })
   }

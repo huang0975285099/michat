@@ -8,7 +8,7 @@
 // 字段：
 //   id           唯一 ID（= 仓库/绑定/存档的 key）
 //   name         显示名
-//   timing       触发时机：'beforeAction'(行动前主动战法) | 'onAttack'(普通攻击本体) | 'afterAttack'(普攻后追击)
+//   timing       触发时机：'beforeAction'(行动前主动战法) | 'onAttack'(普通攻击本体) | 'afterAttack'(普攻后追击) | 'onHit'(受击反应)
 //   rate         发动概率（%）；普通攻击本体恒为 100
 //   rateStep     每升 1 级概率增加量（%），通常 +2
 //   attribute    伤害/治疗取哪项属性算攻击值：'atk'(武力) | 'int'(智力) | 'spd'(速度) | 'def'(统率)
@@ -18,18 +18,25 @@
 //   targetCount  目标数量（超过存活数时只打存活者，不选尸体、不重复）
 //   effect       'damage'(伤害) | 'control'(施加状态) | 'extra_attack'(追加一次普攻)
 //                | 'heal'(治疗) | 'buff'(增益我军属性) | 'debuff'(减益敌军属性)
-//   status       control 用：施加的状态 ID
-//   duration     status 持续回合（也用作 buff/debuff 持续回合）
-//   durationScaleLevels  控制/增益持续成长的等级节点数组（如 [5,10] 表示 Lv.5/Lv.10 各 +1 回合）
+//                | 'shield'(护盾) | 'cleanse'(驱散+治疗) | 'dot'(持续伤害+易伤) | 'counter'(受击反击，仅 timing:'onHit')
+//   status       control/dot 用：施加的状态 ID
+//   duration     status 持续回合（也用作 buff/debuff/shield 持续回合）
+//   durationScaleLevels  控制/增益/护盾持续成长的等级节点数组（如 [5,10] 表示 Lv.5/Lv.10 各 +1 回合）
 //   useCounter   伤害是否叠加兵种克制（枪克盾等 ×1.25/×0.85）。
 //                普通攻击 true（吃克制）；主动战法一律 false（无视克制，符合率土惯例）。
 //                注：连击/鬼神追加的是「普通攻击」，故那一下同样吃克制。此字段与描述末尾的括注一一对应。
 //   lifesteal    吸血比例（0~1），伤害的一定比例回复自身兵力
-//   condition    条件触发 ID，如 'low_hp'（自身兵力 < 50% 时倍率 ×conditionMult）
-//   conditionMult 条件满足时的倍率系数（如 1.5）
+//   condition    自身条件触发 ID，如 'low_hp'（自身兵力 < 50% 时倍率 ×conditionMult）
+//   conditionMult 自身条件满足时的倍率系数（如 1.5）
+//   targetCondition  目标条件触发 ID，如 'low_hp'（目标兵力低于 targetConditionThreshold 时倍率 ×targetConditionMult）
+//   targetConditionThreshold / targetConditionMult  目标条件的阈值与倍率（斩杀等处决类战法用）
+//   pityStep     憋气递增步长（%）：每次未发动，下次发动率 += pityStep（触发后清零），封顶 100%
 //   buffAttr     增益/减益属性 ID：'atk'/'def'/'int'/'spd'
 //   buffValue    增益/减益数值（百分比，如 25 表示 +25%/-25%）
-//   cost         玉石兑换消耗
+//   tier         强度分档：'S'/'A'/'B'（战法仓库排序/展示用，由平衡审计结果人工定档）
+//   cost         玉石兑换消耗 —— 与 tier 一起写在同一个战法定义里，不放去单独的映射表，
+//                避免「表里 id 打错/漏加」导致某战法静默变成 cost:undefined 却不报错的问题。
+//                升级消耗 = cost × 当前等级（见 GameState.upgradeSkill），越强的战法升级也越贵。
 //   maxLevel     最大升级等级（10）
 //   desc         玩家可见描述
 //
@@ -39,6 +46,10 @@
 //   追击类（extra_attack）              = 0.025  → Lv.10 倍率 = Lv.1 + 0.225
 
 export const NORMAL_ATTACK_ID = 'normal_attack'
+
+// 各档位玉石消耗基准（唯一定价来源）：战法定义里的 cost 字段应写成 SKILL_TIER_COST[tier]，
+// 而不是硬编码数字 —— 这样以后要整体调价（如 S 档 30→35）只需改这一行，所有 S 档战法联动生效。
+export const SKILL_TIER_COST = { S: 30, A: 20, B: 10 }
 
 export const SKILLS = {
   // ── 普通攻击（人人自带，不可升级、不进仓库）─────────────────────────────────
@@ -55,7 +66,8 @@ export const SKILLS = {
     id: 'lipi', name: '力劈', timing: 'beforeAction', rate: 40, rateStep: 2,
     attribute: 'atk', mult: 1.0, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
-    effect: 'damage', useCounter: false, cost: 20, maxLevel: 10,
+    effect: 'damage', useCounter: false, maxLevel: 10,
+    tier: 'S', cost: SKILL_TIER_COST.S,
     desc: '40% 概率对随机 1 名敌军造成 100% 武力的兵刃伤害（无视兵种克制）',
   },
 
@@ -64,7 +76,8 @@ export const SKILLS = {
     id: 'jifeng', name: '疾风', timing: 'beforeAction', rate: 35, rateStep: 2,
     attribute: 'spd', mult: 1.1, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
-    effect: 'damage', useCounter: false, cost: 25, maxLevel: 10,
+    effect: 'damage', useCounter: false, maxLevel: 10,
+    tier: 'A', cost: SKILL_TIER_COST.A,
     desc: '35% 概率对随机 1 名敌军造成 110% 速度的兵刃伤害（无视兵种克制）',
   },
 
@@ -73,7 +86,8 @@ export const SKILLS = {
     id: 'huogong', name: '火攻', timing: 'beforeAction', rate: 35, rateStep: 2,
     attribute: 'int', mult: 1.2, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
-    effect: 'damage', useCounter: false, cost: 30, maxLevel: 10,
+    effect: 'damage', useCounter: false, maxLevel: 10,
+    tier: 'A', cost: SKILL_TIER_COST.A,
     desc: '35% 概率对随机 1 名敌军造成 120% 智力的谋略伤害（无视兵种克制）',
   },
 
@@ -82,7 +96,8 @@ export const SKILLS = {
     id: 'jianyu', name: '箭雨', timing: 'beforeAction', rate: 25, rateStep: 2,
     attribute: 'atk', mult: 0.5, multStep: 0.03,
     target: 'random_enemy', targetCount: 3,
-    effect: 'damage', useCounter: false, cost: 30, maxLevel: 10,
+    effect: 'damage', useCounter: false, maxLevel: 10,
+    tier: 'A', cost: SKILL_TIER_COST.A,
     desc: '25% 概率对随机 3 名敌军各造成 50% 武力的兵刃伤害（无视兵种克制）',
   },
 
@@ -91,7 +106,8 @@ export const SKILLS = {
     id: 'luolei', name: '落雷', timing: 'beforeAction', rate: 35, rateStep: 2,
     attribute: 'int', mult: 0.55, multStep: 0.03,
     target: 'random_enemy', targetCount: 2,
-    effect: 'damage', useCounter: false, cost: 30, maxLevel: 10,
+    effect: 'damage', useCounter: false, maxLevel: 10,
+    tier: 'S', cost: SKILL_TIER_COST.S,
     desc: '35% 概率对随机 2 名敌军各造成 55% 智力的谋略伤害（无视兵种克制）',
   },
 
@@ -99,7 +115,8 @@ export const SKILLS = {
   lianji: {
     id: 'lianji', name: '连击', timing: 'afterAttack', rate: 35, rateStep: 2,
     mult: 1.0, multStep: 0.025, useCounter: true,
-    effect: 'extra_attack', cost: 20, maxLevel: 10,
+    effect: 'extra_attack', maxLevel: 10,
+    tier: 'A', cost: SKILL_TIER_COST.A,
     desc: '普通攻击后 35% 概率再追加一次普通攻击（造成兵刃伤害，受兵种克制影响）',
   },
 
@@ -108,7 +125,8 @@ export const SKILLS = {
     id: 'huangbao', name: '谎报', timing: 'beforeAction', rate: 30, rateStep: 2,
     attribute: 'int', target: 'random_enemy', targetCount: 1,
     effect: 'control', status: 'huangbao', duration: 1, durationScaleLevels: [10],
-    cost: 20, maxLevel: 10,
+    maxLevel: 10,
+    tier: 'B', cost: SKILL_TIER_COST.B,
     desc: '30% 概率使随机 1 名敌军进入谎报状态，跳过其下一次行动（持续 1 回合，Lv.10 额外 +1 回合）',
   },
 
@@ -120,7 +138,8 @@ export const SKILLS = {
     id: 'qingnang', name: '青囊', timing: 'beforeAction', rate: 30, rateStep: 2,
     attribute: 'int', mult: 1.0, multStep: 0.05,
     target: 'random_ally', targetCount: 1,
-    effect: 'heal', useCounter: false, cost: 30, maxLevel: 10,
+    effect: 'heal', useCounter: false, maxLevel: 10,
+    tier: 'A', cost: SKILL_TIER_COST.A,
     desc: '30% 概率治疗随机 1 名我军，回复量基于施法者智力与当前兵力（单次回复不超过目标入场兵力的 30%）',
   },
 
@@ -132,7 +151,8 @@ export const SKILLS = {
     target: 'random_ally', targetCount: 3,
     effect: 'buff', buffAttr: 'atk', buffValue: 25,
     duration: 2, durationScaleLevels: [5, 10],
-    cost: 25, maxLevel: 10,
+    maxLevel: 10,
+    tier: 'B', cost: SKILL_TIER_COST.B,
     desc: '35% 概率使我军最多 3 名武将武力 +25%，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
   },
 
@@ -143,7 +163,8 @@ export const SKILLS = {
     target: 'random_ally', targetCount: 3,
     effect: 'buff', buffAttr: 'def', buffValue: 25,
     duration: 2, durationScaleLevels: [5, 10],
-    cost: 25, maxLevel: 10,
+    maxLevel: 10,
+    tier: 'B', cost: SKILL_TIER_COST.B,
     desc: '35% 概率使我军最多 3 名武将统率 +25%，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
   },
 
@@ -155,6 +176,7 @@ export const SKILLS = {
     hits: [{ attribute: 'atk' }, { attribute: 'int' }],   // 兵刃(武力) + 谋略(智力)
     target: 'random_enemy', targetCount: 1,
     effect: 'damage', useCounter: false, maxLevel: 10,
+    tier: 'S', cost: SKILL_TIER_COST.S,
     desc: '30% 概率对随机 1 名敌军同时造成一次武力的兵刃伤害与一次智力的谋略伤害，各 75%（Lv.10 各 150%）',
   },
 
@@ -165,7 +187,8 @@ export const SKILLS = {
     id: 'luanmou', name: '天雷', timing: 'beforeAction', rate: 25, rateStep: 2,
     attribute: 'int', mult: 1.6, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
-    effect: 'damage', useCounter: false, cost: 30, maxLevel: 10,
+    effect: 'damage', useCounter: false, maxLevel: 10,
+    tier: 'A', cost: SKILL_TIER_COST.A,
     desc: '25% 概率对随机 1 名敌军造成 160% 智力的谋略伤害（无视兵种克制，智力越高越爆炸）',
   },
 
@@ -174,8 +197,8 @@ export const SKILLS = {
     id: 'shixue', name: '嗜血', timing: 'beforeAction', rate: 35, rateStep: 2,
     attribute: 'atk', mult: 1.0, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
-    effect: 'damage', useCounter: false, lifesteal: 0.3,
-    cost: 30, maxLevel: 10,
+    effect: 'damage', useCounter: false, lifesteal: 0.3, maxLevel: 10,
+    tier: 'S', cost: SKILL_TIER_COST.S,
     desc: '35% 概率对随机 1 名敌军造成 100% 武力的兵刃伤害，并将 30% 伤害转化为自身兵力回复',
   },
 
@@ -186,7 +209,8 @@ export const SKILLS = {
     target: 'random_enemy', targetCount: 1,
     effect: 'damage', useCounter: false,
     condition: 'low_hp', conditionMult: 1.5,
-    cost: 25, maxLevel: 10,
+    maxLevel: 10,
+    tier: 'S', cost: SKILL_TIER_COST.S,
     desc: '40% 概率对随机 1 名敌军造成 100% 速度的兵刃伤害；自身当前兵力低于入场兵力 50% 时倍率 ×1.5',
   },
 
@@ -195,6 +219,7 @@ export const SKILLS = {
     id: 'guishen', name: '鬼神', timing: 'afterAttack', rate: 25, rateStep: 2,
     mult: 1.5, multStep: 0.025, useCounter: true,
     effect: 'extra_attack', maxLevel: 10,
+    tier: 'A', cost: SKILL_TIER_COST.A,
     desc: '普通攻击后 25% 概率再追加一次普通攻击，伤害提升至 150%（造成兵刃伤害，受兵种克制影响）',
   },
 
@@ -206,6 +231,7 @@ export const SKILLS = {
     target: 'random_enemy', targetCount: 2,
     effect: 'dot', status: 'shabao', vulnPhysical: 0.25,
     duration: 2, maxLevel: 10,
+    tier: 'A', cost: SKILL_TIER_COST.A,
     desc: '30% 概率对随机 2 名敌军施加【沙暴】（持续 2 回合）：每回合按施放时自身智力与兵力造成谋略持续伤害（63%→126%，无视兵种克制），并使其在持续期间受到的兵刃伤害 +25%',
   },
 
@@ -218,6 +244,7 @@ export const SKILLS = {
     target: 'random_ally', targetCount: 1,
     effect: 'shield', duration: 2, durationScaleLevels: [5, 10],
     maxLevel: 10,
+    tier: 'A', cost: SKILL_TIER_COST.A,
     desc: '30% 概率为随机 1 名我军罩上护盾，优先吸收其受到的兵力损失，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
   },
 
@@ -228,6 +255,7 @@ export const SKILLS = {
     target: 'random_enemy', targetCount: 1,
     targetCondition: 'low_hp', targetConditionThreshold: 0.3, targetConditionMult: 2.2,
     effect: 'damage', useCounter: false, maxLevel: 10,
+    tier: 'B', cost: SKILL_TIER_COST.B,
     desc: '30% 概率对随机 1 名敌军造成 80% 武力的兵刃伤害；若其当前兵力低于入场兵力 30%，伤害倍率 ×2.2',
   },
 
@@ -239,6 +267,7 @@ export const SKILLS = {
     attribute: 'int', mult: 0.65, multStep: 0.03,
     target: 'random_ally', targetCount: 2,
     effect: 'cleanse', maxLevel: 10,
+    tier: 'S', cost: SKILL_TIER_COST.S,
     desc: '25% 概率为我军最多 2 名清除全部减益/持续伤害效果，并治疗少量兵力',
   },
 
@@ -248,6 +277,7 @@ export const SKILLS = {
     id: 'fuchou', name: '复仇', timing: 'onHit', rate: 30, rateStep: 2,
     attribute: 'atk', mult: 0.7, multStep: 0.04,
     effect: 'counter', useCounter: false, maxLevel: 10,
+    tier: 'B', cost: SKILL_TIER_COST.B,
     desc: '受到攻击时 30% 概率反击攻击者，造成 70% 武力的兵刃伤害（无视兵种克制）',
   },
 
@@ -259,6 +289,7 @@ export const SKILLS = {
     target: 'random_enemy', targetCount: 1,
     effect: 'damage', useCounter: false, pityStep: 8,
     maxLevel: 10,
+    tier: 'A', cost: SKILL_TIER_COST.A,
     desc: '20% 概率对随机 1 名敌军造成 130% 武力的兵刃伤害；每次未发动下次概率 +8%（触发后重置）',
   },
 }
@@ -269,26 +300,16 @@ export const STATUSES = {
   shabao:   { id: 'shabao',   name: '沙暴', dot: true,  desc: '谋略持续伤害 + 兵刃易伤 25%' },
 }
 
-// ── 战法定价（战法仓库玉石消耗）：按审计强度分档 B/A/S = 10/20/30，集中定义、覆盖各战法 cost。
-// 升级消耗 = cost × 当前等级（见 GameState.upgradeSkill），故越强的战法升级也越贵。
-export const SKILL_TIER_COST = { S: 30, A: 20, B: 10 }
-// V2.1 新增 5 个（huyou/zhansha/kaige/fuchou/pofu）：实测审计后分档见下（凯歌初版 targetCount:3
-// 纯治疗就冲到全战法第一 2167，已收窄到 2 目标/降倍率，复测落回 S 正常区间，才定档）。
-const SKILL_TIERS = {
-  // S：最强档——破甲(兵刃+谋略双伤)、凯歌(团队驱散+治疗)、嗜血/背水(伤害+吸血/爆发)、落雷/力劈(最强纯伤害)
-  pojia: 'S', kaige: 'S', shixue: 'S', beishui: 'S', luolei: 'S', lipi: 'S',
-  // A：均衡主力——持续/伤害/治疗/追击/护盾/憋气
-  shabao: 'A', jianyu: 'A', huogong: 'A', qingnang: 'A', jifeng: 'A', luanmou: 'A', guishen: 'A', lianji: 'A',
-  huyou: 'A', pofu: 'A',
-  // B：情境支援（控制/增益/处决/反击——依赖特定局面才发力，通用场景收益偏低）
-  huangbao: 'B', jili: 'B', tiebi: 'B', zhansha: 'B', fuchou: 'B',
-}
-for (const [id, tier] of Object.entries(SKILL_TIERS)) {
-  if (SKILLS[id]) { SKILLS[id].tier = tier; SKILLS[id].cost = SKILL_TIER_COST[tier] }
-}
-
 /** 玩家可绑定的战法（普通攻击不进仓库、人人自带，故排除） */
 export const BINDABLE_SKILLS = Object.values(SKILLS).filter(s => s.id !== NORMAL_ATTACK_ID)
+
+// 启动期健全性检查：每个可绑定战法都必须有 tier/cost，漏配直接崩溃提示，而不是留一个
+// cost:undefined 静默流入仓库/升级页面（NaN 定价却不报错）。
+for (const s of BINDABLE_SKILLS) {
+  if (!s.tier || !s.cost) {
+    throw new Error(`战法【${s.name}】(${s.id}) 缺少 tier/cost 定义，请检查 skills.js`)
+  }
+}
 
 export function getSkill(id) { return SKILLS[id] || null }
 export const NORMAL_ATTACK = SKILLS.normal_attack

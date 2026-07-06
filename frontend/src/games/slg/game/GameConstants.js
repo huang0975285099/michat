@@ -178,10 +178,10 @@ export const RECRUITABLE_GENERALS = [
   { id: 'lvbu',       name: '吕布',   quality: 'legend', faction: 'qun', troopType: 'cavalry', atk: 100, def: 72, int: 26,  pol: 30,  cha: 60 },
   { id: 'sunquan',    name: '孙权',   quality: 'legend', faction: 'wu',  troopType: 'shield',  atk: 72,  def: 86, int: 82,  pol: 80,  cha: 85 },
   { id: 'simayi',     name: '司马懿', quality: 'legend', faction: 'wei', troopType: 'spear',   atk: 60,  def: 96, int: 98,  pol: 85,  cha: 70 },
-  { id: 'guanyu',        name: '关羽',     quality: 'legend', faction: 'shu', troopType: 'cavalry', atk: 98, def: 94, int: 78, pol: 65, cha: 95 },
+  { id: 'guanyu',     name: '关羽',   quality: 'legend', faction: 'shu', troopType: 'cavalry', atk: 98,  def: 94, int: 78,  pol: 65,  cha: 95 },
 
   // === Elite (精英) - 16名 ===
-  { id: 'zhouyu',     name: '周瑜',   quality: 'elite', faction: 'wu',  troopType: 'bow',     atk: 70,  def: 92, int: 96,  pol: 80,  cha: 95 },
+  { id: 'zhouyu',        name: '周瑜',     quality: 'elite', faction: 'wu',  troopType: 'bow',     atk: 70, def: 92, int: 96, pol: 80, cha: 95 },
   { id: 'zhangfei',      name: '张飞',     quality: 'elite', faction: 'shu', troopType: 'spear',   atk: 98, def: 78, int: 32, pol: 40, cha: 70 },
   { id: 'zhaoyun',       name: '赵云',     quality: 'elite', faction: 'shu', troopType: 'cavalry', atk: 96, def: 92, int: 78, pol: 70, cha: 95 },
   { id: 'machao',        name: '马超',     quality: 'elite', faction: 'qun', troopType: 'cavalry', atk: 97, def: 78, int: 34, pol: 35, cha: 75 },
@@ -307,9 +307,9 @@ export const TILE_GUARDS = {
   3:  { teams: 1, pool: 'basic',  guardLv: 5,  troops: 400  },    // 1×3×400      = 1200
   4:  { teams: 1, pool: 'common', guardLv: 8,  troops: 800  },    // 1×3×800      = 2400
   5:  { teams: 2, pool: 'common', guardLv: 10, troops: 1000 },    // 2×3×1000     = 6000
-  6:  { teams: 2, pool: 'common', guardLv: 12, troops: 2000 },    // 2×3×2000     = 12000
-  7:  { teams: 2, pool: 'common', guardLv: 14, troops: 3000 },    // 2×3×3000     = 18000
-  8:  { teams: 2, pool: 'rare',   guardLv: 16, troops: 4000 },    // 2×3×4000     = 24000
+  6:  { teams: 2, pool: 'rare', guardLv: 12, troops: 2000 },    // 2×3×2000     = 12000
+  7:  { teams: 2, pool: 'rare', guardLv: 14, troops: 3000 },    // 2×3×3000     = 18000
+  8:  { teams: 2, pool: 'elite',   guardLv: 16, troops: 4000 },    // 2×3×4000     = 24000
   9:  { teams: 3, pool: 'elite',  guardLv: 18, troops: 4000 },    // 3×3×4000     = 36000
   10: { teams: 3, pool: 'legend', guardLv: 20, troops: 5000 },    // 3×3×5000     = 45000
 }

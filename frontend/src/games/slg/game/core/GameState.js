@@ -867,12 +867,17 @@ export class GameState extends Emitter {
     const effOf = g => this.effStats(g)
 
     // 守将单位：一队 = 一名武将，模板缺失或 0 兵的跳过（不参战也不掉兵）
-    // 稀有及以上守军绑定一个战法，由存档种子/坐标/索引确定性选取
-    const guardSkillOf = (tpl, i, lv) => {
-      if (!['rare', 'elite', 'legend'].includes(tpl.quality)) return { skillId: null, skillLv: 1 }
-      const idx = Math.abs((Math.imul(this.seed | 0, 0x9E3779B1) ^ Math.imul(i, 0x85EBCA6B) ^ (t.x * 8887 + t.y * 2971))) % BINDABLE_SKILLS.length
+    // 守将战法按 guardLv 分段：1~5→无 / 6~10→B / 11~16→A / 17~20→S，
+    // 越高级地块/城池守军战法越强，最低级的新手地块维持无战法。具体战法在同档内由
+    // 存档种子/坐标/编队序号确定性选取（同地块同种子必同战法，回放/离线结算/重进游戏都一致）。
+    const guardSkillTier = (lv) => (lv >= 17 ? 'S' : lv >= 11 ? 'A' : lv >= 6 ? 'B' : null)
+    const guardSkillOf = (i, lv) => {
+      const tier = guardSkillTier(lv)
+      if (!tier) return { skillId: null, skillLv: 1 }
+      const pool = BINDABLE_SKILLS.filter(s => s.tier === tier)
+      const idx = Math.abs((Math.imul(this.seed | 0, 0x9E3779B1) ^ Math.imul(i, 0x85EBCA6B) ^ (t.x * 8887 + t.y * 2971))) % pool.length
       const skillLv = Math.min(SKILL_MAX_LEVEL, Math.max(1, Math.floor(lv / 2)))
-      return { skillId: BINDABLE_SKILLS[idx].id, skillLv }
+      return { skillId: pool[idx].id, skillLv }
     }
     // 按编队分组：须先按 t.guards 原始下标切成固定的 FORMATION_SIZE 组，再判断整队是否全灭——
     // 不能先按兵力过滤再切片，否则「半死」的编队（有人阵亡、有人残血）会把下一队的守将并进来，
@@ -884,7 +889,7 @@ export class GameState extends Emitter {
         const gd = t.guards[j]
         const tpl = findGeneralTemplate(gd.id)
         if (!tpl) continue
-        const { skillId, skillLv } = guardSkillOf(tpl, j, gd.lv)
+        const { skillId, skillLv } = guardSkillOf(j, gd.lv)
         slice.push({ gd, i: j, tpl, skillId, skillLv })
       }
       rawWaves.push(slice)
@@ -1059,8 +1064,11 @@ export class GameState extends Emitter {
     })
     const report = {
       v: 2, names, outcome: finalOutcome, exp: totalExp,
-      atkStart: atkInitial.reduce((s, n) => s + n, 0), atkLossTotal: totalAtkLoss,
-      defStart, defLossTotal: totalDefLoss,
+      // atkStart/defStart 取整：守军经在线/离线挂机回复（_regenGarrisons）后 gd.troops 会带小数，
+      // 这个小数是刻意保留的（避免逐 tick 取整把缓慢回复量磨没），只在这类展示用汇总字段处取整，
+      // 不影响 gd.troops 本身继续按小数精度累积回复。
+      atkStart: Math.round(atkInitial.reduce((s, n) => s + n, 0)), atkLossTotal: totalAtkLoss,
+      defStart: Math.round(defStart), defLossTotal: totalDefLoss,
       our, foe: allFoeCards,
       rounds: allRounds,
       waves: waves.length,
