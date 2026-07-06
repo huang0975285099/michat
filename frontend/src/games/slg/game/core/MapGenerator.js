@@ -1,7 +1,7 @@
 // 九州征途 - 种子化地图生成
 // 同一 seed 必然生成同一张地图，存档只需记录 seed + 领地增量，为后续联网版打基础。
 
-import { MAP_W, MAP_H, TILE_TYPES, COPPER_TILE_RATE, NPC_CITY_LEVEL_COUNTS, garrisonOf, tileGuardSpec, guardPoolOf } from '../GameConstants.js'
+import { MAP_W, MAP_H, TILE_TYPES, COPPER_TILE_RATE, NPC_CITY_LEVEL_COUNTS, garrisonOf, tileGuardSpec, guardPoolOf, FORMATION_SIZE } from '../GameConstants.js'
 
 /** 按权重随机取一项。items = [[value, weight], ...] */
 function weightedPick(rng, items) {
@@ -230,6 +230,8 @@ export function generateMap(seed) {
 
   // 6) 守将指派：用独立 rng（不扰动上面地形/城池/出生点的随机流，保证既有地图不变）。
   //    同一 seed 守将阵容确定，存档无需记录守将模板。
+  //    编队制：每块地 spec.teams 个编队，每编队 FORMATION_SIZE(3) 名武将（编队内不重复、跨编队可重复）。
+  //    每名武将兵力 = garrisonOf / (teams × FORMATION_SIZE)；总兵 = garrisonOf。
   const rng2 = mulberry32((seed ^ 0x85ebca6b) >>> 0)
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
@@ -237,22 +239,29 @@ export function generateMap(seed) {
       if (!TILE_TYPES[t.type].passable) continue
       const spec = tileGuardSpec(t.level, t.type)
       const pool = guardPoolOf(spec.pool)
-      // 防御：pool 为空或 teams 超过 pool 大小时避免死循环/越界
-      const maxTeams = Math.min(spec.teams, pool.length)
-      if (maxTeams <= 0) {
+      // 防御：池子过小时每编队武将数下调到 pool.length（所有池均 ≥3，正常不会触发）
+      const genPerForm = Math.min(FORMATION_SIZE, pool.length)
+      const totalGen = spec.teams * genPerForm
+      if (totalGen <= 0) {
         t.guards = []
         t.garrisonType = null
         continue
       }
-      const perTeam = garrisonOf(t.level, t.type) / maxTeams
-      const picked = []
-      while (picked.length < maxTeams) {
-        const tpl = pool[Math.floor(rng2() * pool.length)]
-        if (picked.some(p => p.id === tpl.id)) continue   // 两队守将互不相同
-        picked.push(tpl)
+      const perGen = garrisonOf(t.level, t.type) / totalGen
+      const guards = []
+      let firstTpl = null
+      for (let f = 0; f < spec.teams; f++) {
+        const used = new Set()                       // 编队内 3 名武将互不相同
+        while (used.size < genPerForm) {
+          const tpl = pool[Math.floor(rng2() * pool.length)]
+          if (used.has(tpl.id)) continue
+          used.add(tpl.id)
+          if (!firstTpl) firstTpl = tpl
+          guards.push({ id: tpl.id, lv: spec.guardLv, troops: perGen })
+        }
       }
-      t.guards = picked.map(tpl => ({ id: tpl.id, lv: spec.guardLv, troops: perTeam }))
-      t.garrisonType = picked[0].troopType
+      t.guards = guards
+      t.garrisonType = firstTpl ? firstTpl.troopType : null
     }
   }
 

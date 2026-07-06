@@ -13,7 +13,7 @@ import {
   RECRUIT_COST_COIN, MAX_GENERALS, AWAKEN_ATK, AWAKEN_DEF, AWAKEN_INT, AWAKEN_POL, AWAKEN_CHA, FREE_RECRUIT_COUNT,
   growthOf, LEVELUP_ATK, LEVELUP_DEF, LEVELUP_INT, LEVELUP_POL, LEVELUP_CHA, calcSpd,
   getRecruitCostPerTroop, tileMarchSeconds, MARCH_REF_SPEED, TROOP_TYPES,
-  MAX_MARCH_PARTY,
+  MAX_MARCH_PARTY, MAX_FORMATIONS, FORMATION_NAME_MAX_LEN, FORMATION_SIZE,
   npcCityLootOf, GARRISON_REGEN_PER_HOUR,
   BUILDINGS, BUILDING_MAX_LEVEL, buildingUpgradeCost,
   GRANARY_YIELD_PER_LEVEL, BARRACKS_CAP_PER_LEVEL, TRAINING_EXP_PER_LEVEL, FORGE_STAT_PER_LEVEL,
@@ -83,6 +83,8 @@ export class GameState extends Emitter {
     this.autoJadeCommon = false  // 招募开关：开启后抽到的普通/精良武将自动转换为玉石，不入列也不觉醒
     this.autoJadeEquipCommon = false  // 抽装备开关：开启后抽到的普通/精良装备自动转换为玉石，不入仓库
     this.marches = []          // { id, generalIds:[], from, to, departAt, arriveAt, phase:'out'|'back' }
+    this.formations = []       // 玩家编队预设：{ id, name, generalIds:[id...] }（1~3 名武将，模板不锁武将）
+    this._formationSeq = 1     // 编队 id 自增序号
     this.log = []              // 战报/事件日志（最近 50 条）
     this.damaged = new Set()   // 被挫伤（守军未满）的未占领地块，随时间回复
     this.victoryShown = false  // 「天下一统」只提示一次
@@ -564,9 +566,16 @@ export class GameState extends Emitter {
     const jade = DISMISS_JADE[g.quality] ?? 1
     this.generals.splice(idx, 1)
     this.res.jade = (this.res.jade || 0) + jade
+    // 编队预设是模板引用，遣散后要把该武将从所有编队里摘掉，否则编队里留下幽灵 id，出征时报错
+    let formationsChanged = false
+    for (const f of this.formations) {
+      const i = f.generalIds.indexOf(id)
+      if (i >= 0) { f.generalIds.splice(i, 1); formationsChanged = true }
+    }
     this._pushLog(`🗑️ 遣散 ${g.name}（${GENERAL_QUALITY[g.quality]?.name || ''}），获得 ${jade} 玉石`)
     this.emit('generals', this.generals)
     this.emit('resources', this.res)
+    if (formationsChanged) this.emit('formations', this.formations)
     return { success: true, jade }
   }
 
@@ -752,6 +761,71 @@ export class GameState extends Emitter {
     return null
   }
 
+  // ── 编队预设 ──────────────────────────────────────────────────────────────────
+  // 编队是「模板」而非锁：同一武将可出现在多个编队中；出征时实时校验 idle/兵力/体力。
+  // 一键出征只派当前可用的武将，全不可用则报错（避免误送单将深入险地）。
+
+  /** 创建编队。name 为空则用默认名。返回 { id } 或错误字符串 */
+  createFormation(name) {
+    if (this.formations.length >= MAX_FORMATIONS) return `编队已满（${MAX_FORMATIONS} 队上限）`
+    const n = (name || '').trim().slice(0, FORMATION_NAME_MAX_LEN) || `编队${this.formations.length + 1}`
+    const f = { id: this._formationSeq++, name: n, generalIds: [] }
+    this.formations.push(f)
+    this.emit('formations', this.formations)
+    return { id: f.id }
+  }
+
+  /** 更新编队：{ name?, generalIds? }。返回 null 或错误字符串 */
+  updateFormation(id, { name, generalIds } = {}) {
+    const f = this.formations.find(x => x.id === id)
+    if (!f) return '编队不存在'
+    if (name !== undefined) {
+      const n = String(name).trim().slice(0, FORMATION_NAME_MAX_LEN)
+      if (n) f.name = n
+    }
+    if (generalIds !== undefined) {
+      if (!Array.isArray(generalIds)) return '武将列表格式错误'
+      if (generalIds.length > MAX_MARCH_PARTY) return `编队最多 ${MAX_MARCH_PARTY} 名武将`
+      const seen = new Set()
+      for (const gid of generalIds) {
+        if (!this.generals.some(g => g.id === gid)) return `武将 ${gid} 不存在`
+        if (seen.has(gid)) return '编队内武将不可重复'
+        seen.add(gid)
+      }
+      f.generalIds = generalIds.slice()
+    }
+    this.emit('formations', this.formations)
+    return null
+  }
+
+  /** 删除编队 */
+  deleteFormation(id) {
+    const i = this.formations.findIndex(x => x.id === id)
+    if (i < 0) return '编队不存在'
+    this.formations.splice(i, 1)
+    this.emit('formations', this.formations)
+    return null
+  }
+
+  /** 编队整队出征：编队内所有武将都必须 idle + 有兵 + 体力足。返回错误或 null */
+  marchFormation(formationId, tx, ty) {
+    const f = this.formations.find(x => x.id === formationId)
+    if (!f) return '编队不存在'
+    if (f.generalIds.length === 0) return `${f.name} 编队为空，请先编辑`
+    for (const id of f.generalIds) {
+      const g = this.general(id)
+      if (!g) return `武将 ${id} 不存在`
+      if (g.state !== 'idle') return `${g.name} 已在行军中`
+      if (g.troops <= 0) return `${g.name} 没有兵力，请先征兵`
+      if ((g.stamina ?? STAMINA_MAX) < MARCH_STAMINA_COST) {
+        const wait = Math.ceil((MARCH_STAMINA_COST - (g.stamina ?? STAMINA_MAX)) / STAMINA_REGEN_PER_HOUR)
+        return `${g.name} 体力不足，约 ${wait} 分钟后可再出征`
+      }
+    }
+    return this.march(f.generalIds.slice(), tx, ty)
+  }
+
+
   _processMarches() {
     let changed = false
     for (const m of this.marches) {
@@ -783,22 +857,16 @@ export class GameState extends Emitter {
       return
     }
 
-    // 多对多同场混战：攻方每名武将、守方每队守将都是独立战斗单位，
-    // 全场按速度排序逐个行动（见 battle.js）。实战属性折算见 effStats()：
-    // 等级加成 +(lv-1)*2×成长 + 铁匠坊全属性 + 装备主属性；速度另叠兵种加成（骑兵 +30，与行军同口径）。
-    const total = gens.reduce((s, g) => s + g.troops, 0)
+    // 分波次战斗：守军按编队分组（每 FORMATION_SIZE 名一队），攻方先打第 1 队，
+    // 残余兵力继续打第 2 队，依此类推。攻方胜当且仅当所有守军编队被全灭。
+    // 实战属性折算见 effStats()：等级加成 +(lv-1)*2×成长 + 铁匠坊全属性 + 装备主属性；
+    // 速度另叠兵种加成（骑兵 +30，与行军同口径）。
+    const atkInitial = gens.map(g => g.troops)   // 攻方初始兵力（首波入场）
+    let atkCurrent = atkInitial.slice()          // 攻方当前兵力（每波结束更新为残余）
+    const total = atkInitial.reduce((s, n) => s + n, 0)
     const effOf = g => this.effStats(g)
 
-    const atkUnits = gens.map(g => {
-      const e = effOf(g)
-      return {
-        key: g.id, name: g.name,
-        atk: e.atk, def: e.def, int: e.int, spd: e.spd,
-        troops: g.troops, troopType: g.troopType, skillId: g.skillId || null,
-        skillLv: this.skillLevel(g.skillId),
-      }
-    })
-    // 守将单位：一队 = 一名武将，模板缺失的队伍跳过（不参战也不掉兵）
+    // 守将单位：一队 = 一名武将，模板缺失或 0 兵的跳过（不参战也不掉兵）
     // 稀有及以上守军绑定一个战法，由存档种子/坐标/索引确定性选取
     const guardSkillOf = (tpl, i, lv) => {
       if (!['rare', 'elite', 'legend'].includes(tpl.quality)) return { skillId: null, skillLv: 1 }
@@ -806,63 +874,46 @@ export class GameState extends Emitter {
       const skillLv = Math.min(SKILL_MAX_LEVEL, Math.max(1, Math.floor(lv / 2)))
       return { skillId: BINDABLE_SKILLS[idx].id, skillLv }
     }
-    const guardDefs = t.guards
-      .map((gd, i) => {
+    // 按编队分组：须先按 t.guards 原始下标切成固定的 FORMATION_SIZE 组，再判断整队是否全灭——
+    // 不能先按兵力过滤再切片，否则「半死」的编队（有人阵亡、有人残血）会把下一队的守将并进来，
+    // 打乱队伍边界（伤损未完全回满的地块被二次进攻时会触发，见伤损保留逻辑）。
+    const rawWaves = []
+    for (let i = 0; i < t.guards.length; i += FORMATION_SIZE) {
+      const slice = []
+      for (let j = i; j < Math.min(i + FORMATION_SIZE, t.guards.length); j++) {
+        const gd = t.guards[j]
         const tpl = findGeneralTemplate(gd.id)
-        const { skillId, skillLv } = tpl ? guardSkillOf(tpl, i, gd.lv) : { skillId: null, skillLv: 1 }
-        return { gd, i, tpl, skillId, skillLv }
-      })
-      .filter(x => x.tpl && x.gd.troops > 0)
-    const defUnits = guardDefs.map(({ gd, i, tpl, skillId, skillLv }) => ({
-      key: `${gd.id}:${i}`, name: tpl.name,
-      atk: guardStat(tpl.atk, gd.lv, tpl.quality),
-      def: guardStat(tpl.def, gd.lv, tpl.quality),
-      int: guardStat(tpl.int, gd.lv, tpl.quality),
-      pol: guardStat(tpl.pol, gd.lv, tpl.quality),
-      cha: guardStat(tpl.cha, gd.lv, tpl.quality),
-      spd: calcSpd({
-        atk: guardStat(tpl.atk, gd.lv, tpl.quality),
-        def: guardStat(tpl.def, gd.lv, tpl.quality),
-        int: guardStat(tpl.int, gd.lv, tpl.quality),
-        pol: guardStat(tpl.pol, gd.lv, tpl.quality),
-        cha: guardStat(tpl.cha, gd.lv, tpl.quality),
-      }) + (TROOP_TYPES[tpl.troopType]?.marchSpeed || 0),
-      troops: gd.troops, troopType: tpl.troopType,
-      skillId, skillLv,
+        if (!tpl) continue
+        const { skillId, skillLv } = guardSkillOf(tpl, j, gd.lv)
+        slice.push({ gd, i: j, tpl, skillId, skillLv })
+      }
+      rawWaves.push(slice)
+    }
+    // 守军初始总兵力（满兵）—— 战斗开始前的值，用于战报 defStart；只统计尚存活的守将
+    const allGuardDefs = rawWaves.flat().filter(x => x.gd.troops > 0)
+    const defStart = allGuardDefs.reduce((s, x) => s + x.gd.troops, 0)
+
+    // 已全灭的编队跳过（不参战、不再进入 waves）；半死编队整队保留（0 兵成员进战斗后自动跳过）
+    const waves = rawWaves.filter(wave => wave.some(x => x.gd.troops > 0))
+
+    // 攻方跨波累计统计
+    const atkAgg = new Map()
+    gens.forEach(g => atkAgg.set(g.id, {
+      dealt: 0, taken: 0, healed: 0, lifesteal: 0,
+      skillFire: 0, extra: 0, control: 0, buffCast: 0, debuffCast: 0, conditionMet: 0,
+      shielded: 0, countered: 0, cleansed: 0,
     }))
 
-    // 战斗种子：由存档种子 + 行军 ID + 目标坐标确定 —— 同存档同输入必同结果（回放/离线一致）
-    const battleSeed = (Math.imul(this.seed | 0, 0x9E3779B1) ^ Math.imul(m.id, 0x85EBCA6B) ^ (t.x * 8887 + t.y * 2971)) >>> 0
-    const r = resolveBattle(atkUnits, defUnits, battleSeed)
-    const outcome = r.outcome
-    const totalAtkLoss = r.atkLoss
-    const totalExp = r.exp
+    const allRounds = []
+    const allFoeCards = []   // 所有波次守军 unitCard（每波独立 entry）
+    let totalAtkLoss = 0
+    let totalDefLoss = 0
+    let totalExp = 0
+    let totalDealt = 0
+    let finalOutcome = 'win'   // 默认胜；遇到败/平覆盖
+    let finalWaveIdx = 0       // 最终结局发生在第几波（0 = 守军空虚未交战）
 
-    // 伤亡逐将落账（谁被打谁掉兵）；经验分配 = 输出占比 70% + 出兵占比 30%
-    // （纯控制/承伤流武将也能分到经验；守军空虚时 totalDealt=0 退化为纯出兵比例）
-    const totalDealt = r.units.atk.reduce((s, u) => s + u.dealt, 0)
-    gens.forEach((g) => {
-      const u = r.units.atk.find(u => u.key === g.id)
-      if (!u) return
-      const preTroops = g.troops                       // 战前出兵（兜底/混合分配用，须在更新前记录）
-      g.troops = u.troops
-      const share = totalDealt > 0
-        ? (u.dealt / totalDealt) * 0.7 + (preTroops / total) * 0.3
-        : preTroops / total
-      this._gainExp(g, Math.round(totalExp * share))
-    })
-    // 守军伤损直接落账（胜则全灭清零，天然抹掉回复带来的小数残余）
-    guardDefs.forEach(({ gd, i }) => {
-      const u = r.units.def.find(u => u.key === `${gd.id}:${i}`)
-      if (u) gd.troops = u.troops
-    })
-    // 同场混战后不再有「多队未一次全灭回满」的惩罚：败/平一律保留伤损，随时间回复
-    if (outcome !== 'win') this.damaged.add(t)
-    t.garrison = t.guards.reduce((s, gd) => s + gd.troops, 0)
-
-    const typeName = TILE_TYPES[t.type].name
-    const enemyNames = guardDefs.length ? guardDefs.map(x => x.tpl.name).join('、') : '空虚守军'
-    // 战报 v2：双方阵容卡（基础属性→实战属性 + 兵力/输出/承伤/战法统计）+ 逐回合事件流
+    // 战报 v2：双方阵容卡（基础属性→实战属性 + 兵力/输出/承伤/战法统计）
     const unitCard = (u, base, eff, quality, lv, troopType, skillId) => ({
       key: u.key, name: u.name, quality, lv, troopType,
       skill: skillId ? getSkill(skillId)?.name || null : null,
@@ -874,33 +925,155 @@ export class GameState extends Emitter {
       healed: u.healed, lifesteal: u.lifesteal,
       skillFire: u.skillFire, extra: u.extra, control: u.control,
       buffCast: u.buffCast, debuffCast: u.debuffCast, conditionMet: u.conditionMet,
+      shielded: u.shielded || 0, countered: u.countered || 0, cleansed: u.cleansed || 0,
+    })
+
+    // 守军空虚：不经交战直接判胜（给基础经验 50，按出兵比例分配）
+    if (waves.length === 0) {
+      totalExp = 50
+    } else {
+      // 战斗种子：由存档种子 + 行军 ID + 目标坐标确定 —— 同存档同输入必同结果（回放/离线一致）
+      const baseSeed = (Math.imul(this.seed | 0, 0x9E3779B1) ^ Math.imul(m.id, 0x85EBCA6B) ^ (t.x * 8887 + t.y * 2971)) >>> 0
+      for (let waveIdx = 0; waveIdx < waves.length; waveIdx++) {
+        // 过滤本波 0 兵守军（半死编队场景：伤损未回满被二次攻打时，0 兵成员不参战也不进战报）
+        const wave = waves[waveIdx].filter(x => x.gd.troops > 0)
+        if (wave.length === 0) continue   // 全灭编队跳过（waves 已过滤，双重保险）
+        finalWaveIdx = waveIdx + 1
+        const defUnits = wave.map(({ gd, i, tpl, skillId, skillLv }) => ({
+          key: `${gd.id}:${i}`, name: tpl.name,
+          atk: guardStat(tpl.atk, gd.lv, tpl.quality),
+          def: guardStat(tpl.def, gd.lv, tpl.quality),
+          int: guardStat(tpl.int, gd.lv, tpl.quality),
+          pol: guardStat(tpl.pol, gd.lv, tpl.quality),
+          cha: guardStat(tpl.cha, gd.lv, tpl.quality),
+          spd: calcSpd({
+            atk: guardStat(tpl.atk, gd.lv, tpl.quality),
+            def: guardStat(tpl.def, gd.lv, tpl.quality),
+            int: guardStat(tpl.int, gd.lv, tpl.quality),
+            pol: guardStat(tpl.pol, gd.lv, tpl.quality),
+            cha: guardStat(tpl.cha, gd.lv, tpl.quality),
+          }) + (TROOP_TYPES[tpl.troopType]?.marchSpeed || 0),
+          troops: gd.troops, troopType: tpl.troopType,
+          skillId, skillLv,
+        }))
+        const atkUnits = gens.map((g, idx) => {
+          const e = effOf(g)
+          return {
+            key: g.id, name: g.name,
+            atk: e.atk, def: e.def, int: e.int, spd: e.spd,
+            troops: atkCurrent[idx],   // 当前残余兵力入场
+            troopType: g.troopType, skillId: g.skillId || null,
+            skillLv: this.skillLevel(g.skillId),
+          }
+        }).filter(u => u.troops > 0)   // 兵力为 0 的武将不参加下一波战斗
+
+        // 攻方全军覆没：无武将可战，直接判败，不再挑战后续守军编队
+        if (atkUnits.length === 0) {
+          finalOutcome = 'lose'
+          break
+        }
+
+        // 每波战斗种子加波次偏移，避免重复序列
+        const battleSeed = (baseSeed ^ Math.imul(waveIdx + 1, 0x9E3779B1)) >>> 0
+        const r = resolveBattle(atkUnits, defUnits, battleSeed)
+
+        // 合并回合（加 wave 标记，便于战报按波次分组显示）
+        r.rounds.forEach(rd => { rd.wave = waveIdx + 1; allRounds.push(rd) })
+
+        // 攻方残余兵力进入下一波
+        r.units.atk.forEach(u => {
+          const idx = gens.findIndex(g => g.id === u.key)
+          if (idx >= 0) atkCurrent[idx] = u.troops
+        })
+
+        // 累加攻方统计
+        r.units.atk.forEach(u => {
+          const s = atkAgg.get(u.key)
+          if (!s) return
+          s.dealt += u.dealt; s.taken += u.taken
+          s.healed += u.healed; s.lifesteal += u.lifesteal
+          s.skillFire += u.skillFire; s.extra += u.extra
+          s.control += u.control; s.buffCast += u.buffCast
+          s.debuffCast += u.debuffCast; s.conditionMet += u.conditionMet
+          s.shielded += u.shielded || 0; s.countered += u.countered || 0; s.cleansed += u.cleansed || 0
+        })
+        totalDealt += r.units.atk.reduce((s, u) => s + u.dealt, 0)
+
+        // 守军伤损即时落账（胜则全灭清零，天然抹掉回复带来的小数残余）
+        wave.forEach(({ gd, i }) => {
+          const u = r.units.def.find(u => u.key === `${gd.id}:${i}`)
+          if (u) gd.troops = u.troops
+        })
+
+        // 收集该波守军 unitCard（每波独立，end = 该波结束时兵力）
+        wave.forEach(({ gd, i, tpl, skillId }) => {
+          const u = r.units.def.find(u => u.key === `${gd.id}:${i}`)
+          const eff = defUnits.find(d => d.key === `${gd.id}:${i}`)
+          // tpl（招募池模板）不存 spd 字段（恒由 calcSpd 现算）：直接读 tpl.spd 会是 undefined
+          // → Math.round 出 NaN → 存档 JSON 序列化后变 null → 战报显示「速null」
+          allFoeCards.push(unitCard(u, { ...tpl, spd: calcSpd(tpl) }, eff, tpl.quality, gd.lv, tpl.troopType, skillId))
+        })
+
+        totalAtkLoss += r.atkLoss
+        totalDefLoss += r.defLoss
+        totalExp += r.exp
+
+        if (r.outcome !== 'win') {
+          finalOutcome = r.outcome   // 败或平，结束战斗
+          break
+        }
+        // 攻方胜，继续下一波（残余兵力自动进入）
+      }
+    }
+
+    // 伤亡逐将落账 + 经验分配（按跨波累计输出占比 70% + 出兵占比 30%）
+    // （纯控制/承伤流武将也能分到经验；守军空虚时 totalDealt=0 退化为纯出兵比例）
+    gens.forEach((g, idx) => {
+      const s = atkAgg.get(g.id)
+      const preTroops = atkInitial[idx]
+      g.troops = atkCurrent[idx]
+      const share = totalDealt > 0
+        ? (s.dealt / totalDealt) * 0.7 + (preTroops / total) * 0.3
+        : preTroops / total
+      this._gainExp(g, Math.round(totalExp * share))
+    })
+
+    // 败/平保留守军伤损，随时间回复
+    if (finalOutcome !== 'win') this.damaged.add(t)
+    t.garrison = t.guards.reduce((s, gd) => s + gd.troops, 0)
+
+    const typeName = TILE_TYPES[t.type].name
+    const enemyNames = allGuardDefs.length ? allGuardDefs.map(x => x.tpl.name).join('、') : '空虚守军'
+    // 攻方 unitCard：用跨波累计统计 + 初始兵力 + 最终残余
+    const our = gens.map((g, idx) => {
+      const s = atkAgg.get(g.id)
+      const u = {
+        key: g.id, name: g.name,
+        start: atkInitial[idx], troops: atkCurrent[idx],
+        dealt: s.dealt, taken: s.taken, healed: s.healed, lifesteal: s.lifesteal,
+        skillFire: s.skillFire, extra: s.extra, control: s.control,
+        buffCast: s.buffCast, debuffCast: s.debuffCast, conditionMet: s.conditionMet,
+        shielded: s.shielded, countered: s.countered, cleansed: s.cleansed,
+      }
+      return unitCard(u, g, this.effStats(g), g.quality, g.lv, g.troopType, g.skillId)
     })
     const report = {
-      v: 2, names, outcome, exp: totalExp,
-      atkStart: r.atkStart, atkLossTotal: r.atkLoss,
-      defStart: r.defStart, defLossTotal: r.defLoss,
-      our: r.units.atk.map(u => {
-        const g = gens.find(g => g.id === u.key)
-        return unitCard(u, g, this.effStats(g),
-          g.quality, g.lv, g.troopType, g.skillId)
-      }),
-      foe: r.units.def.map(u => {
-        const { gd, tpl, skillId } = guardDefs.find(x => `${x.gd.id}:${x.i}` === u.key)
-        const eff = defUnits.find(d => d.key === u.key)
-        // tpl（招募池模板）不存 spd 字段（恒由 calcSpd 现算）：直接读 tpl.spd 会是 undefined
-        // → Math.round 出 NaN → 存档 JSON 序列化后变 null → 战报显示「速null」
-        return unitCard(u, { ...tpl, spd: calcSpd(tpl) }, eff, tpl.quality, gd.lv, tpl.troopType, skillId)
-      }),
-      rounds: r.rounds,
+      v: 2, names, outcome: finalOutcome, exp: totalExp,
+      atkStart: atkInitial.reduce((s, n) => s + n, 0), atkLossTotal: totalAtkLoss,
+      defStart, defLossTotal: totalDefLoss,
+      our, foe: allFoeCards,
+      rounds: allRounds,
+      waves: waves.length,
       tile: { x: t.x, y: t.y, type: typeName, level: t.level },
     }
-    if (outcome === 'win') {
+    if (finalOutcome === 'win') {
       // 占领（发起时已校验上限；若期间达到上限则只战胜不占领）
       if (this.territoryCount() < this.territoryCapNow()) {
         t.owner = 'player'
         t.garrison = 0
         this.damaged.delete(t)
-        this._pushLog(`🚩 ${names} 击败守将 ${enemyNames}，攻克 ${typeName} Lv.${t.level} (${t.x},${t.y})，损失 ${totalAtkLoss} 兵`, report)
+        const waveNote = waves.length > 1 ? `（连破 ${waves.length} 队守军）` : ''
+        this._pushLog(`🚩 ${names} 击败守将 ${enemyNames}${waveNote}，攻克 ${typeName} Lv.${t.level} (${t.x},${t.y})，损失 ${totalAtkLoss} 兵`, report)
         if (t.type === 'npcCity') this._lootCity(names, t.level)
         this.emit('territory', { x: t.x, y: t.y, owner: 'player' })
         if (t.type === 'npcCity') this._checkVictory()
@@ -910,15 +1083,16 @@ export class GameState extends Emitter {
         this._pushLog(`⚠️ ${names} 战胜但领地已满，未能占领 (${t.x},${t.y})`, report)
       }
     } else {
-      const survivors = report.foe.filter(u => u.end > 0).map(u => u.name).join('、') || enemyNames
+      const survivors = allFoeCards.filter(u => u.end > 0).map(u => u.name).join('、') || enemyNames
       const note = `（守军余 ${Math.floor(t.garrison)}）`
-      if (outcome === 'draw') {
-        this._pushLog(`⚔️ ${names} 与 ${survivors} 激战 ${r.rounds.length} 回合未分胜负，攻打 ${typeName} Lv.${t.level} (${t.x},${t.y}) 无功而返${note}`, report)
+      const waveNote = waves.length > 1 ? `第 ${finalWaveIdx} 队` : ''
+      if (finalOutcome === 'draw') {
+        this._pushLog(`⚔️ ${names} 与 ${survivors} ${waveNote}激战 ${allRounds.length} 回合未分胜负，攻打 ${typeName} Lv.${t.level} (${t.x},${t.y}) 无功而返${note}`, report)
       } else {
-        this._pushLog(`💀 ${names} 进攻 ${typeName} Lv.${t.level} (${t.x},${t.y}) 被 ${survivors} 击退，损失 ${totalAtkLoss} 兵${note}`, report)
+        this._pushLog(`💀 ${names} 进攻 ${typeName} Lv.${t.level} (${t.x},${t.y}) 被 ${survivors} ${waveNote}击退，损失 ${totalAtkLoss} 兵${note}`, report)
       }
     }
-    this.emit('battle', { tile: { x: t.x, y: t.y }, outcome, general: names })
+    this.emit('battle', { tile: { x: t.x, y: t.y }, outcome: finalOutcome, general: names })
 
     // 折返（沿原路径逐格，同样按全队最慢有效速度）
     const steps = (m.path?.length ?? 1) - 1
@@ -1010,7 +1184,7 @@ export class GameState extends Emitter {
       }
     }
     const data = {
-      v: 9, seed: this.seed, savedAt: Date.now(), now: this.now,
+      v: 10, seed: this.seed, savedAt: Date.now(), now: this.now,
       res: this.res, cityLv: this.cityLv,
       freeRecruits: this.freeRecruits,
       firstRecruitDone: this._firstRecruitDone,
@@ -1033,6 +1207,9 @@ export class GameState extends Emitter {
       })),
       owned,
       marches: this.marches,
+      // v10+ 玩家编队预设（模板，不锁武将）
+      formations: this.formations.map(f => ({ id: f.id, name: f.name, generalIds: f.generalIds.slice() })),
+      _formationSeq: this._formationSeq,
       // 守将阵容由 seed 确定重建，只需存各队剩余兵力
       damaged: [...this.damaged].map(t => ({ x: t.x, y: t.y, teams: t.guards.map(gd => Math.round(gd.troops)) })),
       log: this.log.slice(0, 20),
@@ -1124,20 +1301,29 @@ export class GameState extends Emitter {
       }
       if (m.id >= marchSeq) marchSeq = m.id + 1
     }
+    // v10+ 玩家编队预设；旧档缺省空列表
+    if (Array.isArray(data.formations)) {
+      gs.formations = data.formations
+        .filter(f => f && typeof f.id === 'number' && Array.isArray(f.generalIds))
+        .map(f => ({ id: f.id, name: String(f.name || '').slice(0, FORMATION_NAME_MAX_LEN) || '编队', generalIds: f.generalIds.filter(id => gs.generals.some(g => g.id === id)) }))
+      gs._formationSeq = data._formationSeq || (gs.formations.reduce((m, f) => Math.max(m, f.id), 0) + 1)
+    }
     for (const d of data.damaged || []) {
       const t = gs.tileAt(d.x, d.y)
       if (!t || t.owner === 'player') continue
-      if (Array.isArray(d.teams)) {
-        // v5：各队剩余兵力逐一恢复
+      if (data.v >= 10 && Array.isArray(d.teams)) {
+        // v10+：编队制守将，各将剩余兵力逐一恢复（长度 = teams × FORMATION_SIZE）
         t.guards.forEach((gd, i) => { gd.troops = d.teams[i] ?? gd.troops })
-      } else {
-        // v1~v4：单一守军数字，按比例摊到各队
+      } else if (!Array.isArray(d.teams)) {
+        // v1~v4：单一守军数字，按比例摊到各将
         const max = garrisonOf(t.level, t.type)
         const factor = Math.max(0, Math.min(1, (d.garrison ?? max) / max))
         t.guards.forEach(gd => { gd.troops = Math.round(gd.troops * factor) })
       }
+      // v6~v9 的 d.teams 数组（旧口径：teams 名武将）忽略 —— 守将结构已改为 teams×3，
+      // 旧兵力值会越界新上限，故按 seed 重建满兵，不加入回复列表。
       t.garrison = t.guards.reduce((s, gd) => s + gd.troops, 0)
-      gs.damaged.add(t)
+      if (t.garrison < garrisonOf(t.level, t.type)) gs.damaged.add(t)
     }
     // 若存档时已一统，不再重复提示
     gs.victoryShown = gs.npcCities.every(c => gs.tileAt(c.x, c.y).owner === 'player')

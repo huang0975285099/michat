@@ -52,13 +52,22 @@ export const BASE_YIELD_PER_LEVEL = 100
 // 铜币：所有领地统一按 level * 20 / 小时 产出
 export const COIN_YIELD_PER_LEVEL = 20
 
-// 地块守军总兵力：lv → l*(l+1)/2 * 400（lv1=400 … lv5=6000 … lv10=22000）；
-// NPC 城池按城池等级（1~5）查 NPC_CITY_LEVELS，与普通地块等级是两套独立编号。
-// 多队地块（见 TILE_GUARDS.teams）由各队均分。
-export const GARRISON_BASE_PER_LEVEL = 400
+// 编队（formation）：最多 3 名武将组成的战斗小队，攻守同一口径。
+//   玩家出征：MAX_MARCH_PARTY=3（一个出征编队，见下文）
+//   守军：TILE_GUARDS[level].teams / NPC_CITY_LEVELS[level].teams 为「编队数」，
+//         每个编队 = FORMATION_SIZE 名武将，每名武将兵力在配置表中写死，方便单独调整。
+// 普通地块守军总兵力 = teams × FORMATION_SIZE × TILE_GUARDS[level].troops。
+// NPC 城池沿用显式 garrison 总额，per-将 = garrison / (teams × FORMATION_SIZE)。
+export const FORMATION_SIZE = 3                   // 每个编队的武将数
 export function garrisonOf(level, type) {
   if (type === 'npcCity') return NPC_CITY_LEVELS[level]?.garrison ?? NPC_CITY_LEVELS[NPC_CITY_MAX_LEVEL].garrison
-  return (level * (level + 1) / 2) * GARRISON_BASE_PER_LEVEL
+  const spec = TILE_GUARDS[level]
+  if (!spec) return 0
+  return spec.teams * FORMATION_SIZE * spec.troops
+}
+// 每名守将武将兵力（普通地块）= TILE_GUARDS[level].troops
+export function troopsPerGuard(level) {
+  return TILE_GUARDS[level]?.troops ?? 0
 }
 
 // ── 主城 ────────────────────────────────────────────────────────────────────
@@ -119,7 +128,9 @@ export function counterMult(atkType, defType) {
 // ── 战斗结算（多对多回合制：全场按速度排序逐将行动，见 core/battle.js）───────
 export const BATTLE_MAX_ROUNDS = 10        // 最多打 10 回合，仍未分胜负则判平
 export const BATTLE_ROUND_ATTRITION = 0.3  // 单次攻击按攻防战力比造成的兵力损耗系数
-export const MAX_MARCH_PARTY = 3           // 单次出征最多同行武将（队伍）数
+export const MAX_MARCH_PARTY = 3           // 单次出征最多同行武将（= 一个出征编队的上限）
+export const MAX_FORMATIONS = 4            // 玩家可保存的编队预设槽位数
+export const FORMATION_NAME_MAX_LEN = 6    // 编队名称最大字数
 
 // ── 武将 ────────────────────────────────────────────────────────────────────
 // 品质分档（招募抽卡的概率与展示色）。basic 仅守将用，rate=0 不进抽卡池。
@@ -167,10 +178,10 @@ export const RECRUITABLE_GENERALS = [
   { id: 'lvbu',       name: '吕布',   quality: 'legend', faction: 'qun', troopType: 'cavalry', atk: 100, def: 72, int: 26,  pol: 30,  cha: 60 },
   { id: 'sunquan',    name: '孙权',   quality: 'legend', faction: 'wu',  troopType: 'shield',  atk: 72,  def: 86, int: 82,  pol: 80,  cha: 85 },
   { id: 'simayi',     name: '司马懿', quality: 'legend', faction: 'wei', troopType: 'spear',   atk: 60,  def: 96, int: 98,  pol: 85,  cha: 70 },
-  { id: 'zhouyu',     name: '周瑜',   quality: 'legend', faction: 'wu',  troopType: 'bow',     atk: 70,  def: 92, int: 96,  pol: 80,  cha: 95 },
+  { id: 'guanyu',        name: '关羽',     quality: 'legend', faction: 'shu', troopType: 'cavalry', atk: 98, def: 94, int: 78, pol: 65, cha: 95 },
 
   // === Elite (精英) - 16名 ===
-  { id: 'guanyu',        name: '关羽',     quality: 'elite', faction: 'shu', troopType: 'cavalry', atk: 98, def: 94, int: 78, pol: 65, cha: 95 },
+  { id: 'zhouyu',     name: '周瑜',   quality: 'elite', faction: 'wu',  troopType: 'bow',     atk: 70,  def: 92, int: 96,  pol: 80,  cha: 95 },
   { id: 'zhangfei',      name: '张飞',     quality: 'elite', faction: 'shu', troopType: 'spear',   atk: 98, def: 78, int: 32, pol: 40, cha: 70 },
   { id: 'zhaoyun',       name: '赵云',     quality: 'elite', faction: 'shu', troopType: 'cavalry', atk: 96, def: 92, int: 78, pol: 70, cha: 95 },
   { id: 'machao',        name: '马超',     quality: 'elite', faction: 'qun', troopType: 'cavalry', atk: 97, def: 78, int: 34, pol: 35, cha: 75 },
@@ -285,35 +296,33 @@ export const GARRISON_GENERALS = [
 ];
 
 // ── 地块守卫规格 ─────────────────────────────────────────────────────────────
-// 每块可通行地块由 1~5 支守将队伍驻守（teams>1 须一次远征连灭多队才能占领，
-// 否则守军全部回满）。pool 统一为 quality 名称：'basic'/'common' 取自 GARRISON_GENERALS，
-// 'rare'/'elite'/'legend' 取自 RECRUITABLE_GENERALS。地块守将与城池守将均按同一规则随机抽选。
-// 每队兵力 = garrisonOf(level) / teams。
+// 每块可通行地块由 1~3 个编队驻守（teams=编队数；teams>1 须一次远征连灭全部编队才能占领，
+// 否则守军全部回满）。每个编队 = FORMATION_SIZE(3) 名武将，每名武将兵力 = troops（写死）。
+// 抽将规则：编队内 3 名武将互不相同；跨编队允许重复（最小池仅需 ≥3）。
+// pool 统一为 quality 名称：'basic'/'common' 取自 GARRISON_GENERALS，'rare'/'elite'/'legend' 取自 RECRUITABLE_GENERALS。
 export const TILE_MAX_LEVEL = 10
 export const TILE_GUARDS = {
-  1:  { teams: 1, pool: 'basic',  guardLv: 1 },    // 总兵 400（400×1）
-  2:  { teams: 1, pool: 'basic',  guardLv: 2 },    // 1200（600×2）
-  3:  { teams: 2, pool: 'basic',  guardLv: 3 },    // 2400（800×3）
-  4:  { teams: 2, pool: 'common', guardLv: 5 },    // 4000（1000×4）
-  5:  { teams: 3, pool: 'common', guardLv: 10 },    // 6000（1200×5）
-  6:  { teams: 3, pool: 'common', guardLv: 12 },   // 8400（1400×6）
-  7:  { teams: 4, pool: 'common', guardLv: 14 },   // 11200（1600×7）
-  8:  { teams: 4, pool: 'rare',   guardLv: 16 },   // 14400（1800×8）
-  9:  { teams: 5, pool: 'elite',  guardLv: 18 },   // 18000（2000×9）
-  10: { teams: 5, pool: 'legend', guardLv: 20 },   // 22000（2200×10，legend 池已扩至 6 名，teams 不超过池大小）
+  1:  { teams: 1, pool: 'basic',  guardLv: 1,  troops: 100  },    // 1队×3将×100  = 300
+  2:  { teams: 1, pool: 'basic',  guardLv: 3,  troops: 200  },    // 1×3×200      = 600
+  3:  { teams: 1, pool: 'basic',  guardLv: 5,  troops: 400  },    // 1×3×400      = 1200
+  4:  { teams: 1, pool: 'common', guardLv: 8,  troops: 800  },    // 1×3×800      = 2400
+  5:  { teams: 2, pool: 'common', guardLv: 10, troops: 1000 },    // 2×3×1000     = 6000
+  6:  { teams: 2, pool: 'common', guardLv: 12, troops: 2000 },    // 2×3×2000     = 12000
+  7:  { teams: 2, pool: 'common', guardLv: 14, troops: 3000 },    // 2×3×3000     = 18000
+  8:  { teams: 2, pool: 'rare',   guardLv: 16, troops: 4000 },    // 2×3×4000     = 24000
+  9:  { teams: 3, pool: 'elite',  guardLv: 18, troops: 4000 },    // 3×3×4000     = 36000
+  10: { teams: 3, pool: 'legend', guardLv: 20, troops: 5000 },    // 3×3×5000     = 45000
 }
 // NPC 城池分 5 级（等级如何分配到地图上的具体城池由地图生成逻辑决定，这里只定义每级的规格）：
 // pool 按等级递进 basic→common→rare→elite→legend（与 TILE_GUARDS 高级地同档同 guardLv，数值口径一致）。
-// 1~4 级 teams:5，守将从对应池里随机抽 5 名（每座城池各不相同，"随机不固定武将"）；
-// 5 级 teams:4 —— 从 legend 池抽 4 名（legend 池已扩至 6 名，仍可稳定组成不同守城阵容）。
-// 掠夺收益 loot 按总兵力比例（相对 1 级 10000 兵）等比放大。
+// 各等级编队数与总兵力均写死，per-将 = garrison / (teams × FORMATION_SIZE)。
 export const NPC_CITY_MAX_LEVEL = 5
 export const NPC_CITY_LEVELS = {
-  1: { garrison: 10000, teams: 5, pool: 'basic',  guardLv: 12, loot: { coin: 2000, grain: 5000,  wood: 3000,  iron: 3000,  stone: 3000 } },
-  2: { garrison: 12500, teams: 5, pool: 'common', guardLv: 14, loot: { coin: 2500, grain: 6250,  wood: 3750,  iron: 3750,  stone: 3750 } },
-  3: { garrison: 25000, teams: 5, pool: 'rare',   guardLv: 16, loot: { coin: 5000, grain: 12500, wood: 7500,  iron: 7500,  stone: 7500 } },
-  4: { garrison: 30000, teams: 5, pool: 'elite',  guardLv: 18, loot: { coin: 6000, grain: 15000, wood: 9000,  iron: 9000,  stone: 9000 } },
-  5: { garrison: 40000, teams: 5, pool: 'legend', guardLv: 20, loot: { coin: 8000, grain: 20000, wood: 12000, iron: 12000, stone: 12000 } },
+  1: { garrison: 30000,  teams: 5,  pool: 'basic',  guardLv: 12, loot: { coin: 2000, grain: 5000,  wood: 3000,  iron: 3000,  stone: 3000 } },  // 5×3×2000  = 30000
+  2: { garrison: 54000,  teams: 6,  pool: 'common', guardLv: 14, loot: { coin: 2500, grain: 6250,  wood: 3750,  iron: 3750,  stone: 3750 } },  // 6×3×3000  = 54000
+  3: { garrison: 84000,  teams: 7,  pool: 'rare',   guardLv: 16, loot: { coin: 5000, grain: 12500, wood: 7500,  iron: 7500,  stone: 7500 } },  // 7×3×4000  = 84000
+  4: { garrison: 120000, teams: 8,  pool: 'elite',  guardLv: 18, loot: { coin: 6000, grain: 15000, wood: 9000,  iron: 9000,  stone: 9000 } },  // 8×3×5000  = 120000
+  5: { garrison: 150000, teams: 10, pool: 'legend', guardLv: 20, loot: { coin: 8000, grain: 20000, wood: 12000, iron: 12000, stone: 12000 } },  // 10×3×5000 = 150000
 }
 // NPC 城池在地图上的等级分布：1 级（最弱）5 座、2 级 4 座、3 级 3 座、4 级 2 座、5 级（最强）1 座，
 // 共 15 座，弱到强梯度分布，由地图生成逻辑按此计数随机放置各等级城池。
@@ -337,10 +346,10 @@ export function tileGuardSpec(level, type) {
   return type === 'npcCity' ? NPC_CITY_LEVELS[level] : TILE_GUARDS[level]
 }
 // 招募花费（铜币的主要消耗口）与阵容上限
-export const RECRUIT_COST_COIN = 800
+export const RECRUIT_COST_COIN = 1000
 export const MAX_GENERALS = 8
-// 开局赠送的免费招募次数（不再固定 3 武将起手，改为送一次抽卡机会）
-export const FREE_RECRUIT_COUNT = 1
+// 开局赠送的免费招募次数（不再固定 3 武将起手，改为送三次抽卡机会）
+export const FREE_RECRUIT_COUNT = 3
 
 /** 按 id 查武将模板（可招募/守将），存档恢复与守将重建时用 */
 export function findGeneralTemplate(id) {
@@ -354,7 +363,7 @@ export function expToLevel(lv) { return lv * 200 }
 export const GENERAL_MAX_LEVEL = 20
 // 征兵花费：主城 <5 级时 1 兵 = 2 粮；>=5 级时 1 兵 = 2 粮 + 1 铁矿 + 1 木材
 export function getRecruitCostPerTroop(cityLv) {
-  if (cityLv >= 5) return { grain: 2, iron: 1, wood: 1 }
+  if (cityLv >= 5) return { grain: 3, iron: 1, wood: 1 }
   return { grain: 2, iron: 0, wood: 0 }
 }
 

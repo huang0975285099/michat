@@ -11,7 +11,8 @@ import {
   GRANARY_YIELD_PER_LEVEL, BARRACKS_CAP_PER_LEVEL, TRAINING_EXP_PER_LEVEL, FORGE_STAT_PER_LEVEL,
   STAMINA_MAX, MARCH_STAMINA_COST, STAMINA_REGEN_PER_HOUR,
   GENERAL_QUALITY, MAX_GENERALS, RECRUIT_COST_COIN, AWAKEN_ATK, AWAKEN_DEF, AWAKEN_INT,
-  TROOP_TYPES, counterMult, findGeneralTemplate, guardStat, MAX_MARCH_PARTY,
+  TROOP_TYPES, counterMult, findGeneralTemplate, guardStat, calcSpd, MAX_MARCH_PARTY,
+  FORMATION_SIZE, MAX_FORMATIONS,
   SKILL_MAX_LEVEL,
   EQUIP_TYPES, EQUIP_QUALITY, EQUIP_MAX_LEVEL, EQUIP_DRAW_COST, EQUIP_DISMISS_JADE,
 } from '../GameConstants.js'
@@ -288,11 +289,12 @@ export class UIScene extends Phaser.Scene {
     // 主城两行按钮（升级 + 建筑）加高；守将/NPC 城池面板按队伍数动态加高
     let h = 108
     if (t.isCity) h = 148
-    else if (t.type === 'npcCity' && t.owner !== 'player') h = 172
     else if (t.owner !== 'player' && def.passable) {
-      const teams = (t.guards || []).length || 1
-      h = 112 + (teams - 1) * 24
-      if (teams > 1) h += 18
+      // 守将按编队分组展示（每队 FORMATION_SIZE 名武将一行）
+      const formCount = Math.max(1, Math.ceil((t.guards || []).length / FORMATION_SIZE))
+      h = 112 + (formCount - 1) * 22
+      if (formCount > 1) h += 18        // 多编队警告
+      if (t.type === 'npcCity') h += 18 // 掠夺收益行
     }
     const cx = sw / 2, cy = sh - h / 2 - 76
     const c = this.add.container(cx, cy).setDepth(DEPTH.panel)
@@ -333,39 +335,40 @@ export class UIScene extends Phaser.Scene {
     if (!isDefenderPanel) {
       c.add(this.add.text(-w / 2 + 12, -h / 2 + 38, info, style(12, '#dddddd')).setOrigin(0, 0))
     } else {
-      // 守将面板：每队一行（基础信息 + 武/防/速/智），末尾一行收益与相邻提示
-      const teams = t.guards || []
-      const rowH = 20
+      // 守将面板：按编队分组（每队 FORMATION_SIZE 名武将一行，紧凑显示姓名+兵力）
+      const guards = t.guards || []
+      const forms = []
+      for (let i = 0; i < guards.length; i += FORMATION_SIZE) forms.push(guards.slice(i, i + FORMATION_SIZE))
+      const formCount = forms.length
+      const rowH = 22
       const startY = -h / 2 + 36
-      if (teams.length === 0) {
+      if (guards.length === 0) {
         c.add(this.add.text(-w / 2 + 12, startY, '守将 空虚', style(12, '#dddddd')).setOrigin(0, 0))
       } else {
-        teams.forEach((gd, i) => {
-          const y = startY + i * rowH
-          const tpl = findGeneralTemplate(gd.id)
-          if (!tpl) {
-            c.add(this.add.text(-w / 2 + 12, y, `守军 ${fmt(gd.troops)}`, style(12, '#dddddd')).setOrigin(0, 0))
-          } else {
+        const formNum = ['①', '②', '③', '④', '⑤']
+        forms.forEach((form, fi) => {
+          const y = startY + fi * rowH
+          const parts = form.map(gd => {
+            const tpl = findGeneralTemplate(gd.id)
+            if (!tpl) return `×${fmt(gd.troops)}`
             const icon = TROOP_TYPES[tpl.troopType]?.icon || ''
-            const q = tpl.quality
-            const atk = Math.round(guardStat(tpl.atk, gd.lv, q))
-            const def = Math.round(guardStat(tpl.def, gd.lv, q))
-            const spd = Math.round(guardStat(tpl.spd, gd.lv, q))
-            const int = Math.round(guardStat(tpl.int, gd.lv, q))
-            c.add(this.add.text(-w / 2 + 12, y,
-              `守将 ${icon}${tpl.name} Lv.${gd.lv} ×${fmt(gd.troops)}（武${atk} · 防${def} · 速${spd} · 智${int}）`,
-              style(12, '#dddddd')).setOrigin(0, 0))
-          }
+            return `${icon}${tpl.name}×${fmt(gd.troops)}`
+          })
+          c.add(this.add.text(-w / 2 + 12, y,
+            `${formNum[fi] || (fi + 1)}  ${parts.join('  ')}`,
+            style(12, '#dddddd')).setOrigin(0, 0))
         })
       }
-      const yieldY = startY + Math.max(1, teams.length) * rowH + 4
-      const yieldLine = `占领后 ${yieldText}` + (adjacent ? '' : ' · 需与领地相邻')
+      const yieldY = startY + Math.max(1, formCount) * rowH + 4
+      const guardLv = guards[0]?.lv
+      const lvNote = guardLv ? `守将Lv.${guardLv} · ` : ''
+      const yieldLine = `${lvNote}占领后 ${yieldText}` + (adjacent ? '' : ' · 需与领地相邻')
       c.add(this.add.text(-w / 2 + 12, yieldY, yieldLine, style(12, '#a5d6a7')).setOrigin(0, 0))
 
       let extraY = yieldY + 18
-      if (teams.length > 1) {
+      if (formCount > 1) {
         c.add(this.add.text(-w / 2 + 12, extraY,
-          '⚠️ 两队守军须一次远征连续击破，否则守军重整回满',
+          '⚠️ 多编队守军须一次远征连续击破，否则守军重整回满',
           style(11, '#ffcc80')).setOrigin(0, 0))
         extraY += 18
       }
@@ -410,6 +413,7 @@ export class UIScene extends Phaser.Scene {
   // ── 模态弹窗框架 ──────────────────────────────────────────────────────────
 
   _openModal(w, h, build) {
+    this._closeTilePanel()
     this._closeModal()
     const sw = this.scale.width, sh = this.scale.height
     const root = this.add.container(0, 0).setDepth(DEPTH.modal)
@@ -506,30 +510,190 @@ export class UIScene extends Phaser.Scene {
     return content
   }
 
-  // ── 弹窗：选择出征武将（可多选合击）──────────────────────────────────────
+  // ── 弹窗：选择出征编队（每次只能选 1 队，整队出征）──────────────────────
 
   _openMarchSelect(keepPick = false) {
-    if (!keepPick) this._marchPick = new Set()
-    const pick = this._marchPick
-    const gens = this.state.generals
-    const rowH = 52
+    if (!keepPick) this._marchFormPick = null
+    const forms = this.state.formations || []
+    const selTile = this.state.tileAt(this.sel.x, this.sel.y)
+    const rowH = 56
     const w = Math.min(this.scale.width - 24, 380)
-    const h = 52 + gens.length * rowH + 74
+    // 无编队时给出引导提示
+    const empty = forms.length === 0
+    const h = empty ? 160 : 52 + forms.length * rowH + 78
     this._openModal(w, h, (panel) => {
-      panel.add(this.add.text(0, -h / 2 + 14, `选择出征武将（最多 ${MAX_MARCH_PARTY} 队合击）`,
+      panel.add(this.add.text(0, -h / 2 + 14, '选择出征编队（1 队）',
         style(15, '#ffffff', true)).setOrigin(0.5, 0))
 
-      gens.forEach((g, i) => {
+      if (empty) {
+        panel.add(this.add.text(0, -10, '尚无编队预设\n请先在「🛡️ 编队」中创建并配置武将',
+          style(13, '#ffa726')).setOrigin(0.5))
+        panel.add(this._button(0, h / 2 - 28, 120, 30, '关闭', COLOR.btnGrey, true,
+          () => this._closeModal()))
+        return
+      }
+
+      // 对本目标守军兵种克制提示（以第一支有兵守将的兵种为准）
+      const aliveGuard = selTile?.guards?.find(gd => gd.troops > 0) || selTile?.guards?.[0]
+      const defType = aliveGuard ? findGeneralTemplate(aliveGuard.id)?.troopType : selTile?.garrisonType
+
+      forms.forEach((f, i) => {
+        const y = -h / 2 + 48 + i * rowH + (rowH - 8) / 2
+        const members = f.generalIds.map(id => this.state.general(id)).filter(Boolean)
+        // 整队出征：编队内所有武将都必须 idle + 有兵 + 体力足
+        const blockers = []
+        members.forEach(g => {
+          if (g.state !== 'idle') blockers.push(`${g.name}行军中`)
+          else if (g.troops <= 0) blockers.push(`${g.name}无兵`)
+          else if ((g.stamina ?? STAMINA_MAX) < MARCH_STAMINA_COST) blockers.push(`${g.name}体力不足`)
+        })
+        const allReady = members.length > 0 && blockers.length === 0
+        const totalTroops = members.reduce((s, g) => s + g.troops, 0)
+        const picked = this._marchFormPick === f.id
+        const clickable = allReady || picked
+        const row = this._row(panel, y, w - 24, rowH - 8, clickable, () => {
+          this._marchFormPick = picked ? null : f.id
+          this._openMarchSelect(true)
+        })
+        if (picked) {
+          const hl = this.add.graphics()
+          hl.lineStyle(2, COLOR.panelLine, 0.9)
+          hl.strokeRoundedRect(-(w - 24) / 2, -(rowH - 8) / 2, w - 24, rowH - 8, 8)
+          row.add(hl)
+        }
+        // 第一行：编队名 + 武将名（含兵种图标）
+        const memberText = members.length === 0 ? '（空编队）'
+          : members.map(g => `${TROOP_TYPES[g.troopType]?.icon || ''}${g.name}`).join(' ')
+        row.add(this.add.text(-(w - 24) / 2 + 10, -12, `【${f.name}】 ${memberText}`,
+          style(14, clickable ? '#ffffff' : '#888888', true)).setOrigin(0, 0.5))
+        // 第二行：兵力合计 / 不可用原因
+        const detail = blockers.length > 0
+          ? blockers.join('、')
+          : `兵力 ${totalTroops} · ${members.length} 将`
+        row.add(this.add.text(-(w - 24) / 2 + 10, 12, detail,
+          style(11, blockers.length > 0 ? '#ef5350' : '#9e9e9e')).setOrigin(0, 0.5))
+        // 右侧状态
+        let status = picked ? '✓' : (allReady ? '待命' : '不可用')
+        const statusColor = picked ? '#ffd54f' : (allReady ? '#66bb6a' : '#ef5350')
+        row.add(this.add.text((w - 24) / 2 - 10, 0, status,
+          style(picked ? 18 : 13, statusColor, picked)).setOrigin(1, 0.5))
+      })
+
+      // 汇总 + 出征按钮
+      const pickedForm = forms.find(f => f.id === this._marchFormPick)
+      let summary = '未选择编队'
+      if (pickedForm && this.sel) {
+        const members = pickedForm.generalIds.map(id => this.state.general(id)).filter(Boolean)
+        const total = members.reduce((s, g) => s + g.troops, 0)
+        const est = this.state.estimateMarch(pickedForm.generalIds, this.sel.x, this.sel.y)
+        const eta = est.gameSeconds / TIME_SCALE
+        summary = `【${pickedForm.name}】 ${members.length} 将 · 共 ${total} 兵 · ${est.steps} 格 · 单程约 ${Math.floor(eta / 60)}:${String(Math.floor(eta % 60)).padStart(2, '0')}`
+      }
+      panel.add(this.add.text(0, h / 2 - 50, summary, style(12, '#bbbbbb')).setOrigin(0.5))
+      panel.add(this._button(0, h / 2 - 24, 150, 32, '⚔️ 出征', COLOR.btnRed,
+        !!pickedForm, () => {
+          const err = this.state.marchFormation(this._marchFormPick, this.sel.x, this.sel.y)
+          if (err) this._toast(err, COLOR.toastWarn)
+          else { this._closeModal(); this._refreshTilePanel() }
+        }))
+    })
+  }
+
+  // ── 弹窗：编队预设管理 ────────────────────────────────────────────────────
+  // 编队是「模板」：同一武将可出现在多个编队；出征时实时校验可用性。
+  // 无 DOM 文本输入，名称从预设词中选（攻坚/扫荡/…），新建默认「编队N」。
+
+  _openFormations() {
+    const forms = this.state.formations || []
+    const canCreate = forms.length < MAX_FORMATIONS
+    const rowH = 60
+    const rows = forms.length + (canCreate ? 1 : 0)
+    const w = Math.min(this.scale.width - 24, 380)
+    const h = 52 + Math.max(1, rows) * rowH + 24
+    const rw = w - 24
+    this._openModal(w, h, (panel) => {
+      panel.add(this.add.text(0, -h / 2 + 14, '🛡️ 编队预设',
+        style(15, '#ffffff', true)).setOrigin(0.5, 0))
+
+      forms.forEach((f, i) => {
         const y = -h / 2 + 52 + i * rowH + (rowH - 8) / 2
-        const st = g.stamina ?? STAMINA_MAX
-        const lowStamina = st < MARCH_STAMINA_COST
-        const enabled = g.state === 'idle' && g.troops > 0 && !lowStamina
+        const half = rowH - 8
+        const row = this._row(panel, y, rw, half, false, null)
+        const names = f.generalIds.length
+          ? f.generalIds.map(id => {
+            const g = this.state.general(id)
+            return g ? `${TROOP_TYPES[g.troopType]?.icon || ''}${g.name}` : '？'
+          }).join(' · ')
+          : '（未配置武将）'
+        row.add(this.add.text(-rw / 2 + 12, -half / 2 + 8,
+          f.name, style(14, '#ffd54f', true)).setOrigin(0, 0.5))
+        row.add(this.add.text(-rw / 2 + 12, half / 2 - 9,
+          `${names}  ·  ${f.generalIds.length}/${MAX_MARCH_PARTY}`,
+          style(11, '#dddddd')).setOrigin(0, 0.5))
+        row.add(this._button(rw / 2 - 92, 0, 76, 26, '编辑', COLOR.btnAmber, true,
+          () => this._openFormationEdit(f.id)))
+        row.add(this._button(rw / 2 - 12, 0, 60, 26, '删除', COLOR.btnRed, true, () => {
+          this.state.deleteFormation(f.id)
+          this._openFormations()
+        }))
+      })
+
+      const footY = -h / 2 + 52 + forms.length * rowH + (rowH - 8) / 2
+      if (canCreate) {
+        panel.add(this._button(0, footY, 160, 32, '+ 新建编队', COLOR.btnGreen, true, () => {
+          const r = this.state.createFormation()
+          if (typeof r === 'string') { this._toast(r, COLOR.toastWarn); return }
+          this._openFormationEdit(r.id)
+        }))
+      } else {
+        panel.add(this.add.text(0, footY,
+          `编队已满（${MAX_FORMATIONS} 队上限）`, style(11, '#9e9e9e')).setOrigin(0.5))
+      }
+    })
+  }
+
+  /** 编队编辑：选名称（预设词）+ 勾选至多 3 名武将 */
+  _openFormationEdit(formationId) {
+    const f = this.state.formations.find(x => x.id === formationId)
+    if (!f) { this._openFormations(); return }
+    // 进入新编队时重置临时编辑态；同一编队重建时保留（勾选/改名不丢）
+    if (!this._formEditPick || this._formEditId !== formationId) {
+      this._formEditPick = new Set(f.generalIds)
+      this._formEditName = f.name
+    }
+    this._formEditId = formationId
+    const pick = this._formEditPick
+    const gens = this.state.generals
+    const presets = ['攻坚', '扫荡', '防御', '主力', '奇袭', '守备']
+    const rowH = 52
+    const w = Math.min(this.scale.width - 24, 380)
+    const h = 52 + 36 + gens.length * rowH + 74
+    this._openModal(w, h, (panel) => {
+      panel.add(this.add.text(0, -h / 2 + 14,
+        `编辑编队 · ${this._formEditName}`, style(15, '#ffffff', true)).setOrigin(0.5, 0))
+
+      // 名称快选（预设词）
+      const nameY = -h / 2 + 40
+      panel.add(this.add.text(-w / 2 + 12, nameY, '名称', style(11, '#ffd54f', true)).setOrigin(0, 0.5))
+      let nx = -w / 2 + 50
+      presets.forEach(pn => {
+        const on = this._formEditName === pn
+        panel.add(this._button(nx + 28, nameY, 54, 22, pn,
+          on ? COLOR.btnAmber : COLOR.btnGrey, true, () => {
+            this._formEditName = pn
+            this._openFormationEdit(formationId)
+          }))
+        nx += 60
+      })
+
+      gens.forEach((g, i) => {
+        const y = -h / 2 + 52 + 36 + i * rowH + (rowH - 8) / 2
         const picked = pick.has(g.id)
-        const row = this._row(panel, y, w - 24, rowH - 8, enabled, () => {
+        const row = this._row(panel, y, w - 24, rowH - 8, true, () => {
           if (picked) pick.delete(g.id)
-          else if (pick.size >= MAX_MARCH_PARTY) { this._toast(`最多同时出征 ${MAX_MARCH_PARTY} 队`, COLOR.toastWarn); return }
+          else if (pick.size >= MAX_MARCH_PARTY) { this._toast(`编队最多 ${MAX_MARCH_PARTY} 名武将`, COLOR.toastWarn); return }
           else pick.add(g.id)
-          this._openMarchSelect(true)   // 重建刷新勾选态
+          this._openFormationEdit(formationId)
         })
         if (picked) {
           const hl = this.add.graphics()
@@ -540,48 +704,24 @@ export class UIScene extends Phaser.Scene {
         const gt = TROOP_TYPES[g.troopType]
         row.add(this.add.text(-(w - 24) / 2 + 10, -9,
           `${gt ? gt.icon : ''}${g.name}  Lv.${g.lv}`,
-          style(14, enabled ? '#ffffff' : '#888888', true)).setOrigin(0, 0.5))
-        // 对本目标守军的克制关系（以第一支有兵守将队伍的兵种为准）
-        const selTile = this.state.tileAt(this.sel.x, this.sel.y)
-        const aliveGuard = selTile?.guards?.find(gd => gd.troops > 0) || selTile?.guards?.[0]
-        const defType = aliveGuard ? findGeneralTemplate(aliveGuard.id)?.troopType : selTile?.garrisonType
-        const mult = counterMult(g.troopType, defType)
-        const counter = mult > 1 ? '克制' : (mult < 1 ? '被克' : '')
+          style(14, '#ffffff', true)).setOrigin(0, 0.5))
         row.add(this.add.text(-(w - 24) / 2 + 10, 10,
-          `兵力 ${g.troops} · 体力 ${Math.floor(st)}/${STAMINA_MAX}`,
-          style(11, lowStamina ? '#ef5350' : '#9e9e9e')).setOrigin(0, 0.5))
-        if (counter) {
-          row.add(this.add.text((w - 24) / 2 - 10, 12, counter,
-            style(11, mult > 1 ? '#66bb6a' : '#ef5350', true)).setOrigin(1, 0.5))
-        }
-        // 状态：优先说明不可选原因
-        let status = picked ? '✓' : '待命'
-        if (!picked) {
-          if (g.state !== 'idle') status = '行军中'
-          else if (g.troops <= 0) status = '无兵'
-          else if (lowStamina) status = '体力不足'
-        }
-        row.add(this.add.text((w - 24) / 2 - 10, -9, status,
-          style(picked ? 16 : 12,
-            picked ? '#ffd54f' : (enabled ? '#66bb6a' : '#ffa726'), picked)).setOrigin(1, 0.5))
+          `兵力 ${g.troops} · ${g.state === 'idle' ? '待命' : '行军中'}`,
+          style(11, g.state === 'idle' ? '#9e9e9e' : '#ef9a9a')).setOrigin(0, 0.5))
+        row.add(this.add.text((w - 24) / 2 - 10, -9,
+          picked ? '✓' : '', style(16, '#ffd54f', true)).setOrigin(1, 0.5))
       })
 
-      // 汇总 + 出征按钮
-      const picked = gens.filter(g => pick.has(g.id))
-      const total = picked.reduce((s, g) => s + g.troops, 0)
-      let summary = '未选择武将'
-      if (picked.length && this.sel) {
-        const est = this.state.estimateMarch(picked.map(g => g.id), this.sel.x, this.sel.y)
-        const eta = est.gameSeconds / TIME_SCALE   // 真实秒
-        summary = `已选 ${picked.length} 队 · 共 ${total} 兵 · ${est.steps} 格 · 单程约 ${Math.floor(eta / 60)}:${String(Math.floor(eta % 60)).padStart(2, '0')}`
-      }
-      panel.add(this.add.text(0, h / 2 - 58, summary, style(12, '#bbbbbb')).setOrigin(0.5))
-      panel.add(this._button(0, h / 2 - 26, 150, 32, '⚔️ 出征', COLOR.btnRed,
-        picked.length > 0, () => {
-          const err = this.state.march([...pick], this.sel.x, this.sel.y)
-          if (err) this._toast(err, COLOR.toastWarn)
-          else { this._closeModal(); this._refreshTilePanel() }
-        }))
+      // 保存
+      panel.add(this._button(0, h / 2 - 26, 150, 32, '💾 保存', COLOR.btnGreen, true, () => {
+        const err = this.state.updateFormation(formationId, {
+          name: this._formEditName,
+          generalIds: [...pick],
+        })
+        if (err) { this._toast(err, COLOR.toastWarn); return }
+        this._formEditPick = null
+        this._openFormations()
+      }))
     })
   }
 
@@ -775,6 +915,9 @@ export class UIScene extends Phaser.Scene {
       panel.add(this.add.text(-w / 2 + 14, -h / 2 + 14, '武将', style(15, '#ffffff', true)).setOrigin(0, 0))
       panel.add(this.add.text(-w / 2 + 60, -h / 2 + 16,
         `${gens.length}/${MAX_GENERALS}`, style(11, '#9e9e9e')).setOrigin(0, 0))
+      // 编队预设入口
+      panel.add(this._button(w / 2 - 192, -h / 2 + 23, 80, 28, '🛡️ 编队', COLOR.btnGrey, true,
+        () => this._openFormations()))
       // 招募入口（抽装备入口已移至「装备仓库」面板右上角）
       panel.add(this._button(w / 2 - 102, -h / 2 + 23, 86, 28, '🎲 招募', COLOR.btnAmber, true,
         () => { this._recruitResult = null; this._openRecruit() }))
@@ -1470,9 +1613,12 @@ export class UIScene extends Phaser.Scene {
         if (u.skillFire) stat.push(`战法${u.skillFire}次`)
         if (u.extra) stat.push(`连击${u.extra}次`)
         if (u.control) stat.push(`控制${u.control}次`)
+        if (u.shielded) stat.push(`护盾吸收${u.shielded}`)
+        if (u.countered) stat.push(`反击${u.countered}次`)
+        if (u.cleansed) stat.push(`驱散${u.cleansed}次`)
         const statTail = stat.length ? ` · ${stat.join(' ')}` : ''
         rows.push({ x: 16, y,
-          text: `武${sv(u.atk, u.atkEff)} 防${sv(u.def, u.defEff)} 速${sv(u.spd, u.spdEff)} 智${sv(u.int, u.intEff)} · 输出${u.dealt} 承伤${u.taken}${statTail}`,
+          text: `武${sv(u.atk, u.atkEff)} 统${sv(u.def, u.defEff)} 速${sv(u.spd, u.spdEff)} 智${sv(u.int, u.intEff)} · 输出${u.dealt} 承伤${u.taken}${statTail}`,
           size: 10, color: '#9e9e9e', origin: 0 })
         y += 17
       })
@@ -1481,7 +1627,13 @@ export class UIScene extends Phaser.Scene {
     roster('我方阵容', report.our || [], '#a5d6a7')
     roster('守军阵容', report.foe || [], '#ef9a9a')
 
-    ;(report.rounds || []).forEach((r) => {
+    ;(report.rounds || []).forEach((r, idx) => {
+      // 波次切换时插入分隔标题（多波次战斗：攻方残余兵力逐波挑战守军编队）
+      if (r.wave && r.wave > 1 && (idx === 0 || report.rounds[idx - 1].wave !== r.wave)) {
+        if (idx > 0) y += 6   // 波次间留点空隙
+        rows.push({ x: 10, y, text: `━━ 第 ${r.wave} 波 ━━`, size: 11, color: '#ffd54f', bold: true, origin: 0 })
+        y += 18
+      }
       if (mode === 'simple') {
         rows.push({ x: 10, y, text: `第${r.round}回合   我方 ${r.atkTroops}（-${r.atkLoss}）    守军 ${r.defTroops}（-${r.defLoss}）`,
           size: 11, color: '#dddddd', origin: 0 })
@@ -1530,15 +1682,30 @@ export class UIScene extends Phaser.Scene {
         return { indent: 22, color: '#ef9a9a', text: `${e.actor} 吸血 +${e.value}` }
       case 'condition_met':
         return { indent: 22, color: '#ff8a65', text: `${e.actor} 触发【残血爆发】倍率 ×${e.conditionMult}` }
+      case 'target_condition_met':
+        return { indent: 22, color: '#ff8a65', text: `${e.actor} 兵力过低，遭处决判定 ×${e.conditionMult}` }
+      case 'shield_add':
+        return { indent: 22, color: '#90caf9', text: `${e.actor} 获得【${e.skillName}】护盾 ${e.value}（${e.duration}回合）` }
+      case 'shield_absorb':
+        return { indent: 22, color: '#90caf9', text: `${e.actor} 护盾吸收 ${e.value}${e.shieldLeft > 0 ? `（剩 ${e.shieldLeft}）` : '（已耗尽）'}` }
+      case 'shield_expire':
+        return { indent: 22, color: '#78909c', text: `${e.actor} 护盾到期消散` }
+      case 'cleanse':
+        return { indent: 22, color: '#80cbc4', text: `${e.actor} 受【${e.skillName}】驱散，清除全部负面效果` }
+      case 'dot_damage': {
+        const src = e.skillName || '战法'
+        return { indent: 22, color: mine ? good : bad,
+          text: `[${src}·${e.dmgType}] ${e.target} 受持续伤害 -${e.value}${e.targetLeft <= 0 ? '（阵亡）' : ''}` }
+      }
       case 'damage': {
         // 克制标注（×1.25 克制 / ×0.85 被克）；战力值已含倍率/克制/浮动
         const counterNote = Math.abs((e.counter ?? 1) - 1) > 0.001 ? (e.counter > 1 ? ' 克制' : ' 被克') : ''
-        // 标出该次伤害来自「普攻」还是某个战法，避免同一武将的战法伤害与普攻伤害看不出区别
-        const src = e.skill === 'normal_attack' ? '普攻' : (e.skillName || '战法')
-        // 防御显示目标「防御属性」（恒定值），不再是随兵力缩水的防御战力（旧档 defPow 兜底）
+        // 标出该次伤害来自「普攻」还是某个战法，附带兵刃/谋略标签，避免同一武将的战法伤害与普攻伤害看不出区别
+        const src = e.skill === 'normal_attack' ? '普攻' : `${e.skillName || '战法'}${e.dmgType ? '·' + e.dmgType : ''}`
+        // 显示目标「统」（统率，恒定属性，全局对 def 的统一缩写），不再是随兵力缩水的防御战力（旧档 defPow 兜底）
         const defShown = e.defStat ?? e.defPow ?? 0
         return { indent: 22, color: mine ? good : bad,
-          text: `[${src}] ${e.actor}→${e.target} 战力${Math.round(e.atkPow)} vs 防御${Math.round(defShown)} ×${e.ratio.toFixed(2)}${counterNote} → -${e.value}${e.targetLeft <= 0 ? '（阵亡）' : ''}` }
+          text: `[${src}] ${e.actor}→${e.target} 战力${Math.round(e.atkPow)} vs 统${Math.round(defShown)} ×${e.ratio.toFixed(2)}${counterNote} → -${e.value}${e.targetLeft <= 0 ? '（阵亡）' : ''}` }
       }
       default:
         return null   // round/action/normal_attack/death/status_remove 不单独成行

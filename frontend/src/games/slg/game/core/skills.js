@@ -109,7 +109,7 @@ export const SKILLS = {
     attribute: 'int', target: 'random_enemy', targetCount: 1,
     effect: 'control', status: 'huangbao', duration: 1, durationScaleLevels: [10],
     cost: 20, maxLevel: 10,
-    desc: '30% 概率使随机 1 名敌军进入谎报状态，跳过其下一次行动',
+    desc: '30% 概率使随机 1 名敌军进入谎报状态，跳过其下一次行动（持续 1 回合，Lv.10 额外 +1 回合）',
   },
 
   // ── 新增战法（8 个）─────────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ export const SKILLS = {
     attribute: 'int', mult: 1.0, multStep: 0.05,
     target: 'random_ally', targetCount: 1,
     effect: 'heal', useCounter: false, cost: 30, maxLevel: 10,
-    desc: '30% 概率治疗随机 1 名我军，回复量基于施法者智力与兵力（无法超过目标入场兵力）',
+    desc: '30% 概率治疗随机 1 名我军，回复量基于施法者智力与当前兵力（单次回复不超过目标入场兵力的 30%）',
   },
 
   // 9. 激励（增益我军武力，新机制 buff）
@@ -187,7 +187,7 @@ export const SKILLS = {
     effect: 'damage', useCounter: false,
     condition: 'low_hp', conditionMult: 1.5,
     cost: 25, maxLevel: 10,
-    desc: '40% 概率对随机 1 名敌军造成 100% 速度的兵刃伤害；自身兵力 < 50% 时倍率 ×1.5',
+    desc: '40% 概率对随机 1 名敌军造成 100% 速度的兵刃伤害；自身当前兵力低于入场兵力 50% 时倍率 ×1.5',
   },
 
   // 15. 鬼神（高倍率突击，extra_attack 变种）
@@ -206,7 +206,60 @@ export const SKILLS = {
     target: 'random_enemy', targetCount: 2,
     effect: 'dot', status: 'shabao', vulnPhysical: 0.25,
     duration: 2, maxLevel: 10,
-    desc: '30% 概率对随机 2 名敌军施加【沙暴】（持续 2 回合）：每回合按施放时自身智力与兵力造成谋略持续伤害（63%→126%，无视兵种克制），并使其受到的兵刃伤害 +25%',
+    desc: '30% 概率对随机 2 名敌军施加【沙暴】（持续 2 回合）：每回合按施放时自身智力与兵力造成谋略持续伤害（63%→126%，无视兵种克制），并使其在持续期间受到的兵刃伤害 +25%',
+  },
+
+  // ── V2.1 新增（5 个）——引入 4 个新机制：护盾/处决判定/驱散/受击反击/憋气 ──────────
+
+  // 17. 护佑（护盾支援，新机制 shield）—— 为我军罩上一层护盾，优先吸收兵力损失（含普攻/战法/持续伤害）。
+  huyou: {
+    id: 'huyou', name: '护佑', timing: 'beforeAction', rate: 30, rateStep: 2,
+    attribute: 'int', mult: 1.0, multStep: 0.05,
+    target: 'random_ally', targetCount: 1,
+    effect: 'shield', duration: 2, durationScaleLevels: [5, 10],
+    maxLevel: 10,
+    desc: '30% 概率为随机 1 名我军罩上护盾，优先吸收其受到的兵力损失，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
+  },
+
+  // 18. 斩杀（兵刃处决，damage + 新机制 targetCondition）—— 目标残血时倍率暴增，专收割残兵。
+  zhansha: {
+    id: 'zhansha', name: '斩杀', timing: 'beforeAction', rate: 30, rateStep: 2,
+    attribute: 'atk', mult: 0.8, multStep: 0.05,
+    target: 'random_enemy', targetCount: 1,
+    targetCondition: 'low_hp', targetConditionThreshold: 0.3, targetConditionMult: 2.2,
+    effect: 'damage', useCounter: false, maxLevel: 10,
+    desc: '30% 概率对随机 1 名敌军造成 80% 武力的兵刃伤害；若其当前兵力低于入场兵力 30%，伤害倍率 ×2.2',
+  },
+
+  // 19. 凯歌（团队驱散+治疗，新机制 cleanse）—— 清除我军减益/持续伤害效果并附带治疗，克制减益/DOT 体系。
+  // 平衡：初版 targetCount:3 时纯治疗部分就把均值审计拉到 2167（全战法第一），驱散只是附加价值还没算；
+  // 3 目标团体治疗相当于青囊(1目标)的 ~2.4 倍，收窄到 2 目标、mult 0.8→0.65 后落回 S 档正常区间。
+  kaige: {
+    id: 'kaige', name: '凯歌', timing: 'beforeAction', rate: 25, rateStep: 2,
+    attribute: 'int', mult: 0.65, multStep: 0.03,
+    target: 'random_ally', targetCount: 2,
+    effect: 'cleanse', maxLevel: 10,
+    desc: '25% 概率为我军最多 2 名清除全部减益/持续伤害效果，并治疗少量兵力',
+  },
+
+  // 20. 复仇（受击反击，新机制 timing:'onHit' + effect:'counter'）—— 全战法中唯一「被动反应」类，
+  //     不占用自己回合，受到攻击时判定反击；反击命中不会再被对方复仇触发（防连锁死循环）。
+  fuchou: {
+    id: 'fuchou', name: '复仇', timing: 'onHit', rate: 30, rateStep: 2,
+    attribute: 'atk', mult: 0.7, multStep: 0.04,
+    effect: 'counter', useCounter: false, maxLevel: 10,
+    desc: '受到攻击时 30% 概率反击攻击者，造成 70% 武力的兵刃伤害（无视兵种克制）',
+  },
+
+  // 21. 破釜沉舟（背水一战，damage + 新机制 pityStep 憋气）—— 基础概率不高，但每次未发动都攒憋气值，
+  //     下次发动率随之提升，触发后清零；10 回合内必然触发至少一次，杜绝战法脸黑。
+  pofu: {
+    id: 'pofu', name: '破釜沉舟', timing: 'beforeAction', rate: 20, rateStep: 2,
+    attribute: 'atk', mult: 1.3, multStep: 0.05,
+    target: 'random_enemy', targetCount: 1,
+    effect: 'damage', useCounter: false, pityStep: 8,
+    maxLevel: 10,
+    desc: '20% 概率对随机 1 名敌军造成 130% 武力的兵刃伤害；每次未发动下次概率 +8%（触发后重置）',
   },
 }
 
@@ -219,13 +272,16 @@ export const STATUSES = {
 // ── 战法定价（战法仓库玉石消耗）：按审计强度分档 B/A/S = 10/20/30，集中定义、覆盖各战法 cost。
 // 升级消耗 = cost × 当前等级（见 GameState.upgradeSkill），故越强的战法升级也越贵。
 export const SKILL_TIER_COST = { S: 30, A: 20, B: 10 }
+// V2.1 新增 5 个（huyou/zhansha/kaige/fuchou/pofu）：实测审计后分档见下（凯歌初版 targetCount:3
+// 纯治疗就冲到全战法第一 2167，已收窄到 2 目标/降倍率，复测落回 S 正常区间，才定档）。
 const SKILL_TIERS = {
-  // S：最强档——破甲(兵刃+谋略双伤，审计第一)、嗜血/背水(伤害+吸血/爆发)、落雷/力劈(最强纯伤害)
-  pojia: 'S', shixue: 'S', beishui: 'S', luolei: 'S', lipi: 'S',
-  // A：均衡主力——持续/伤害/治疗/追击
+  // S：最强档——破甲(兵刃+谋略双伤)、凯歌(团队驱散+治疗)、嗜血/背水(伤害+吸血/爆发)、落雷/力劈(最强纯伤害)
+  pojia: 'S', kaige: 'S', shixue: 'S', beishui: 'S', luolei: 'S', lipi: 'S',
+  // A：均衡主力——持续/伤害/治疗/追击/护盾/憋气
   shabao: 'A', jianyu: 'A', huogong: 'A', qingnang: 'A', jifeng: 'A', luanmou: 'A', guishen: 'A', lianji: 'A',
-  // B：情境支援（控制/增益）
-  huangbao: 'B', jili: 'B', tiebi: 'B',
+  huyou: 'A', pofu: 'A',
+  // B：情境支援（控制/增益/处决/反击——依赖特定局面才发力，通用场景收益偏低）
+  huangbao: 'B', jili: 'B', tiebi: 'B', zhansha: 'B', fuchou: 'B',
 }
 for (const [id, tier] of Object.entries(SKILL_TIERS)) {
   if (SKILLS[id]) { SKILLS[id].tier = tier; SKILLS[id].cost = SKILL_TIER_COST[tier] }
@@ -289,13 +345,28 @@ export function skillStatLine(skill, lv) {
     parts.push(`${(s.mult || 1).toFixed(2)}x追加`)
   } else if (s.effect === 'control') {
     parts.push(`${s.duration}回合`)
+  } else if (s.effect === 'dot') {
+    parts.push(`${(s.mult || 1).toFixed(2)}x`)
+    if (s.targetCount > 1) parts.push(`${s.targetCount}目标`)
+    parts.push(`${s.duration}回合`)
   } else if (s.effect === 'buff' || s.effect === 'debuff') {
     const attr = ATTR_CN[s.buffAttr] || s.buffAttr
     const sign = s.buffValue > 0 ? '+' : ''
     parts.push(`${sign}${s.buffValue}%${attr}`)
     parts.push(`${s.duration}回合`)
+  } else if (s.effect === 'shield') {
+    parts.push(`${(s.mult || 1).toFixed(2)}x护盾`)
+    if (s.targetCount > 1) parts.push(`${s.targetCount}我军`)
+    parts.push(`${s.duration}回合`)
+  } else if (s.effect === 'cleanse') {
+    parts.push('驱散')
+    if (s.targetCount > 1) parts.push(`${s.targetCount}我军`)
+  } else if (s.effect === 'counter') {
+    parts.push(`${(s.mult || 1).toFixed(2)}x反击`)
   }
   if (s.lifesteal) parts.push(`${Math.round(s.lifesteal * 100)}%吸血`)
   if (s.condition === 'low_hp') parts.push(`残血×${s.conditionMult}`)
+  if (s.targetCondition === 'low_hp') parts.push(`处决×${s.targetConditionMult}`)
+  if (s.pityStep) parts.push(`憋气+${s.pityStep}%`)
   return parts.join('/')
 }
