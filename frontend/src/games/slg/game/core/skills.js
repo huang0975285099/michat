@@ -45,7 +45,7 @@ export const SKILLS = {
   normal_attack: {
     id: 'normal_attack', name: '普通攻击', timing: 'onAttack', rate: 100,
     attribute: 'atk', mult: 1.0, target: 'random_enemy', targetCount: 1,
-    effect: 'damage', useCounter: true, desc: '对随机 1 名敌军造成 100% 武力伤害（受兵种克制影响）',
+    effect: 'damage', useCounter: true, desc: '对随机 1 名敌军造成 100% 武力的兵刃伤害（受兵种克制影响）',
   },
 
   // ── 保留战法（7 个）─────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ export const SKILLS = {
     attribute: 'atk', mult: 1.0, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
     effect: 'damage', useCounter: false, cost: 20, maxLevel: 10,
-    desc: '40% 概率对随机 1 名敌军造成 100% 武力伤害（无视兵种克制）',
+    desc: '40% 概率对随机 1 名敌军造成 100% 武力的兵刃伤害（无视兵种克制）',
   },
 
   // 2. 疾风（速度单体代表，替代践踏/突袭）
@@ -65,7 +65,7 @@ export const SKILLS = {
     attribute: 'spd', mult: 1.1, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
     effect: 'damage', useCounter: false, cost: 25, maxLevel: 10,
-    desc: '35% 概率对随机 1 名敌军造成 110% 速度伤害（无视兵种克制）',
+    desc: '35% 概率对随机 1 名敌军造成 110% 速度的兵刃伤害（无视兵种克制）',
   },
 
   // 3. 火攻（智力单体代表，替代水攻/天雷）
@@ -74,7 +74,7 @@ export const SKILLS = {
     attribute: 'int', mult: 1.2, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
     effect: 'damage', useCounter: false, cost: 30, maxLevel: 10,
-    desc: '35% 概率对随机 1 名敌军造成 120% 智力伤害（无视兵种克制）',
+    desc: '35% 概率对随机 1 名敌军造成 120% 智力的谋略伤害（无视兵种克制）',
   },
 
   // 4. 箭雨（武力群体 3 目标）
@@ -83,7 +83,7 @@ export const SKILLS = {
     attribute: 'atk', mult: 0.5, multStep: 0.03,
     target: 'random_enemy', targetCount: 3,
     effect: 'damage', useCounter: false, cost: 30, maxLevel: 10,
-    desc: '25% 概率对随机 3 名敌军各造成 50% 武力伤害（无视兵种克制）',
+    desc: '25% 概率对随机 3 名敌军各造成 50% 武力的兵刃伤害（无视兵种克制）',
   },
 
   // 5. 落雷（智力群体 2 目标）
@@ -92,7 +92,7 @@ export const SKILLS = {
     attribute: 'int', mult: 0.55, multStep: 0.03,
     target: 'random_enemy', targetCount: 2,
     effect: 'damage', useCounter: false, cost: 30, maxLevel: 10,
-    desc: '35% 概率对随机 2 名敌军各造成 55% 智力伤害（无视兵种克制）',
+    desc: '35% 概率对随机 2 名敌军各造成 55% 智力的谋略伤害（无视兵种克制）',
   },
 
   // 6. 连击（追击代表，替代追击/横扫）
@@ -100,7 +100,7 @@ export const SKILLS = {
     id: 'lianji', name: '连击', timing: 'afterAttack', rate: 35, rateStep: 2,
     mult: 1.0, multStep: 0.025, useCounter: true,
     effect: 'extra_attack', cost: 20, maxLevel: 10,
-    desc: '普通攻击后 35% 概率再追加一次普通攻击（受兵种克制影响）',
+    desc: '普通攻击后 35% 概率再追加一次普通攻击（造成兵刃伤害，受兵种克制影响）',
   },
 
   // 7. 谎报（唯一控制战法，替代威慑/迷阵/缴械）
@@ -121,7 +121,7 @@ export const SKILLS = {
     attribute: 'int', mult: 1.0, multStep: 0.05,
     target: 'random_ally', targetCount: 1,
     effect: 'heal', useCounter: false, cost: 30, maxLevel: 10,
-    desc: '30% 概率治疗随机 1 名我军，回复兵力随自身智力提升（无法超过入场兵力）',
+    desc: '30% 概率治疗随机 1 名我军，回复量基于施法者智力与兵力（无法超过目标入场兵力）',
   },
 
   // 9. 激励（增益我军武力，新机制 buff）
@@ -133,7 +133,7 @@ export const SKILLS = {
     effect: 'buff', buffAttr: 'atk', buffValue: 25,
     duration: 2, durationScaleLevels: [5, 10],
     cost: 25, maxLevel: 10,
-    desc: '35% 概率提升我军最多 3 名 25% 武力，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
+    desc: '35% 概率使我军最多 3 名武将武力 +25%，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
   },
 
   // 10. 铁壁（增益我军统率，新机制 buff；用 def 属性发动）
@@ -144,7 +144,7 @@ export const SKILLS = {
     effect: 'buff', buffAttr: 'def', buffValue: 25,
     duration: 2, durationScaleLevels: [5, 10],
     cost: 25, maxLevel: 10,
-    desc: '35% 概率提升我军最多 3 名 25% 统率，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
+    desc: '35% 概率使我军最多 3 名武将统率 +25%，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
   },
 
   // 11. 破甲（兵刃+谋略双伤，damage 多属性命中）—— 一次发动同时打出一记兵刃(武力)与一记谋略(智力)。
@@ -155,7 +155,7 @@ export const SKILLS = {
     hits: [{ attribute: 'atk' }, { attribute: 'int' }],   // 兵刃(武力) + 谋略(智力)
     target: 'random_enemy', targetCount: 1,
     effect: 'damage', useCounter: false, maxLevel: 10,
-    desc: '30% 概率对随机 1 名敌军同时造成一次兵刃(武力)与一次谋略(智力)伤害，各 75%（Lv.10 各 150%）',
+    desc: '30% 概率对随机 1 名敌军同时造成一次武力的兵刃伤害与一次智力的谋略伤害，各 75%（Lv.10 各 150%）',
   },
 
   // 12. 天雷（高爆发智力单体，damage）—— 原「乱谋(减敌智力)」对无战法守军毫无作用、审计垫底；
@@ -166,17 +166,17 @@ export const SKILLS = {
     attribute: 'int', mult: 1.6, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
     effect: 'damage', useCounter: false, cost: 30, maxLevel: 10,
-    desc: '25% 概率对随机 1 名敌军造成 160% 智力伤害（无视兵种克制，智力越高越爆炸）',
+    desc: '25% 概率对随机 1 名敌军造成 160% 智力的谋略伤害（无视兵种克制，智力越高越爆炸）',
   },
 
-  // 13. 嗜血（武力伤害 + 吸血，damage 变种）
+  // 13. 嗜血（兵刃伤害 + 吸血，damage 变种）
   shixue: {
     id: 'shixue', name: '嗜血', timing: 'beforeAction', rate: 35, rateStep: 2,
     attribute: 'atk', mult: 1.0, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
     effect: 'damage', useCounter: false, lifesteal: 0.3,
     cost: 30, maxLevel: 10,
-    desc: '35% 概率对随机 1 名敌军造成 100% 武力伤害，并将 30% 伤害回复为自身兵力',
+    desc: '35% 概率对随机 1 名敌军造成 100% 武力的兵刃伤害，并将 30% 伤害转化为自身兵力回复',
   },
 
   // 14. 背水（速度残血爆发，damage 变种 + condition）
@@ -187,7 +187,7 @@ export const SKILLS = {
     effect: 'damage', useCounter: false,
     condition: 'low_hp', conditionMult: 1.5,
     cost: 25, maxLevel: 10,
-    desc: '40% 概率对随机 1 名敌军造成 100% 速度伤害；自身兵力 < 50% 时倍率 ×1.5',
+    desc: '40% 概率对随机 1 名敌军造成 100% 速度的兵刃伤害；自身兵力 < 50% 时倍率 ×1.5',
   },
 
   // 15. 鬼神（高倍率突击，extra_attack 变种）
@@ -195,7 +195,7 @@ export const SKILLS = {
     id: 'guishen', name: '鬼神', timing: 'afterAttack', rate: 25, rateStep: 2,
     mult: 1.5, multStep: 0.025, useCounter: true,
     effect: 'extra_attack', maxLevel: 10,
-    desc: '普通攻击后 25% 概率再追加一次普通攻击，伤害提升至 150%（受兵种克制影响）',
+    desc: '普通攻击后 25% 概率再追加一次普通攻击，伤害提升至 150%（造成兵刃伤害，受兵种克制影响）',
   },
 
   // 16. 沙暴（智力持续伤害 + 兵刃易伤，新机制 dot）—— 施加时按当回合战力快照每回合伤害，逐回合结算；
@@ -206,14 +206,14 @@ export const SKILLS = {
     target: 'random_enemy', targetCount: 2,
     effect: 'dot', status: 'shabao', vulnPhysical: 0.25,
     duration: 2, maxLevel: 10,
-    desc: '30% 概率对随机 2 名敌军施加【沙暴】：每回合造成智力持续伤害(63%→126%)，并使其受到的兵刃伤害 +25%，持续 2 回合',
+    desc: '30% 概率对随机 2 名敌军施加【沙暴】（持续 2 回合）：每回合按施放时自身智力与兵力造成谋略持续伤害（63%→126%，无视兵种克制），并使其受到的兵刃伤害 +25%',
   },
 }
 
 // 状态定义：control 类 skip=true 表示无法行动；dot 类只作为持续伤害/易伤的标签（记在 unit.dots 上）。
 export const STATUSES = {
   huangbao: { id: 'huangbao', name: '谎报', skip: true, desc: '无法行动' },
-  shabao:   { id: 'shabao',   name: '沙暴', dot: true,  desc: '持续伤害 + 兵刃易伤 25%' },
+  shabao:   { id: 'shabao',   name: '沙暴', dot: true,  desc: '谋略持续伤害 + 兵刃易伤 25%' },
 }
 
 // ── 战法定价（战法仓库玉石消耗）：按审计强度分档 B/A/S = 10/20/30，集中定义、覆盖各战法 cost。

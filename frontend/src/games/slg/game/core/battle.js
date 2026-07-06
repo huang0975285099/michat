@@ -21,6 +21,7 @@ import { getSkill, NORMAL_ATTACK, STATUSES, skillLevelAt } from './skills.js'
 export const BATTLE_DMG_ATTR_DIVISOR = 150   // 属性对攻/防值的增幅分母（越小=属性差距越明显；100属性→×1.67）
 export const BATTLE_DMG_RATE_MIN = 0.05      // 伤害下限 = 当前兵力 5%（保证战斗推进，不出 0 伤）
 export const BATTLE_DMG_RATE_MAX = 0.80      // 伤害上限 = 「入场兵力」80%（防满血一击秒杀；残血仍可被收掉）
+export const BATTLE_HEAL_RATE_MAX = 0.30     // 单次治疗上限 = 目标入场兵力 30%（避免一口满血）
 
 /** mulberry32：确定性伪随机（同 seed 必同序列） */
 function mulberry32(seed) {
@@ -176,11 +177,17 @@ export function resolveBattle(attackers, defenders, seed = 1) {
       const tickDmg = BATTLE_ROUND_ATTRITION * u.troops * (1 + attrVal / BATTLE_DMG_ATTR_DIVISOR) * (skill.mult || 1) / (1 + defVal / BATTLE_DMG_ATTR_DIVISOR)
       const dur = skill.duration || 2
       const existing = target.dots.find(d => d.name === skill.status)
-      if (existing) { existing.dmg = Math.max(existing.dmg, tickDmg); existing.duration = Math.max(existing.duration, dur); existing.vuln = skill.vulnPhysical || 0 }
-      else target.dots.push({ name: skill.status, dmg: tickDmg, duration: dur, vuln: skill.vulnPhysical || 0 })
+      if (existing) {
+        existing.dmg = Math.max(existing.dmg, tickDmg)
+        existing.duration = Math.max(existing.duration, dur)
+        existing.vuln = skill.vulnPhysical || 0
+      } else {
+        target.dots.push({ name: skill.status, dmg: tickDmg, duration: dur, vuln: skill.vulnPhysical || 0 })
+      }
       u.debuffCast++
+      const actualDur = existing ? existing.duration : dur
       events.push({ type: 'status_add', side: target.side, actor: target.name, actorKey: target.key,
-        status: skill.status, statusName: STATUSES[skill.status]?.name || skill.status, value: dur })
+        status: skill.status, statusName: STATUSES[skill.status]?.name || skill.status, value: actualDur })
     }
   }
 
@@ -191,7 +198,9 @@ export function resolveBattle(attackers, defenders, seed = 1) {
       for (let i = u.dots.length - 1; i >= 0; i--) {
         const d = u.dots[i]
         if (u.troops > 0) {
-          const loss = Math.min(u.troops, Math.max(1, Math.round(Math.min(BATTLE_DMG_RATE_MAX * u.start, d.dmg))))
+          // dot 伤害与直接伤害保持一致：下限为当前兵力 5%，上限为入场兵力 80%
+          const raw = Math.min(BATTLE_DMG_RATE_MAX * u.start, Math.max(BATTLE_DMG_RATE_MIN * u.troops, d.dmg))
+          const loss = Math.min(u.troops, Math.max(1, Math.round(raw)))
           u.troops -= loss
           u.taken += loss
           events.push({ type: 'dot_damage', side: u.side, actor: u.name, actorKey: u.key,
@@ -218,9 +227,11 @@ export function resolveBattle(attackers, defenders, seed = 1) {
     const attrVal = effAttr(u, skill.attribute)
     for (let n = 0; n < count; n++) {
       const target = pool.splice(Math.floor(rand() * pool.length), 1)[0]
-      const heal = Math.round(u.troops * (1 + attrVal / BATTLE_DMG_ATTR_DIVISOR) * (skill.mult || 1) * BATTLE_ROUND_ATTRITION)
+      let heal = u.troops * (1 + attrVal / BATTLE_DMG_ATTR_DIVISOR) * (skill.mult || 1) * BATTLE_ROUND_ATTRITION
+      // 单次治疗不能超过目标入场兵力的 30%，避免高智力/高兵力时一口回满
+      heal = Math.min(heal, BATTLE_HEAL_RATE_MAX * target.start)
       const before = target.troops
-      target.troops = Math.min(target.start, target.troops + heal)
+      target.troops = Math.min(target.start, target.troops + Math.round(heal))
       const real = target.troops - before
       if (real > 0) {
         target.healed += real
@@ -312,9 +323,10 @@ export function resolveBattle(attackers, defenders, seed = 1) {
   const bothAlive = () => alive(atkUnits).length && alive(defUnits).length
 
   for (let round = 1; round <= BATTLE_MAX_ROUNDS && bothAlive(); round++) {
-    // 每回合重排存活者：速度高者先动；平速攻方优先，同方按入场顺序
+    // 每回合重排存活者：有效速度高者先动（含 spd 增益/减益，未来支持 spd 类战法影响行动顺序）；
+    // 平速攻方优先，同方按入场顺序
     const order = [...alive(atkUnits), ...alive(defUnits)].sort((a, b) =>
-      (b.spd - a.spd) ||
+      (effAttr(b, 'spd') - effAttr(a, 'spd')) ||
       (a.side !== b.side ? (a.side === 'atk' ? -1 : 1) : a.idx - b.idx))
     const events = []
     const atkBefore = sum(atkUnits), defBefore = sum(defUnits)

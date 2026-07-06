@@ -349,7 +349,7 @@ export function findGeneralTemplate(id) {
 }
 export const GENERAL_BASE_TROOP_CAP = 100    // 带兵上限 = 100 + (lv-1)*200
 export function troopCapOf(lv) { return GENERAL_BASE_TROOP_CAP + (lv - 1) * 200 }
-// 升级经验：升到 lv 需要 lv*1000 累计经验
+// 升级经验：升到下一级需要 lv*200 经验
 export function expToLevel(lv) { return lv * 200 }
 export const GENERAL_MAX_LEVEL = 20
 // 征兵花费：主城 <5 级时 1 兵 = 2 粮；>=5 级时 1 兵 = 2 粮 + 1 铁矿 + 1 木材

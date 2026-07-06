@@ -81,6 +81,7 @@ export class GameState extends Emitter {
     this.freeRecruits = FREE_RECRUIT_COUNT   // 开局赠送的免费招募次数（不占铜币）
     this._firstRecruitDone = false   // 首次招募必出王牌（Legend），之后按正常概率
     this.autoJadeCommon = false  // 招募开关：开启后抽到的普通/精良武将自动转换为玉石，不入列也不觉醒
+    this.autoJadeEquipCommon = false  // 抽装备开关：开启后抽到的普通/精良装备自动转换为玉石，不入仓库
     this.marches = []          // { id, generalIds:[], from, to, departAt, arriveAt, phase:'out'|'back' }
     this.log = []              // 战报/事件日志（最近 50 条）
     this.damaged = new Set()   // 被挫伤（守军未满）的未占领地块，随时间回复
@@ -191,6 +192,17 @@ export class GameState extends Emitter {
     if (this.res.coin < EQUIP_DRAW_COST) return { error: `铜币不足（需 ${EQUIP_DRAW_COST}）` }
     this.res.coin -= EQUIP_DRAW_COST
     const rolled = rollEquipment()
+
+    // 需求：自动转换玉石开关——开启后普通/精良装备直接转为玉石，不入仓库
+    if (this.autoJadeEquipCommon && (rolled.quality === 'common' || rolled.quality === 'rare')) {
+      const jade = EQUIP_DISMISS_JADE[rolled.quality] ?? 0
+      this.res.jade = (this.res.jade || 0) + jade
+      const name = equipName({ type: rolled.type, quality: rolled.quality, attr: rolled.attr, level: 1 })
+      this._pushLog(`💎 ${name} 自动转换为 ${jade} 玉石`)
+      this.emit('resources', this.res)
+      return { success: true, type: 'jade', jade, name, quality: rolled.quality }
+    }
+
     const iid = `eq_${++this._equipSeq}`
     const eq = { iid, ...rolled, boundTo: null }
     this.equipments.push(eq)
@@ -287,6 +299,26 @@ export class GameState extends Emitter {
       if (eq && eq.attr === attr) sum += equipValue(eq)
     }
     return sum
+  }
+
+  /**
+   * 武将实战属性（战斗时实际使用的值，与 _arriveAndFight 内部计算口径完全一致）。
+   * 设计意图：守将 guardStat 系数 4（一次性给 +4×成长/级），玩家通过
+   *   "升级 +2×成长 + 战斗再 +2×成长 = 4×成长" 对齐，故四项属性都补等级加成。
+   * spd 是五维平均值（无独立 LEVELUP_SPD），按五维平均口径计算。
+   * 供 UI 面板显示与战斗结算共用，避免出现"面板属性 vs 战报实战值"不一致。
+   */
+  effStats(g) {
+    const forgeBonus = FORGE_STAT_PER_LEVEL * this.buildings.forge
+    const lvBonus = (lv, k) => (lv - 1) * k * growthOf(g.quality)
+    // spd 由五维平均值得出，临时战斗加成也取五维等级加成的平均值
+    const avgLevelup = (LEVELUP_ATK + LEVELUP_DEF + LEVELUP_INT + LEVELUP_POL + LEVELUP_CHA) / 5
+    return {
+      atk: g.atk + lvBonus(g.lv, LEVELUP_ATK) + forgeBonus + this.equipBonus(g, 'atk'),
+      def: g.def + lvBonus(g.lv, LEVELUP_DEF) + forgeBonus + this.equipBonus(g, 'def'),
+      int: g.int + lvBonus(g.lv, LEVELUP_INT) + forgeBonus + this.equipBonus(g, 'int'),
+      spd: g.spd + lvBonus(g.lv, avgLevelup) + (TROOP_TYPES[g.troopType]?.marchSpeed || 0) + forgeBonus + this.equipBonus(g, 'spd'),
+    }
   }
 
   /** 给武将绑定战法。返回错误信息或 null。若该将已有战法则先自动换下（换下的自动回可用池） */
@@ -471,6 +503,42 @@ export class GameState extends Emitter {
     return null
   }
 
+  /**
+   * 一键补满所有空闲且未满兵武将。
+   * 若资源不足以补满全部，则不做任何操作并返回缺少的资源提示。
+   * @returns {{recruited:number, cost:{grain:number,iron:number,wood:number}, lacked:string|null}}
+   */
+  recruitAll() {
+    const unit = getRecruitCostPerTroop(this.cityLv)
+    const details = []
+    for (const g of this.generals) {
+      if (g.state !== 'idle') continue
+      const cap = this.troopCap(g)
+      const need = cap - g.troops
+      if (need <= 0) continue
+      details.push({ g, need })
+    }
+    if (details.length === 0) return { recruited: 0, cost: { grain: 0, iron: 0, wood: 0 }, lacked: '所有武将已满兵' }
+
+    const cost = {
+      grain: details.reduce((s, d) => s + d.need, 0) * unit.grain,
+      iron: details.reduce((s, d) => s + d.need, 0) * unit.iron,
+      wood: details.reduce((s, d) => s + d.need, 0) * unit.wood,
+    }
+
+    for (const [k, v] of Object.entries(cost)) {
+      if (this.res[k] < v) return { recruited: 0, cost, lacked: `${RESOURCES[k].name}不足（需 ${v}）` }
+    }
+
+    for (const [k, v] of Object.entries(cost)) this.res[k] -= v
+    for (const { g, need } of details) g.troops += need
+
+    this.emit('resources', this.res)
+    this.emit('generals', this.generals)
+    this._pushLog(`🛡️ 一键补满 ${details.length} 名武将，消耗 ${cost.grain}粮${cost.iron}铁${cost.wood}木`)
+    return { recruited: details.reduce((s, d) => s + d.need, 0), cost, lacked: null }
+  }
+
   // ── 招募（抽卡）────────────────────────────────────────────────────────────
 
   /** 掷品质：按各档 rate 加权（Math.random，单机版无需确定性） */
@@ -619,9 +687,10 @@ export class GameState extends Emitter {
 
   // ── 出征 / 行军 ────────────────────────────────────────────────────────────
 
-  /** 武将有效行军速度 = 基础速度 + 兵种加成（骑兵 +marchSpeed） */
+  /** 武将有效行军速度 = 基础速度 + 兵种加成 + 铁匠坊/装备速度加成 */
   _marchSpeed(g) {
-    return g.spd + (TROOP_TYPES[g.troopType]?.marchSpeed || 0)
+    const forgeBonus = FORGE_STAT_PER_LEVEL * this.buildings.forge
+    return g.spd + (TROOP_TYPES[g.troopType]?.marchSpeed || 0) + forgeBonus + this.equipBonus(g, 'spd')
   }
 
   /** 出征预估（供 UI 显示路程/耗时）。返回 { steps, gameSeconds, path } */
@@ -715,28 +784,36 @@ export class GameState extends Emitter {
     }
 
     // 多对多同场混战：攻方每名武将、守方每队守将都是独立战斗单位，
-    // 全场按速度排序逐个行动（见 battle.js）。实战属性在此折算：
+    // 全场按速度排序逐个行动（见 battle.js）。实战属性折算见 effStats()：
     // 等级加成 +(lv-1)*2×成长 + 铁匠坊全属性 + 装备主属性；速度另叠兵种加成（骑兵 +30，与行军同口径）。
     const total = gens.reduce((s, g) => s + g.troops, 0)
-    const forgeBonus = FORGE_STAT_PER_LEVEL * this.buildings.forge
-    const effAtk = g => g.atk + (g.lv - 1) * LEVELUP_ATK * growthOf(g.quality) + forgeBonus + this.equipBonus(g, 'atk')
-    const effDef = g => g.def + (g.lv - 1) * LEVELUP_DEF * growthOf(g.quality) + forgeBonus + this.equipBonus(g, 'def')
-    // 智力/速度也补齐等级加成（系数 4，与 effAtk/effDef 对齐 guardStat 的 +4×成长/级）
-    // spd 是五维平均值（无独立 LEVELUP_SPD），按 cha 同口径计算（与 pol/cha 升级加成一致）
-    const effInt = g => g.int + (g.lv - 1) * LEVELUP_INT * growthOf(g.quality) + forgeBonus + this.equipBonus(g, 'int')
-    const effSpd = g => g.spd + (g.lv - 1) * LEVELUP_CHA * growthOf(g.quality) + (TROOP_TYPES[g.troopType]?.marchSpeed || 0) + forgeBonus + this.equipBonus(g, 'spd')
+    const effOf = g => this.effStats(g)
 
-    const atkUnits = gens.map(g => ({
-      key: g.id, name: g.name,
-      atk: effAtk(g), def: effDef(g), int: effInt(g), spd: effSpd(g),
-      troops: g.troops, troopType: g.troopType, skillId: g.skillId || null,
-      skillLv: this.skillLevel(g.skillId),
-    }))
+    const atkUnits = gens.map(g => {
+      const e = effOf(g)
+      return {
+        key: g.id, name: g.name,
+        atk: e.atk, def: e.def, int: e.int, spd: e.spd,
+        troops: g.troops, troopType: g.troopType, skillId: g.skillId || null,
+        skillLv: this.skillLevel(g.skillId),
+      }
+    })
     // 守将单位：一队 = 一名武将，模板缺失的队伍跳过（不参战也不掉兵）
+    // 稀有及以上守军绑定一个战法，由存档种子/坐标/索引确定性选取
+    const guardSkillOf = (tpl, i, lv) => {
+      if (!['rare', 'elite', 'legend'].includes(tpl.quality)) return { skillId: null, skillLv: 1 }
+      const idx = Math.abs((Math.imul(this.seed | 0, 0x9E3779B1) ^ Math.imul(i, 0x85EBCA6B) ^ (t.x * 8887 + t.y * 2971))) % BINDABLE_SKILLS.length
+      const skillLv = Math.min(SKILL_MAX_LEVEL, Math.max(1, Math.floor(lv / 2)))
+      return { skillId: BINDABLE_SKILLS[idx].id, skillLv }
+    }
     const guardDefs = t.guards
-      .map((gd, i) => ({ gd, i, tpl: findGeneralTemplate(gd.id) }))
+      .map((gd, i) => {
+        const tpl = findGeneralTemplate(gd.id)
+        const { skillId, skillLv } = tpl ? guardSkillOf(tpl, i, gd.lv) : { skillId: null, skillLv: 1 }
+        return { gd, i, tpl, skillId, skillLv }
+      })
       .filter(x => x.tpl && x.gd.troops > 0)
-    const defUnits = guardDefs.map(({ gd, i, tpl }) => ({
+    const defUnits = guardDefs.map(({ gd, i, tpl, skillId, skillLv }) => ({
       key: `${gd.id}:${i}`, name: tpl.name,
       atk: guardStat(tpl.atk, gd.lv, tpl.quality),
       def: guardStat(tpl.def, gd.lv, tpl.quality),
@@ -751,6 +828,7 @@ export class GameState extends Emitter {
         cha: guardStat(tpl.cha, gd.lv, tpl.quality),
       }) + (TROOP_TYPES[tpl.troopType]?.marchSpeed || 0),
       troops: gd.troops, troopType: tpl.troopType,
+      skillId, skillLv,
     }))
 
     // 战斗种子：由存档种子 + 行军 ID + 目标坐标确定 —— 同存档同输入必同结果（回放/离线一致）
@@ -803,13 +881,15 @@ export class GameState extends Emitter {
       defStart: r.defStart, defLossTotal: r.defLoss,
       our: r.units.atk.map(u => {
         const g = gens.find(g => g.id === u.key)
-        return unitCard(u, g, { atk: effAtk(g), def: effDef(g), spd: effSpd(g), int: effInt(g) },
+        return unitCard(u, g, this.effStats(g),
           g.quality, g.lv, g.troopType, g.skillId)
       }),
       foe: r.units.def.map(u => {
-        const { gd, tpl } = guardDefs.find(x => `${x.gd.id}:${x.i}` === u.key)
+        const { gd, tpl, skillId } = guardDefs.find(x => `${x.gd.id}:${x.i}` === u.key)
         const eff = defUnits.find(d => d.key === u.key)
-        return unitCard(u, tpl, eff, tpl.quality, gd.lv, tpl.troopType, null)
+        // tpl（招募池模板）不存 spd 字段（恒由 calcSpd 现算）：直接读 tpl.spd 会是 undefined
+        // → Math.round 出 NaN → 存档 JSON 序列化后变 null → 战报显示「速null」
+        return unitCard(u, { ...tpl, spd: calcSpd(tpl) }, eff, tpl.quality, gd.lv, tpl.troopType, skillId)
       }),
       rounds: r.rounds,
       tile: { x: t.x, y: t.y, type: typeName, level: t.level },
@@ -935,6 +1015,7 @@ export class GameState extends Emitter {
       freeRecruits: this.freeRecruits,
       firstRecruitDone: this._firstRecruitDone,
       autoJadeCommon: !!this.autoJadeCommon,
+      autoJadeEquipCommon: !!this.autoJadeEquipCommon,
       skills: this.skills.slice(),
       skillLevels: { ...this.skillLevels },
       equipments: this.equipments.map(e => ({ ...e })),
@@ -989,6 +1070,8 @@ export class GameState extends Emitter {
     )
     // v9+ 招募开关：旧档缺省 false
     gs.autoJadeCommon = data.autoJadeCommon === true
+    // v9+ 抽装备开关：旧档缺省 false
+    gs.autoJadeEquipCommon = data.autoJadeEquipCommon === true
     // v7+ 才有战法仓库；从 v6 迁移的旧档保留构造时随机发的 3 个（data.skills 缺省）
     if (data.skills) gs.skills = data.skills.slice()
     // v8+ 才有战法等级；v6/v7 旧档缺省 {}，所有战法默认 Lv.1

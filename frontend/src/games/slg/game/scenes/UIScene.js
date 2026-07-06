@@ -10,7 +10,7 @@ import {
   BUILDINGS, BUILDING_MAX_LEVEL, buildingUpgradeCost,
   GRANARY_YIELD_PER_LEVEL, BARRACKS_CAP_PER_LEVEL, TRAINING_EXP_PER_LEVEL, FORGE_STAT_PER_LEVEL,
   STAMINA_MAX, MARCH_STAMINA_COST, STAMINA_REGEN_PER_HOUR,
-  GENERAL_QUALITY, MAX_GENERALS, RECRUIT_COST_COIN, AWAKEN_ATK, calcSpd,
+  GENERAL_QUALITY, MAX_GENERALS, RECRUIT_COST_COIN, AWAKEN_ATK, AWAKEN_DEF, AWAKEN_INT,
   TROOP_TYPES, counterMult, findGeneralTemplate, guardStat, MAX_MARCH_PARTY,
   SKILL_MAX_LEVEL,
   EQUIP_TYPES, EQUIP_QUALITY, EQUIP_MAX_LEVEL, EQUIP_DRAW_COST, EQUIP_DISMISS_JADE,
@@ -333,7 +333,7 @@ export class UIScene extends Phaser.Scene {
     if (!isDefenderPanel) {
       c.add(this.add.text(-w / 2 + 12, -h / 2 + 38, info, style(12, '#dddddd')).setOrigin(0, 0))
     } else {
-      // 守将面板：每队一行（基础信息 + 武/统/速/智），末尾一行收益与相邻提示
+      // 守将面板：每队一行（基础信息 + 武/防/速/智），末尾一行收益与相邻提示
       const teams = t.guards || []
       const rowH = 20
       const startY = -h / 2 + 36
@@ -350,12 +350,10 @@ export class UIScene extends Phaser.Scene {
             const q = tpl.quality
             const atk = Math.round(guardStat(tpl.atk, gd.lv, q))
             const def = Math.round(guardStat(tpl.def, gd.lv, q))
+            const spd = Math.round(guardStat(tpl.spd, gd.lv, q))
             const int = Math.round(guardStat(tpl.int, gd.lv, q))
-            const pol = Math.round(guardStat(tpl.pol, gd.lv, q))
-            const cha = Math.round(guardStat(tpl.cha, gd.lv, q))
-            const spd = Math.round(calcSpd({ atk, def, int, pol, cha }))
             c.add(this.add.text(-w / 2 + 12, y,
-              `守将 ${icon}${tpl.name} Lv.${gd.lv} ×${fmt(gd.troops)}（武${atk} · 统${def} · 速${spd} · 智${int}）`,
+              `守将 ${icon}${tpl.name} Lv.${gd.lv} ×${fmt(gd.troops)}（武${atk} · 防${def} · 速${spd} · 智${int}）`,
               style(12, '#dddddd')).setOrigin(0, 0))
           }
         })
@@ -413,7 +411,6 @@ export class UIScene extends Phaser.Scene {
 
   _openModal(w, h, build) {
     this._closeModal()
-    this._closeTilePanel()   // 打开新模态弹窗时关闭土地面板
     const sw = this.scale.width, sh = this.scale.height
     const root = this.add.container(0, 0).setDepth(DEPTH.modal)
     const dim = this.add.rectangle(0, 0, sw, sh, 0x000000, 0.55).setOrigin(0)
@@ -511,9 +508,7 @@ export class UIScene extends Phaser.Scene {
 
   // ── 弹窗：选择出征武将（可多选合击）──────────────────────────────────────
 
-  _openMarchSelect(keepPick = false, target = null) {
-    const sel = target || this.sel
-    if (!sel) return
+  _openMarchSelect(keepPick = false) {
     if (!keepPick) this._marchPick = new Set()
     const pick = this._marchPick
     const gens = this.state.generals
@@ -534,7 +529,7 @@ export class UIScene extends Phaser.Scene {
           if (picked) pick.delete(g.id)
           else if (pick.size >= MAX_MARCH_PARTY) { this._toast(`最多同时出征 ${MAX_MARCH_PARTY} 队`, COLOR.toastWarn); return }
           else pick.add(g.id)
-          this._openMarchSelect(true, sel)   // 重建刷新勾选态
+          this._openMarchSelect(true)   // 重建刷新勾选态
         })
         if (picked) {
           const hl = this.add.graphics()
@@ -547,7 +542,7 @@ export class UIScene extends Phaser.Scene {
           `${gt ? gt.icon : ''}${g.name}  Lv.${g.lv}`,
           style(14, enabled ? '#ffffff' : '#888888', true)).setOrigin(0, 0.5))
         // 对本目标守军的克制关系（以第一支有兵守将队伍的兵种为准）
-        const selTile = this.state.tileAt(sel.x, sel.y)
+        const selTile = this.state.tileAt(this.sel.x, this.sel.y)
         const aliveGuard = selTile?.guards?.find(gd => gd.troops > 0) || selTile?.guards?.[0]
         const defType = aliveGuard ? findGeneralTemplate(aliveGuard.id)?.troopType : selTile?.garrisonType
         const mult = counterMult(g.troopType, defType)
@@ -575,15 +570,15 @@ export class UIScene extends Phaser.Scene {
       const picked = gens.filter(g => pick.has(g.id))
       const total = picked.reduce((s, g) => s + g.troops, 0)
       let summary = '未选择武将'
-      if (picked.length) {
-        const est = this.state.estimateMarch(picked.map(g => g.id), sel.x, sel.y)
+      if (picked.length && this.sel) {
+        const est = this.state.estimateMarch(picked.map(g => g.id), this.sel.x, this.sel.y)
         const eta = est.gameSeconds / TIME_SCALE   // 真实秒
         summary = `已选 ${picked.length} 队 · 共 ${total} 兵 · ${est.steps} 格 · 单程约 ${Math.floor(eta / 60)}:${String(Math.floor(eta % 60)).padStart(2, '0')}`
       }
       panel.add(this.add.text(0, h / 2 - 58, summary, style(12, '#bbbbbb')).setOrigin(0.5))
       panel.add(this._button(0, h / 2 - 26, 150, 32, '⚔️ 出征', COLOR.btnRed,
         picked.length > 0, () => {
-          const err = this.state.march([...pick], sel.x, sel.y)
+          const err = this.state.march([...pick], this.sel.x, this.sel.y)
           if (err) this._toast(err, COLOR.toastWarn)
           else { this._closeModal(); this._refreshTilePanel() }
         }))
@@ -781,8 +776,17 @@ export class UIScene extends Phaser.Scene {
       panel.add(this.add.text(-w / 2 + 60, -h / 2 + 16,
         `${gens.length}/${MAX_GENERALS}`, style(11, '#9e9e9e')).setOrigin(0, 0))
       // 招募入口（抽装备入口已移至「装备仓库」面板右上角）
-      panel.add(this._button(w / 2 - 52, -h / 2 + 23, 92, 28, '🎲 招募', COLOR.btnAmber, true,
+      panel.add(this._button(w / 2 - 102, -h / 2 + 23, 86, 28, '🎲 招募', COLOR.btnAmber, true,
         () => { this._recruitResult = null; this._openRecruit() }))
+      // 一键补满按钮
+      const canRecruitAll = gens.some(g => g.state === 'idle' && g.troops < this.state.troopCap(g))
+      panel.add(this._button(w / 2 - 12, -h / 2 + 23, 86, 28, '一键补满', COLOR.btnGreen, canRecruitAll,
+        () => {
+          const r = this.state.recruitAll()
+          if (r.lacked) { this._toast(r.lacked, COLOR.toastWarn); return }
+          this._toast(`已一键补满 ${r.recruited} 兵力`, COLOR.toastOk)
+          this._openGenerals()
+        }))
 
       const content = this._makeScrollRegion(
         sw / 2 - w / 2 + 10, sh / 2 - h / 2 + headerH, w - 20, listVH, gens.length * rowH)
@@ -846,10 +850,10 @@ export class UIScene extends Phaser.Scene {
         row.add(this.add.text(infoLeft + 136, -half / 2 + 12,
           qName, style(10, qColor, true)).setOrigin(0.5, 0.5))
 
-        // ── 中上：五维属性（武/统/智/速 + 兵力）──
+        // ── 中上：五维属性（武/防/智/速 + 兵力）──
         const statY = -half / 2 + 32
         row.add(this.add.text(infoLeft, statY,
-          `武${Math.round(g.atk)}  统${Math.round(g.def)}  智${Math.round(g.int)}  速${Math.round(g.spd)}`,
+          `武${Math.round(g.atk)}  防${Math.round(g.def)}  智${Math.round(g.int)}  速${Math.round(g.spd)}`,
           style(11, '#e8e8e8')).setOrigin(0, 0.5))
         row.add(this.add.text(infoLeft + infoW, statY,
           `兵力 ${g.troops}/${cap}`, style(10, '#cccccc', true)).setOrigin(1, 0.5))
@@ -898,10 +902,8 @@ export class UIScene extends Phaser.Scene {
           }))
       })
       const rc = getRecruitCostPerTroop(this.state.cityLv)
-      const costText = rc.iron > 0
-        ? `征兵 ${rc.grain}粮${rc.iron}铁${rc.wood}木/兵 · 出征耗 ${MARCH_STAMINA_COST} 体力（每分钟回 ${STAMINA_REGEN_PER_HOUR}）`
-        : `征兵 ${rc.grain}粮/兵 · 出征耗 ${MARCH_STAMINA_COST} 体力（每分钟回 ${STAMINA_REGEN_PER_HOUR}）`
-      panel.add(this.add.text(0, h / 2 - 16, costText,
+      panel.add(this.add.text(0, -h / 2 + 58,
+        `征兵 ${rc.grain}粮${rc.iron}铁${rc.wood}木/兵 · 出征耗 ${MARCH_STAMINA_COST} 体力（每分钟回 ${STAMINA_REGEN_PER_HOUR}）`,
         style(10, '#9e9e9e')).setOrigin(0.5))
     })
   }
@@ -953,11 +955,11 @@ export class UIScene extends Phaser.Scene {
           { ...style(12, '#ff8a65'), align: 'center' }).setOrigin(0.5))
       } else if (free) {
         panel.add(this.add.text(0, resY,
-          `剩余 ${this.state.freeRecruits} 次免费招募机会\n重复武将转为觉醒（五维 +${AWAKEN_ATK} ×品质成长）`,
+          `剩余 ${this.state.freeRecruits} 次免费招募机会\n重复武将转为觉醒（武+${AWAKEN_ATK} 防+${AWAKEN_DEF} 智+${AWAKEN_INT} ×品质成长；速度随五维提升）`,
           { ...style(12, '#ffd54f'), align: 'center' }).setOrigin(0.5))
       } else {
         panel.add(this.add.text(0, resY,
-          `消耗 ${RESOURCES.coin.icon}${RECRUIT_COST_COIN} 招募一名武将\n重复武将转为觉醒（五维 +${AWAKEN_ATK} ×品质成长）`,
+          `消耗 ${RESOURCES.coin.icon}${RECRUIT_COST_COIN} 招募一名武将\n重复武将转为觉醒（武+${AWAKEN_ATK} 防+${AWAKEN_DEF} 智+${AWAKEN_INT} ×品质成长；速度随五维提升）`,
           { ...style(12, '#9e9e9e'), align: 'center' }).setOrigin(0.5))
       }
 
@@ -981,39 +983,60 @@ export class UIScene extends Phaser.Scene {
   // ── 弹窗：抽装备 ─────────────────────────────────────────────────────────
 
   _openEquipDraw() {
-    const w = Math.min(this.scale.width - 24, 360), h = 250
+    const w = Math.min(this.scale.width - 24, 360), h = 280
     this._openModal(w, h, (panel) => {
       panel.add(this.add.text(0, -h / 2 + 16, '✨ 抽装备', style(16, '#ffffff', true)).setOrigin(0.5, 0))
-      panel.add(this.add.text(0, -h / 2 + 48,
+      panel.add(this.add.text(0, -h / 2 + 44,
         `单次消耗 ${RESOURCES.coin.icon}${EQUIP_DRAW_COST} · 当前 ${RESOURCES.coin.icon}${Math.floor(this.state.res.coin)}`,
         style(12, '#ffd54f')).setOrigin(0.5, 0))
-      panel.add(this.add.text(0, -h / 2 + 76,
+      panel.add(this.add.text(0, -h / 2 + 64,
         '品质概率与武将招募一致（普通 50% / 精良 30% / 精锐 15% / 王牌 5%）',
         style(10, '#9e9e9e')).setOrigin(0.5, 0))
-      panel.add(this.add.text(0, -h / 2 + 96,
-        '随机类型（6 种）× 随机主属性（武/统/智/速）',
+      panel.add(this.add.text(0, -h / 2 + 80,
+        '随机类型（6 种）× 随机主属性（武/防/智/速）',
         style(10, '#9e9e9e')).setOrigin(0.5, 0))
 
+      // 自动转换玉石开关（普通/精良装备 → 玉石）
+      const autoJade = !!this.state.autoJadeEquipCommon
+      panel.add(this._button(0, -h / 2 + 106, 280, 26,
+        `💎 自动转换 普通/精良 → 玉石：${autoJade ? '开启' : '关闭'}`,
+        autoJade ? COLOR.btnAmber : COLOR.btnGrey, true, () => {
+          this.state.autoJadeEquipCommon = !this.state.autoJadeEquipCommon
+          this.state.save()
+          this._openEquipDraw()
+        }))
+
       const canAfford = this.state.res.coin >= EQUIP_DRAW_COST
-      panel.add(this._button(0, h / 2 - 58, 200, 36,
+      panel.add(this._button(0, h / 2 - 68, 200, 36,
         `抽装备（${RESOURCES.coin.icon}${EQUIP_DRAW_COST}）`, COLOR.btnAmber, canAfford, () => {
           const r = this.state.drawEquipment()
           if (r.error) { this._toast(r.error, COLOR.toastWarn); return }
-          this._equipDrawResult = r.eq
+          this._equipDrawResult = r.type === 'jade'
+            ? { type: 'jade', jade: r.jade, name: r.name, quality: r.quality }
+            : { type: 'eq', ...r.eq }
           this._openEquipDraw()   // 重建以显示结果
         }))
 
       // 显示上次抽取结果
       if (this._equipDrawResult) {
-        const eq = this._equipDrawResult
-        const qColor = EQUIP_QUALITY[eq.quality].color
-        panel.add(this.add.text(0, 0,
-          `✨ 抽得【${equipName(eq)}】`, style(15, qColor, true)).setOrigin(0.5, 0.5))
-        panel.add(this.add.text(0, 26,
-          equipDesc(eq), style(12, '#ffffff')).setOrigin(0.5, 0.5))
+        const res = this._equipDrawResult
+        if (res.type === 'jade') {
+          const qColor = EQUIP_QUALITY[res.quality].color
+          panel.add(this.add.text(0, 10,
+            '💎 已转化为玉石', style(15, '#ffd54f', true)).setOrigin(0.5, 0.5))
+          panel.add(this.add.text(0, 36,
+            `${res.name} → +${res.jade} 玉石`, style(12, qColor)).setOrigin(0.5, 0.5))
+        } else {
+          const eq = res
+          const qColor = EQUIP_QUALITY[eq.quality].color
+          panel.add(this.add.text(0, 10,
+            `✨ 抽得【${equipName(eq)}】`, style(15, qColor, true)).setOrigin(0.5, 0.5))
+          panel.add(this.add.text(0, 36,
+            equipDesc(eq), style(12, '#ffffff')).setOrigin(0.5, 0.5))
+        }
       }
 
-      panel.add(this._button(0, h / 2 - 20, 120, 28, '返回仓库', COLOR.btnGrey, true, () => {
+      panel.add(this._button(0, h / 2 - 26, 120, 28, '返回仓库', COLOR.btnGrey, true, () => {
         this._equipDrawResult = null
         this._openEquipWarehouse()
       }))
@@ -1036,7 +1059,7 @@ export class UIScene extends Phaser.Scene {
       panel.add(this.add.text(-w / 2 + 14, -h / 2 + 14,
         `📜 ${g.name} 装备`, style(15, '#ffffff', true)).setOrigin(0, 0))
       panel.add(this.add.text(-w / 2 + 110, -h / 2 + 16,
-        `武${Math.round(g.atk)} 统${Math.round(g.def)} 智${Math.round(g.int)} 速${Math.round(g.spd)}`,
+        `武${Math.round(g.atk)} 防${Math.round(g.def)} 智${Math.round(g.int)} 速${Math.round(g.spd)}`,
         style(11, '#9e9e9e')).setOrigin(0, 0))
 
       const content = this._makeScrollRegion(
@@ -1365,13 +1388,13 @@ export class UIScene extends Phaser.Scene {
       const q = GENERAL_QUALITY[b.enemy.quality] || GENERAL_QUALITY.common
       const ti = TROOP_TYPES[b.enemy.troopType]
       const troopName = ti ? `${ti.icon} ` : ''
-      // 敌将卡：第一行 名称+兵种+等级（品质色）；第二行 武/统/速/智（含等级加成）。
+      // 敌将卡：第一行 名称+兵种+等级（品质色）；第二行 武/防/速/智（含等级加成）。
       // 先手/胜负不再在此重复（先手见下方准备回合，胜负见右上角总结）。
       rows.push({ x: 0, y: y + 2,
         text: `第${bi + 1}阵  ${troopName}${b.enemy.name} Lv.${b.enemy.lv}`,
         size: 12, color: q.color, bold: true, origin: 0 })
       rows.push({ x: 10, y: y + 20,
-        text: `武${b.enemy.atk ?? '?'} · 统${b.enemy.def ?? '?'} · 速${b.enemy.spd ?? '?'} · 智${b.enemy.int ?? '?'}`,
+        text: `武${b.enemy.atk ?? '?'} · 防${b.enemy.def ?? '?'} · 速${b.enemy.spd ?? '?'} · 智${b.enemy.int ?? '?'}`,
         size: 10, color: '#9e9e9e', origin: 0 })
       y += 40
       // 准备回合：双方「属性（基础/卡面口径）」→「实战（叠加等级/铁匠坊/克制/骑兵先手后）」+ 先手判定
@@ -1381,10 +1404,10 @@ export class UIScene extends Phaser.Scene {
         const sv = (base, eff) => base === eff ? `${base}` : `${base}→${eff}`
         rows.push({ x: 10, y, text: '【准备回合】', size: 11, color: '#ffd54f', bold: true, origin: 0 })
         y += 15
-        rows.push({ x: 16, y, text: `我方  武${sv(p.our.atk, p.our.atkEff)} 统${sv(p.our.def, p.our.defEff)} 速${sv(p.our.spd, p.our.spdEff)} 智${sv(p.our.int ?? '?', p.our.intEff ?? p.our.int ?? '?')} · 兵${p.our.troops}`,
+        rows.push({ x: 16, y, text: `我方  武${sv(p.our.atk, p.our.atkEff)} 防${sv(p.our.def, p.our.defEff)} 速${sv(p.our.spd, p.our.spdEff)} 智${sv(p.our.int ?? '?', p.our.intEff ?? p.our.int ?? '?')} · 兵${p.our.troops}`,
           size: 10, color: '#a5d6a7', origin: 0 })
         y += 15
-        rows.push({ x: 16, y, text: `守军  武${sv(p.foe.atk, p.foe.atkEff)} 统${sv(p.foe.def, p.foe.defEff)} 速${sv(p.foe.spd, p.foe.spdEff)} 智${p.foe.int ?? '?'} · 兵${p.foe.troops}`,
+        rows.push({ x: 16, y, text: `守军  武${sv(p.foe.atk, p.foe.atkEff)} 防${sv(p.foe.def, p.foe.defEff)} 速${sv(p.foe.spd, p.foe.spdEff)} 智${p.foe.int ?? '?'} · 兵${p.foe.troops}`,
           size: 10, color: '#ef9a9a', origin: 0 })
         y += 15
         rows.push({ x: 16, y,
@@ -1413,7 +1436,7 @@ export class UIScene extends Phaser.Scene {
             const to = a.striker === 'atk' ? '守军' : '我方'
             rows.push({
               x: 16, y,
-              text: `${from}→${to}  战力${Math.round(a.atkPow)} vs 统${Math.round(a.defPow)}  ×${a.ratio.toFixed(2)} → -${a.loss}`,
+              text: `${from}→${to}  战力${Math.round(a.atkPow)} vs 防${Math.round(a.defPow)}  ×${a.ratio.toFixed(2)} → -${a.loss}`,
               size: 10, color: '#bbbbbb', origin: 0,
             })
             y += 18
@@ -1447,14 +1470,9 @@ export class UIScene extends Phaser.Scene {
         if (u.skillFire) stat.push(`战法${u.skillFire}次`)
         if (u.extra) stat.push(`连击${u.extra}次`)
         if (u.control) stat.push(`控制${u.control}次`)
-        if (u.healed) stat.push(`治疗${u.healed}`)
-        if (u.lifesteal) stat.push(`吸血${u.lifesteal}`)
-        if (u.buffCast) stat.push(`增益${u.buffCast}次`)
-        if (u.debuffCast) stat.push(`减益${u.debuffCast}次`)
-        if (u.conditionMet) stat.push(`残血爆发${u.conditionMet}次`)
         const statTail = stat.length ? ` · ${stat.join(' ')}` : ''
         rows.push({ x: 16, y,
-          text: `武${sv(u.atk, u.atkEff)} 统${sv(u.def, u.defEff)} 速${sv(u.spd, u.spdEff)} 智${sv(u.int, u.intEff)} · 输出${u.dealt} 承伤${u.taken}${statTail}`,
+          text: `武${sv(u.atk, u.atkEff)} 防${sv(u.def, u.defEff)} 速${sv(u.spd, u.spdEff)} 智${sv(u.int, u.intEff)} · 输出${u.dealt} 承伤${u.taken}${statTail}`,
           size: 10, color: '#9e9e9e', origin: 0 })
         y += 17
       })
@@ -1508,24 +1526,19 @@ export class UIScene extends Phaser.Scene {
         const attrName = { atk:'武力', def:'统率', int:'智力', spd:'速度' }[e.attr] || e.attr
         return { indent: 22, color: '#ef9a9a', text: `${e.actor} 受【${e.skillName}】减益 ${attrName}${e.value}%（${e.duration}回合）` }
       }
-      case 'lifesteal': {
-        // 普攻触发的吸血不标战法名；战法触发的吸血标【战法名】
-        const src = e.skill && e.skill !== 'normal_attack' ? `【${e.skillName}】` : ''
-        return { indent: 22, color: '#ef9a9a', text: `${e.actor}${src}吸血 +${e.value}` }
-      }
+      case 'lifesteal':
+        return { indent: 22, color: '#ef9a9a', text: `${e.actor} 吸血 +${e.value}` }
       case 'condition_met':
         return { indent: 22, color: '#ff8a65', text: `${e.actor} 触发【残血爆发】倍率 ×${e.conditionMult}` }
-      case 'dot_damage':
-        return { indent: 22, color: '#ffb74d', text: `${e.actor} 受【${e.statusName}】持续伤害 -${e.value}${e.targetLeft <= 0 ? '（阵亡）' : ''}` }
       case 'damage': {
         // 克制标注（×1.25 克制 / ×0.85 被克）；战力值已含倍率/克制/浮动
         const counterNote = Math.abs((e.counter ?? 1) - 1) > 0.001 ? (e.counter > 1 ? ' 克制' : ' 被克') : ''
-        // 来源标签：普攻直接标「普攻」；战法标【名·兵刃/谋略】——破甲的两次命中靠 dmgType 区分兵刃/谋略
-        const src = e.skill === 'normal_attack' ? '普攻' : `${e.skillName || '战法'}${e.dmgType ? '·' + e.dmgType : ''}`
-        // 显示目标「统」（统率，恒定属性，全局对 def 的统一缩写），不再是随兵力缩水的防御战力（旧档 defPow 兜底）
+        // 标出该次伤害来自「普攻」还是某个战法，避免同一武将的战法伤害与普攻伤害看不出区别
+        const src = e.skill === 'normal_attack' ? '普攻' : (e.skillName || '战法')
+        // 防御显示目标「防御属性」（恒定值），不再是随兵力缩水的防御战力（旧档 defPow 兜底）
         const defShown = e.defStat ?? e.defPow ?? 0
         return { indent: 22, color: mine ? good : bad,
-          text: `[${src}] ${e.actor}→${e.target} 战力${Math.round(e.atkPow)} vs 统${Math.round(defShown)} ×${e.ratio.toFixed(2)}${counterNote} → -${e.value}${e.targetLeft <= 0 ? '（阵亡）' : ''}` }
+          text: `[${src}] ${e.actor}→${e.target} 战力${Math.round(e.atkPow)} vs 防御${Math.round(defShown)} ×${e.ratio.toFixed(2)}${counterNote} → -${e.value}${e.targetLeft <= 0 ? '（阵亡）' : ''}` }
       }
       default:
         return null   // round/action/normal_attack/death/status_remove 不单独成行
