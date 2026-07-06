@@ -305,11 +305,11 @@ export const TILE_GUARDS = {
   1:  { teams: 1, pool: 'basic',  guardLv: 1,  troops: 100  },    // 1队×3将×100  = 300
   2:  { teams: 1, pool: 'basic',  guardLv: 3,  troops: 200  },    // 1×3×200      = 600
   3:  { teams: 1, pool: 'basic',  guardLv: 5,  troops: 400  },    // 1×3×400      = 1200
-  4:  { teams: 1, pool: 'common', guardLv: 8,  troops: 800  },    // 1×3×800      = 2400
-  5:  { teams: 2, pool: 'common', guardLv: 10, troops: 1000 },    // 2×3×1000     = 6000
-  6:  { teams: 2, pool: 'rare', guardLv: 12, troops: 2000 },    // 2×3×2000     = 12000
-  7:  { teams: 2, pool: 'rare', guardLv: 14, troops: 3000 },    // 2×3×3000     = 18000
-  8:  { teams: 2, pool: 'elite',   guardLv: 16, troops: 4000 },    // 2×3×4000     = 24000
+  4:  { teams: 1, pool: 'common', guardLv: 10,  troops: 800  },    // 1×3×800      = 2400
+  5:  { teams: 2, pool: 'common', guardLv: 14, troops: 1000 },    // 2×3×1000     = 6000
+  6:  { teams: 2, pool: 'rare', guardLv: 15, troops: 2000 },    // 2×3×2000     = 12000
+  7:  { teams: 2, pool: 'rare', guardLv: 16, troops: 3000 },    // 2×3×3000     = 18000
+  8:  { teams: 2, pool: 'elite',   guardLv: 17, troops: 4000 },    // 2×3×4000     = 24000
   9:  { teams: 3, pool: 'elite',  guardLv: 18, troops: 4000 },    // 3×3×4000     = 36000
   10: { teams: 3, pool: 'legend', guardLv: 20, troops: 5000 },    // 3×3×5000     = 45000
 }

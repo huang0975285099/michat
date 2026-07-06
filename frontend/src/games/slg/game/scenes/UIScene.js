@@ -1085,7 +1085,7 @@ export class UIScene extends Phaser.Scene {
   // ── 弹窗：招募（抽卡）────────────────────────────────────────────────────
 
   _openRecruit() {
-    const w = Math.min(this.scale.width - 24, 360), h = 300
+    const w = Math.min(this.scale.width - 24, 360), h = 336
     this._openModal(w, h, (panel) => {
       panel.add(this.add.text(0, -h / 2 + 16, '🎲 招募武将', style(16, '#ffffff', true)).setOrigin(0.5, 0))
 
@@ -1105,9 +1105,19 @@ export class UIScene extends Phaser.Scene {
           this._openRecruit()
         }))
 
+      // 自动转换玉石开关（精锐 → 玉石，与上面独立）
+      const autoJadeElite = !!this.state.autoJadeElite
+      panel.add(this._button(0, -h / 2 + 110, 280, 26,
+        `💎 自动转换 精锐 → 玉石：${autoJadeElite ? '开启' : '关闭'}`,
+        autoJadeElite ? COLOR.btnAmber : COLOR.btnGrey, true, () => {
+          this.state.autoJadeElite = !this.state.autoJadeElite
+          this.state.save()
+          this._openRecruit()
+        }))
+
       // 结果显示区
       const res = this._recruitResult
-      const resY = -10
+      const resY = -8
       const free = this.state.freeRecruits > 0
       const full = this.state.generals.length >= MAX_GENERALS
       if (res) {
@@ -1157,7 +1167,7 @@ export class UIScene extends Phaser.Scene {
   // ── 弹窗：抽装备 ─────────────────────────────────────────────────────────
 
   _openEquipDraw() {
-    const w = Math.min(this.scale.width - 24, 360), h = 280
+    const w = Math.min(this.scale.width - 24, 360), h = 320
     this._openModal(w, h, (panel) => {
       panel.add(this.add.text(0, -h / 2 + 16, '✨ 抽装备', style(16, '#ffffff', true)).setOrigin(0.5, 0))
       panel.add(this.add.text(0, -h / 2 + 44,
@@ -1176,6 +1186,16 @@ export class UIScene extends Phaser.Scene {
         `💎 自动转换 普通/精良 → 玉石：${autoJade ? '开启' : '关闭'}`,
         autoJade ? COLOR.btnAmber : COLOR.btnGrey, true, () => {
           this.state.autoJadeEquipCommon = !this.state.autoJadeEquipCommon
+          this.state.save()
+          this._openEquipDraw()
+        }))
+
+      // 自动转换玉石开关（精锐装备 → 玉石，与上面独立）
+      const autoJadeElite = !!this.state.autoJadeEquipElite
+      panel.add(this._button(0, -h / 2 + 138, 280, 26,
+        `💎 自动转换 精锐 → 玉石：${autoJadeElite ? '开启' : '关闭'}`,
+        autoJadeElite ? COLOR.btnAmber : COLOR.btnGrey, true, () => {
+          this.state.autoJadeEquipElite = !this.state.autoJadeEquipElite
           this.state.save()
           this._openEquipDraw()
         }))

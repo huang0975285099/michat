@@ -14,16 +14,22 @@ function weightedPick(rng, items) {
   return items[items.length - 1][0]
 }
 
-/** 根据距中心距离决定地块等级：外圈低级、中心高级，形成 SLG 扩张节奏。
- *  整体档位比初版上移约 2 级，让 5~7 级地成为中圈主力，出生点附近也能较快遇到中级地。 */
+// 城池核心区半径占比：0~CITY_BELT_RATIO 的圆盘专属 1~5 级 NPC 城池（见步骤 4），
+// 地块等级（步骤 3）的距离判定从这个半径往外重新计算 0~1，让「10 级地」紧贴着城池核心区
+// 外沿开始，一路降到地图边缘（出生点附近）1 级，城池与地块形成一条连续的强度梯度。
+const CITY_BELT_RATIO = 0.25
+
+/** 根据（城池核心区外）距中心距离决定地块等级：外圈低级、内圈高级，形成 SLG 扩张节奏。
+ *  整体档位比初版上移约 2 级，让 5~7 级地成为中圈主力，出生点附近也能较快遇到中级地。
+ *  最内两档权重经模拟调过：9~10 级地占全部地块约 10%（原先约 4.5%），其余档位基本不变。 */
 function pickLevelByDist(rng, ratio) {
-  // ratio ∈ [0, 1]，0 为地图中心，1 为边角。整体档位上移，5~7 级在中圈大量出现。
+  // ratio ∈ [0, 1]，0 为城池核心区外沿，1 为地图边角。整体档位上移，5~7 级在中圈大量出现。
   if (ratio > 0.75) return weightedPick(rng, [[1, 10], [2, 30], [3, 35], [4, 20], [5, 5]])
   if (ratio > 0.60) return weightedPick(rng, [[2, 10], [3, 30], [4, 35], [5, 20], [6, 5]])
   if (ratio > 0.45) return weightedPick(rng, [[3, 10], [4, 25], [5, 40], [6, 20], [7, 5]])
   if (ratio > 0.30) return weightedPick(rng, [[4, 10], [5, 30], [6, 40], [7, 15], [8, 5]])
-  if (ratio > 0.15) return weightedPick(rng, [[5, 10], [6, 35], [7, 40], [8, 12], [9, 3]])
-  return weightedPick(rng, [[6, 10], [7, 30], [8, 40], [9, 15], [10, 5]])
+  if (ratio > 0.15) return weightedPick(rng, [[5, 9], [6, 28], [7, 36], [8, 17], [9, 10]])
+  return weightedPick(rng, [[6, 7], [7, 20], [8, 30], [9, 25], [10, 18]])
 }
 
 // mulberry32：轻量确定性 PRNG
@@ -40,8 +46,10 @@ export function mulberry32(seed) {
 /**
  * 生成地图。返回二维数组 tiles[y][x] = { x, y, type, level, garrison, guards, owner }
  * - 类型：随机播种 + 两轮多数平滑，形成地貌团块；铜矿地在平滑后散点铺设
- * - 等级：按距中心距离分带随机分布，外圈低级、中心高级（出生点周边另行降级）
- * - NPC 城池：中内圈随机放置 15 座，按 NPC_CITY_LEVEL_COUNTS 分配 1~5 级（弱到强梯度）
+ * - NPC 城池：正中心 0~25% 半径圆盘内放置 15 座，按 NPC_CITY_LEVEL_COUNTS 分配 1~5 级
+ *   （越靠中心越强，中心即最强的 5 级城）
+ * - 地块等级：城池核心区外沿起、按距中心距离分带随机分布，紧邻核心区最高（10 级），
+ *   一路降到地图边缘最低（1 级），与城池梯度首尾相接（出生点周边另行降级）
  * - 玩家出生点：外圈的平原，保证周边可通行
  * - 守将：每块可通行地块按 TILE_GUARDS 规格指派 1~2 支守将队伍（种子确定）
  */
@@ -117,7 +125,9 @@ export function generateMap(seed) {
     }
   }
 
-  // 3) 等级：按到中心距离分带随机分布，外圈低级、中心高级，形成 SLG 扩张节奏。
+  // 3) 等级：按到中心距离分带随机分布，外圈低级、内圈高级，形成 SLG 扩张节奏。
+  //    距离判定从城池核心区（0~CITY_BELT_RATIO，见步骤 4）外沿开始重新计算 0~1，
+  //    让「10 级地」紧贴城池群外沿起步，与城池梯度首尾相接，不与核心区重叠。
   //    出生点周边会在步骤 5 进一步降级，保证开局必有可攻打的弱地。
   const tiles = []
   for (let y = 0; y < MAP_H; y++) {
@@ -125,7 +135,9 @@ export function generateMap(seed) {
     for (let x = 0; x < MAP_W; x++) {
       const type = grid[y][x]
       const dist = Math.hypot(x - cx, y - cy)
-      const level = pickLevelByDist(rng, dist / maxDist)
+      const rawRatio = dist / maxDist
+      const landRatio = Math.max(0, Math.min(1, (rawRatio - CITY_BELT_RATIO) / (1 - CITY_BELT_RATIO)))
+      const level = pickLevelByDist(rng, landRatio)
       row.push({
         x, y, type, level,
         garrison: TILE_TYPES[type].passable ? garrisonOf(level, type) : 0,
@@ -137,10 +149,12 @@ export function generateMap(seed) {
     tiles.push(row)
   }
 
-  // 4) NPC 城池：距中心 20%~55% 半径、彼此至少 6 格（15 座城池比旧版 8 座更密，8 格间距实测
-  //    ~40% 地图放不满，缩到 6 格 + 更高的尝试上限后 300 个种子样本 100% 放满 15 座）。
+  // 4) NPC 城池：挤在地图正中心的 0~CITY_BELT_RATIO(25%) 半径圆盘内、彼此至少 2.5 格
+  //    （核心区面积比旧版 20%~55% 环带小得多，间距从 6 格收紧到 2.5 格 + sqrt 面积均匀采样，
+  //    实测 500 个种子样本 100% 放满 15 座；间距 3 起就开始偶发放不满）。
   //    等级按 NPC_CITY_LEVEL_COUNTS 生成升序队列（1 级最多 → 5 级最少），
-  //    放置后按距中心距离从远到近分配等级：越远越弱、越近越强，形成向中心推进的节奏。
+  //    放置后按距中心距离从远到近分配等级：越远越弱、越近越强，中心正是最强的 5 级城，
+  //    与步骤 3 的地块梯度首尾相接（核心区外沿=10级地，地图边缘=1级地）。
   const cityLevels = []
   for (const [lv, count] of Object.entries(NPC_CITY_LEVEL_COUNTS)) {
     for (let i = 0; i < count; i++) cityLevels.push(Number(lv))
@@ -149,13 +163,14 @@ export function generateMap(seed) {
 
   const cityCandidates = []
   let guard = 0
-  while (cityCandidates.length < cityLevels.length && guard++ < 3000) {
+  while (cityCandidates.length < cityLevels.length && guard++ < 6000) {
     const ang = rng() * Math.PI * 2
-    const r = (0.2 + rng() * 0.35) * maxDist
+    // sqrt(rng()) 让半径在圆盘内按面积均匀采样（而非线性偏向圆心），提升 15 座城池的放置成功率
+    const r = Math.sqrt(rng()) * CITY_BELT_RATIO * maxDist
     const x = Math.round(cx + Math.cos(ang) * r)
     const y = Math.round(cy + Math.sin(ang) * r)
     if (x < 1 || y < 1 || x >= MAP_W - 1 || y >= MAP_H - 1) continue
-    if (cityCandidates.some(c => Math.hypot(c.x - x, c.y - y) < 6)) continue
+    if (cityCandidates.some(c => Math.hypot(c.x - x, c.y - y) < 2.5)) continue
     const t = tiles[y][x]
     // 城池不能压在山地、湖泊、铜矿上，避免视觉异常与战略位置不合理
     if (!TILE_TYPES[t.type].passable || t.type === 'mountain' || t.type === 'lake' || t.type === 'copper') continue

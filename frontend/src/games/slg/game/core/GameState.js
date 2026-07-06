@@ -78,10 +78,11 @@ export class GameState extends Emitter {
     this.skillLevels = {}      // 战法等级：{ skillId: level }，缺省=1。等级跟战法走、不跟武将走
     this.equipments = []       // 装备仓库：所有装备实例数组（绑定关系存在各武将 g.equip.{type} iid 上）
     this._equipSeq = 0         // 装备实例 iid 自增序号
-    this.freeRecruits = FREE_RECRUIT_COUNT   // 开局赠送的免费招募次数（不占铜币）
-    this._firstRecruitDone = false   // 首次招募必出王牌（Legend），之后按正常概率
+    this.freeRecruits = FREE_RECRUIT_COUNT   // 开局赠送的免费招募次数（不占铜币），每次必出王牌（Legend）
     this.autoJadeCommon = false  // 招募开关：开启后抽到的普通/精良武将自动转换为玉石，不入列也不觉醒
+    this.autoJadeElite = false   // 招募开关：开启后抽到的精锐武将自动转换为玉石，与上面独立开关
     this.autoJadeEquipCommon = false  // 抽装备开关：开启后抽到的普通/精良装备自动转换为玉石，不入仓库
+    this.autoJadeEquipElite = false   // 抽装备开关：开启后抽到的精锐装备自动转换为玉石，与上面独立开关
     this.marches = []          // { id, generalIds:[], from, to, departAt, arriveAt, phase:'out'|'back' }
     this.formations = []       // 玩家编队预设：{ id, name, generalIds:[id...] }（1~3 名武将，模板不锁武将）
     this._formationSeq = 1     // 编队 id 自增序号
@@ -109,7 +110,10 @@ export class GameState extends Emitter {
   // 解绑/销毁武将后战法自动回到可用池（仍在仓库里）。
 
   _grantStarterSkills(n) {
-    const pool = BINDABLE_SKILLS.map(s => s.id)
+    // 开局起手战法只发 S 档，让新玩家一上来就摸到强力战法；S 档不够 n 个时（理论不会发生，
+    // 目前 S 档有 6 个）退回全档池兜底，避免游戏内容变动后这里静默发出更少的战法。
+    const sTier = BINDABLE_SKILLS.filter(s => s.tier === 'S').map(s => s.id)
+    const pool = sTier.length >= n ? sTier : BINDABLE_SKILLS.map(s => s.id)
     for (let i = pool.length - 1; i > 0; i--) {   // Fisher-Yates
       const j = Math.floor(Math.random() * (i + 1));[pool[i], pool[j]] = [pool[j], pool[i]]
     }
@@ -196,8 +200,10 @@ export class GameState extends Emitter {
     this.res.coin -= EQUIP_DRAW_COST
     const rolled = rollEquipment()
 
-    // 需求：自动转换玉石开关——开启后普通/精良装备直接转为玉石，不入仓库
-    if (this.autoJadeEquipCommon && (rolled.quality === 'common' || rolled.quality === 'rare')) {
+    // 需求：自动转换玉石开关——开启后普通/精良装备直接转为玉石，不入仓库；
+    // 精锐装备由独立开关 autoJadeEquipElite 控制，两个开关互不影响
+    if ((this.autoJadeEquipCommon && (rolled.quality === 'common' || rolled.quality === 'rare')) ||
+        (this.autoJadeEquipElite && rolled.quality === 'elite')) {
       const jade = EQUIP_DISMISS_JADE[rolled.quality] ?? 0
       this.res.jade = (this.res.jade || 0) + jade
       const name = equipName({ type: rolled.type, quality: rolled.quality, attr: rolled.attr, level: 1 })
@@ -606,17 +612,18 @@ export class GameState extends Emitter {
     if (free) this.freeRecruits--
     else this.res.coin -= RECRUIT_COST_COIN
 
-    // 首次招募必出王牌（Legend），之后按正常概率抽取
-    const quality = this._firstRecruitDone ? this._rollQuality() : 'legend'
-    this._firstRecruitDone = true
+    // 免费招募次数内必出王牌（Legend），免费次数用完后按正常概率抽取
+    const quality = free ? 'legend' : this._rollQuality()
     const pool = RECRUITABLE_GENERALS.filter(g => g.quality === quality)
     // 该档无可招募武将则退回普通档兜底
     const tpl = (pool.length ? pool : RECRUITABLE_GENERALS)[
       Math.floor(Math.random() * (pool.length ? pool.length : RECRUITABLE_GENERALS.length))]
 
     let result
-    // 需求 1：自动转换玉石开关——开启后普通/精良武将直接转为玉石，不入列也不觉醒
-    if (this.autoJadeCommon && (quality === 'common' || quality === 'rare')) {
+    // 需求 1：自动转换玉石开关——开启后普通/精良武将直接转为玉石，不入列也不觉醒；
+    // 精锐武将由独立开关 autoJadeElite 控制，两个开关互不影响
+    if ((this.autoJadeCommon && (quality === 'common' || quality === 'rare')) ||
+        (this.autoJadeElite && quality === 'elite')) {
       const jade = DISMISS_JADE[quality] ?? 1
       this.res.jade = (this.res.jade || 0) + jade
       this._pushLog(`💎 ${tpl.name}（${GENERAL_QUALITY[quality].name}）自动转换为 ${jade} 玉石`)
@@ -1204,12 +1211,13 @@ export class GameState extends Emitter {
       }
     }
     const data = {
-      v: 11, seed: this.seed, savedAt: Date.now(), now: this.now,
+      v: 12, seed: this.seed, savedAt: Date.now(), now: this.now,
       res: this.res, cityLv: this.cityLv,
       freeRecruits: this.freeRecruits,
-      firstRecruitDone: this._firstRecruitDone,
       autoJadeCommon: !!this.autoJadeCommon,
+      autoJadeElite: !!this.autoJadeElite,
       autoJadeEquipCommon: !!this.autoJadeEquipCommon,
+      autoJadeEquipElite: !!this.autoJadeEquipElite,
       skills: this.skills.slice(),
       skillLevels: { ...this.skillLevels },
       equipments: this.equipments.map(e => ({ ...e })),
@@ -1263,14 +1271,14 @@ export class GameState extends Emitter {
     gs.buildings = { ...gs.buildings, ...(data.buildings || {}) }
     // v4+ 才有免费招募次数；v1~v3 旧存档已获得过起手三武将，不再补送
     gs.freeRecruits = data.v >= 4 ? (data.freeRecruits ?? 0) : 0
-    // 旧档无此字段：只要已经招募过（免费次数已用或已有招募武将）就视为首抽已完成，避免老玩家意外补发王牌
-    gs._firstRecruitDone = data.firstRecruitDone ?? (
-      (data.generals?.length ?? 0) > 0 || (data.freeRecruits ?? FREE_RECRUIT_COUNT) < FREE_RECRUIT_COUNT
-    )
     // v9+ 招募开关：旧档缺省 false
     gs.autoJadeCommon = data.autoJadeCommon === true
+    // v12+ 精锐招募开关：旧档缺省 false
+    gs.autoJadeElite = data.autoJadeElite === true
     // v9+ 抽装备开关：旧档缺省 false
     gs.autoJadeEquipCommon = data.autoJadeEquipCommon === true
+    // v12+ 精锐抽装备开关：旧档缺省 false
+    gs.autoJadeEquipElite = data.autoJadeEquipElite === true
     // v7+ 才有战法仓库；从 v6 迁移的旧档保留构造时随机发的 3 个（data.skills 缺省）
     if (data.skills) gs.skills = data.skills.slice()
     // v8+ 才有战法等级；v6/v7 旧档缺省 {}，所有战法默认 Lv.1
