@@ -112,6 +112,7 @@ type Hub struct {
 	messageReadSvc *service.MessageReadService
 	pushSvc        *service.PushService                 // 可为 nil（未配置时禁用推送）
 	ironFistSvc    *service.IronFistService             // 可为 nil（PVP 大厅禁用）
+	slgSvc         *service.SlgService                  // 可为 nil（SLG 多人禁用）
 	pvpLobby       map[string]*service.LobbyUserProfile // chatID → 大厅用户档案（PVP 大厅在线列表）
 
 	// PVP 房间参与方短 TTL 缓存：避免 ironfist_action 热路径每个动作打一次 DB
@@ -193,6 +194,11 @@ func (h *Hub) SetIronFistService(svc *service.IronFistService) {
 	h.ironFistSvc = svc
 }
 
+// SetSlgService 注入 SLG 服务，启用多人世界实时同步
+func (h *Hub) SetSlgService(svc *service.SlgService) {
+	h.slgSvc = svc
+}
+
 // Register 注册客户端，标记在线，通知好友
 func (h *Hub) Register(c *Client) {
 	h.mu.Lock()
@@ -240,6 +246,14 @@ func (h *Hub) Unregister(c *Client) {
 	// 离开 PVP 大厅：广播更新给仍在场的大厅用户
 	if inLobby {
 		h.broadcastLobbyUpdate()
+	}
+
+	// 离开 SLG 多人世界：广播下线给同世界玩家
+	if h.slgSvc != nil {
+		if _, ok := h.slgSvc.GetWorldIDByChatID(c.ChatID); ok {
+			h.broadcastSlgPresence(c.ChatID, false)
+			h.slgSvc.Leave(c.ChatID)
+		}
 	}
 
 	// 取消该用户在 PVP 撮合队列中的等待（避免被匹配给他人后无人开局）。
@@ -523,6 +537,12 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 	case "ironfist_lobby_leave":
 		// 主动离开 PVP 大厅
 		h.handleIronFistLobbyLeave(c)
+	case "slg_join":
+		// 加入 SLG 多人世界（WS 在线订阅）
+		h.handleSlgJoin(c)
+	case "slg_leave":
+		// 离开 SLG 多人世界
+		h.handleSlgLeave(c)
 	default:
 		log.Printf("[ws] unknown message type %q from %s", msg.Type, c.ChatID)
 	}
@@ -1402,3 +1422,93 @@ func (h *Hub) sendLobbyUpdate(recipients []*Client, list []*service.LobbyUserPro
 		}
 	}
 }
+
+// ── SLG 多人世界 ──────────────────────────────────────────────────
+
+// handleSlgJoin 标记玩家在 SLG 世界中在线。客户端进入 SLG 页面时发送。
+// 实际的世界/出生点/领地数据通过 HTTP /api/games/slg/join 获取，
+// WS 仅负责在线状态订阅与领地变更广播路由。
+func (h *Hub) handleSlgJoin(c *Client) {
+	if h.slgSvc == nil {
+		return
+	}
+	if !c.lobbyLimiter.allow(time.Now(), lobbyMaxPerSec) {
+		return
+	}
+	// 服务层标记在线；若玩家尚未通过 HTTP join，则 GetWorldIDByChatID 会返回 false，
+	// 但不影响——客户端应先调 HTTP join 再发 slg_join。
+	h.slgSvc.SetOnline(c.ChatID)
+
+	// 向同世界在线玩家广播「玩家上线」
+	h.broadcastSlgPresence(c.ChatID, true)
+}
+
+// handleSlgLeave 标记玩家离开 SLG 世界
+func (h *Hub) handleSlgLeave(c *Client) {
+	if h.slgSvc == nil {
+		return
+	}
+	h.broadcastSlgPresence(c.ChatID, false)
+	h.slgSvc.Leave(c.ChatID)
+}
+
+// broadcastSlgPresence 广播玩家上/下线事件给同世界在线玩家
+func (h *Hub) broadcastSlgPresence(chatID string, online bool) {
+	if h.slgSvc == nil {
+		return
+	}
+	worldID, ok := h.slgSvc.GetWorldIDByChatID(chatID)
+	if !ok {
+		return
+	}
+	peers := h.slgSvc.GetOnlinePlayersInWorld(worldID)
+
+	msg, _ := json.Marshal(Message{
+		Type: "slg_presence",
+		Payload: mustMarshal(map[string]interface{}{
+			"chat_id": chatID,
+			"online":  online,
+		}),
+	})
+
+	h.mu.RLock()
+	for _, pid := range peers {
+		if rc, ok := h.clients[pid]; ok {
+			select {
+			case rc.send <- msg:
+			default:
+			}
+		}
+	}
+	h.mu.RUnlock()
+}
+
+// BroadcastSLGEvent 向同世界在线玩家广播领地变更事件。
+// 由 HTTP handler 在领地变更后调用。
+func (h *Hub) BroadcastSLGEvent(senderChatID string, ev *service.TerritoryChangeEvent) {
+	if h.slgSvc == nil {
+		return
+	}
+	worldID, ok := h.slgSvc.GetWorldIDByChatID(senderChatID)
+	if !ok {
+		return
+	}
+	peers := h.slgSvc.GetOnlinePlayersInWorld(worldID)
+
+	msg, _ := json.Marshal(Message{
+		Type:    "slg_territory_update",
+		Payload: mustMarshal(ev),
+	})
+
+	h.mu.RLock()
+	for _, pid := range peers {
+		if rc, ok := h.clients[pid]; ok {
+			select {
+			case rc.send <- msg:
+			default:
+			}
+		}
+	}
+	h.mu.RUnlock()
+}
+

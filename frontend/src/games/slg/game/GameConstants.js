@@ -433,5 +433,28 @@ export const EQUIP_DISMISS_JADE = {
   common: 5, rare: 10, elite: 30, legend: 50,
 }
 
+// ── AI 对手势力（见 docs/slg-AI势力设计.md）───────────────────────────────────
+// 2 个会自动发育、抢地盘的 AI 势力：老巢在地图生成时按种子确定性放置（MapGenerator 步骤 7），
+// 扩张判定见 GameState._aiExpandStep；地块攻防完全复用现有守军规格表，AI 不设武将系统。
+export const AI_FACTIONS = [
+  { id: 'ai1', name: '黄巾余部', color: 0x9c5fd1 },
+  { id: 'ai2', name: '黑山贼',   color: 0x1fae8e },
+]
+// 每 1 游戏小时为每个存活势力跑一次扩张判定
+export const AI_TICK_SECONDS = 3600
+// 老巢地块等级（决定老巢自身守军强度，比照中等地块/NPC 城池强度）
+export const AI_LAIR_LEVEL = 6
+// 玩家主城达到此等级后，AI 才会把玩家的普通领地纳入进攻候选（主城本身永远不会被攻击）
+export const AI_AGGRESSION_CITY_LV = 4
+// 玩家领地相对同级中立地的额外防御倍率（代表边境比荒地更难啃）
+export const PLAYER_TILE_DEFENSE_MULT = 1.6
+// AI 扩张胜率夹在 [下限, 上限] 之间，避免出现必胜或必败
+export const AI_SUCCESS_MIN = 0.15
+export const AI_SUCCESS_MAX = 0.85
+// 老巢放置的最小间距（格）：与出生点、与 NPC 城池、与彼此
+export const AI_LAIR_MIN_DIST_FROM_SPAWN = 10
+export const AI_LAIR_MIN_DIST_FROM_CITY = 4
+export const AI_LAIR_MIN_DIST_BETWEEN = 8
+
 // 存档 key
 export const SAVE_KEY = 'slg:save:v1'

@@ -289,6 +289,8 @@ export class UIScene extends Phaser.Scene {
     const t = this.state.tileAt(this.sel.x, this.sel.y)
     if (!t) { this.sel = null; return }
     const def = TILE_TYPES[t.type]
+    // 归属某个 AI 势力时，面板要多加一行「⚔️ xx领地」提示，帮玩家区分中立地和对手地盘
+    const aiFaction = (t.owner && t.owner !== 'player') ? this.state.aiLairs.find(f => f.id === t.owner) : null
 
     const sw = this.scale.width, sh = this.scale.height
     const w = Math.min(sw - 16, 400)
@@ -301,6 +303,7 @@ export class UIScene extends Phaser.Scene {
       h = 112 + (formCount - 1) * 22
       if (formCount > 1) h += 18        // 多编队警告
       if (t.type === 'npcCity') h += 18 // 掠夺收益行
+      if (aiFaction) h += 18            // 势力归属提示行
     }
     const cx = sw / 2, cy = sh - h / 2 - 76
     const c = this.add.container(cx, cy).setDepth(DEPTH.panel)
@@ -347,7 +350,11 @@ export class UIScene extends Phaser.Scene {
       for (let i = 0; i < guards.length; i += FORMATION_SIZE) forms.push(guards.slice(i, i + FORMATION_SIZE))
       const formCount = forms.length
       const rowH = 22
-      const startY = -h / 2 + 36
+      let startY = -h / 2 + 36
+      if (aiFaction) {
+        c.add(this.add.text(-w / 2 + 12, startY, `⚔️ ${aiFaction.name}领地`, style(12, '#ce93d8')).setOrigin(0, 0))
+        startY += 18
+      }
       if (guards.length === 0) {
         c.add(this.add.text(-w / 2 + 12, startY, '守将 空虚', style(12, '#dddddd')).setOrigin(0, 0))
       } else {

@@ -136,6 +136,10 @@ func main() {
 	ironFistHandler := handler.NewIronFistHandler(ironFistSvc, hub)
 	fistStatsHandler := handler.NewFistStatsHandler(fistSvc, ironFistSvc)
 
+	// SLG 多人世界服务
+	slgSvc := service.NewSlgService(db)
+	slgHandler := handler.NewSlgHandler(slgSvc, hub)
+
 	// 极光推送（AppKey 和 MasterSecret 均配置时启用）
 	if cfg.JPush.AppKey != "" && cfg.JPush.MasterSecret != "" {
 		pushSvc := service.NewPushService(db, cfg.JPush.AppKey, cfg.JPush.MasterSecret, cfg.JPush.Enabled)
@@ -145,6 +149,9 @@ func main() {
 
 	// 启用 PVP 大厅在线列表功能（大厅用户互看头像/余额/场次）
 	hub.SetIronFistService(ironFistSvc)
+
+	// 启用 SLG 多人世界实时同步
+	hub.SetSlgService(slgSvc)
 
 	identHandler := handler.NewIdentityHandler(identSvc, inviteSvc, friendSvc, hub)
 	userHandler := handler.NewUserHandler(identSvc)
@@ -222,6 +229,12 @@ func main() {
 		auth.POST("/games/ironfist/pvp/queue", ironFistHandler.EnqueuePVP)
 		auth.DELETE("/games/ironfist/pvp/queue", ironFistHandler.CancelPVPQueue)
 		auth.GET("/games/ironfist/pvp/queue", ironFistHandler.GetPVPQueueStatus)
+
+		// SLG 多人世界
+		auth.POST("/games/slg/join", slgHandler.Join)
+		auth.GET("/games/slg/world", slgHandler.GetWorld)
+		auth.PUT("/games/slg/state", slgHandler.SaveState)
+		auth.POST("/games/slg/territory", slgHandler.UpdateTerritory)
 	}
 
 	// 启动定时任务：自动拒绝超过 7 天未处理的好友申请

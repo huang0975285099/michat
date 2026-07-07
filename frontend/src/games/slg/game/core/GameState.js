@@ -21,8 +21,10 @@ import {
   INITIAL_RESOURCES, INITIAL_TROOPS, SAVE_KEY,
   DISMISS_JADE, SKILL_MAX_LEVEL,
   EQUIP_TYPES, EQUIP_QUALITY, EQUIP_MAX_LEVEL, EQUIP_DRAW_COST, EQUIP_DISMISS_JADE,
+  AI_FACTIONS, AI_TICK_SECONDS, AI_LAIR_LEVEL, AI_AGGRESSION_CITY_LV, PLAYER_TILE_DEFENSE_MULT,
+  AI_SUCCESS_MIN, AI_SUCCESS_MAX,
 } from '../GameConstants.js'
-import { generateMap } from './MapGenerator.js'
+import { generateMap, rollGuardsForTile } from './MapGenerator.js'
 import { findPath } from './pathfind.js'
 import { resolveBattle } from './battle.js'
 import { getSkill, BINDABLE_SKILLS } from './skills.js'
@@ -60,14 +62,37 @@ function makeGeneral(tpl, starter = false) {
 export class GameState extends Emitter {
   /**
    * @param {number} seed 地图种子
+   * @param {{spawnOverride?:{x:number,y:number}, online?: boolean, chatId?: string}} [opts]
+   *   多人模式下传入服务器分配的出生点与在线标记。
    */
-  constructor(seed) {
+  constructor(seed, opts = {}) {
     super()
     this.seed = seed
-    const { tiles, spawn, cities } = generateMap(seed)
+    const { tiles, spawn, cities, aiLairs: rawAiLairs } = generateMap(seed)
     this.tiles = tiles
-    this.spawn = spawn
+    // 多人模式：使用服务器分配的出生点覆盖种子默认出生点
+    if (opts.spawnOverride) {
+      const so = opts.spawnOverride
+      // 确保出生点地块可通行且为主城类型
+      const t = tiles[so.y]?.[so.x]
+      if (t && TILE_TYPES[t.type]?.passable) {
+        t.type = 'plain'
+        t.level = 1
+        t.garrison = garrisonOf(1, 'plain')
+        this.spawn = { x: so.x, y: so.y }
+      } else {
+        // 兜底：出生点不可通行时用种子默认值
+        this.spawn = spawn
+      }
+    } else {
+      this.spawn = spawn
+    }
     this.npcCities = cities
+
+    // 多人模式字段
+    this.online = !!opts.online
+    this.chatId = opts.chatId || null
+    this.otherTerritories = new Map()   // key=`x,y` → { ownerChatId, ownerName, isCity }
 
     // 玩家状态
     this.res = { ...INITIAL_RESOURCES }
@@ -96,6 +121,19 @@ export class GameState extends Emitter {
     cityTile.owner = 'player'
     cityTile.isCity = true
     cityTile.garrison = 0
+
+    // AI 势力老巢落位：地块等级固定为 AI_LAIR_LEVEL，守军按该等级重新生成（见 docs/slg-AI势力设计.md）
+    // aiLair 只记录"这里原本是谁的老巢"这个地理事实，永久不变；老巢是否还归该势力所有看 owner。
+    this.aiLairs = AI_FACTIONS.map((f, i) => ({ ...f, x: rawAiLairs[i].x, y: rawAiLairs[i].y }))
+    for (const f of this.aiLairs) {
+      const t = this.tiles[f.y][f.x]
+      t.type = 'plain'
+      t.level = AI_LAIR_LEVEL
+      t.owner = f.id
+      t.aiLair = f.id
+      this._garrisonTile(t, AI_LAIR_LEVEL, 'plain')
+    }
+    this._aiAcc = 0            // AI 扩张判定的秒级累加器（见 _advanceAi），存档时一并保存
 
     // 游戏内时钟（秒）。tick 按 TIME_SCALE 推进。
     this.now = 0
@@ -376,6 +414,7 @@ export class GameState extends Emitter {
       const secs = Math.floor(this._acc)
       this._acc -= secs
       this._produce(secs)
+      this._advanceAi(secs)
     }
     this._processMarches()
   }
@@ -388,7 +427,94 @@ export class GameState extends Emitter {
     if (gameSecs <= 0) return
     this.now += gameSecs
     this._produce(gameSecs)
+    this._advanceAi(gameSecs)
     this._processMarches()
+  }
+
+  // ── AI 对手势力（见 docs/slg-AI势力设计.md）─────────────────────────────────
+
+  /** 给地块铺一份满编守军（按等级/类型重新生成，不复用旧守军身份）。
+   *  用于老巢初始化、AI 新占领地块——这两种场景本来就该是"全新的一份守军"。 */
+  _garrisonTile(t, level, type) {
+    const { guards, garrisonType } = rollGuardsForTile(level, type)
+    t.guards = guards
+    t.garrisonType = garrisonType
+    t.garrison = guards.reduce((s, g) => s + g.troops, 0)
+  }
+
+  /** 推进 AI 扩张：按游戏秒数累加，每满 AI_TICK_SECONDS 为每个存活势力跑一次扩张判定。
+   *  调用位置与 _produce 完全对齐（在线 tick / 标签页恢复补算 / 读档离线补算），
+   *  离线期间也会照常发育。 */
+  _advanceAi(gameSeconds) {
+    this._aiAcc += gameSeconds
+    while (this._aiAcc >= AI_TICK_SECONDS) {
+      this._aiAcc -= AI_TICK_SECONDS
+      for (const f of this.aiLairs) this._aiExpandStep(f)
+    }
+  }
+
+  /** 单个 AI 势力的一次扩张判定：选一个边境目标，按抽象战力比拼胜率决定是否占领。
+   *  目标本身的守军按其地块等级重新生成（不按 AI 总战力放大），
+   *  保证玩家日后收复的难度始终等于同级中立地，不会滚雪球到打不动。 */
+  _aiExpandStep(f) {
+    const lairTile = this.tileAt(f.x, f.y)
+    if (!lairTile || lairTile.owner !== f.id) return   // 老巢已失守，势力永久停止扩张
+
+    const owned = []
+    for (const row of this.tiles) for (const t of row) if (t.owner === f.id) owned.push(t)
+    const aiPower = owned.reduce((s, t) => s + garrisonOf(t.level, t.type), 0)
+
+    // 收集边境候选（八邻去重）：跳过己方/其他 AI 势力的地、玩家主城；
+    // 玩家的普通领地只有在主城等级达到 AI_AGGRESSION_CITY_LV 后才计入候选（阶段性开启）
+    const seen = new Set()
+    const candidates = []
+    for (const t of owned) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue
+          const n = this.tileAt(t.x + dx, t.y + dy)
+          if (!n || !TILE_TYPES[n.type].passable) continue
+          const key = `${n.x},${n.y}`
+          if (seen.has(key) || n.owner === f.id) continue
+          if (n.owner && n.owner !== 'player') continue   // 其他 AI 势力的地：v1 不打
+          if (this.isOtherPlayerTile(n.x, n.y)) continue  // 多人模式：其他玩家的地不打
+          if (n.owner === 'player') {
+            if (n.isCity) continue
+            if (this.cityLv < AI_AGGRESSION_CITY_LV) continue
+          }
+          seen.add(key)
+          candidates.push(n)
+        }
+      }
+    }
+    if (candidates.length === 0) return
+
+    // 按等级越低权重越高做加权随机
+    const weights = candidates.map(t => 1 / Math.max(1, t.level))
+    const totalW = weights.reduce((s, w) => s + w, 0)
+    let r = Math.random() * totalW
+    let target = candidates[candidates.length - 1]
+    for (let i = 0; i < candidates.length; i++) {
+      r -= weights[i]
+      if (r < 0) { target = candidates[i]; break }
+    }
+
+    const targetIsPlayer = target.owner === 'player'
+    const baseDef = garrisonOf(target.level, target.type)
+    const def = targetIsPlayer ? baseDef * PLAYER_TILE_DEFENSE_MULT : baseDef
+    const chance = Math.min(AI_SUCCESS_MAX, Math.max(AI_SUCCESS_MIN, aiPower / (aiPower + def)))
+    if (Math.random() >= chance) return   // 失败不记日志，避免刷屏
+
+    target.owner = f.id
+    this._garrisonTile(target, target.level, target.type)
+    this.damaged.delete(target)
+    const typeName = TILE_TYPES[target.type].name
+    if (targetIsPlayer) {
+      this._pushLog(`⚠️ ${f.name} 攻占了你的领地 ${typeName} (${target.x},${target.y})！`)
+    } else {
+      this._pushLog(`🚩 ${f.name} 占领了 ${typeName} Lv.${target.level} (${target.x},${target.y})`)
+    }
+    this.emit('territory', { x: target.x, y: target.y, owner: f.id })
   }
 
   // ── 资源产出 ──────────────────────────────────────────────────────────────
@@ -751,6 +877,7 @@ export class GameState extends Emitter {
     if (!target) return '目标超出地图'
     if (!TILE_TYPES[target.type].passable) return '目标不可通行'
     if (target.owner === 'player') return '这是己方领地'
+    if (this.isOtherPlayerTile(tx, ty)) return '该地块属于其他玩家'
     if (!this.isAdjacentToTerritory(tx, ty)) return '只能攻打与领地相邻的地块'
     if (this.territoryCount() >= this.territoryCapNow()) {
       return `领地已达上限（${this.territoryCapNow()}），请升级主城或放弃部分领地`
@@ -1202,16 +1329,26 @@ export class GameState extends Emitter {
    *  beforeunload/场景 SHUTDOWN 等 teardown 保存把刚清空的存档又写回去 */
   freeze() { this._frozen = true }
 
-  save() {
-    if (this._frozen) return
+  /** 构建存档数据对象（save 与 toServerState 共用，保证格式一致） */
+  _buildSaveData() {
     const owned = []
     for (const row of this.tiles) {
       for (const t of row) {
-        if (t.owner === 'player') owned.push({ x: t.x, y: t.y, isCity: !!t.isCity })
+        // 老巢坐标即使已被放弃（owner=null）也要存一条记录，否则读档时构造函数会
+        // 把老巢强制归还给对应势力，等于把玩家的"永久击败该势力"复活了。
+        if (!t.owner && !t.aiLair) continue
+        const entry = { x: t.x, y: t.y, isCity: !!t.isCity, owner: t.owner || null }
+        if (t.owner && t.owner !== 'player') {
+          // AI 归属地块：连同守军明细一起存，读档直接还原身份，不重新随机抽取
+          entry.guards = t.guards.map(gd => ({ id: gd.id, lv: gd.lv, troops: Math.round(gd.troops) }))
+          entry.garrisonType = t.garrisonType
+        }
+        owned.push(entry)
       }
     }
-    const data = {
-      v: 12, seed: this.seed, savedAt: Date.now(), now: this.now,
+    return {
+      v: 14, seed: this.seed, savedAt: Date.now(), now: this.now,
+      _aiAcc: this._aiAcc,
       res: this.res, cityLv: this.cityLv,
       freeRecruits: this.freeRecruits,
       autoJadeCommon: !!this.autoJadeCommon,
@@ -1244,6 +1381,11 @@ export class GameState extends Emitter {
       damaged: [...this.damaged].map(t => ({ x: t.x, y: t.y, teams: t.guards.map(gd => Math.round(gd.troops)) })),
       log: this.log.slice(0, 20),
     }
+  }
+
+  save() {
+    if (this._frozen) return
+    const data = this._buildSaveData()
     try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)) } catch { /* 存储满等忽略 */ }
   }
 
@@ -1255,56 +1397,47 @@ export class GameState extends Emitter {
     try { localStorage.removeItem(SAVE_KEY) } catch { /* ignore */ }
   }
 
-  /** 从存档恢复；失败返回 null（调用方应新开局） */
+  /** 从存档恢复；失败返回 null（调用方应新开局）。仅支持 v14，旧存档直接返回 null。 */
   static load() {
     let data
     try { data = JSON.parse(localStorage.getItem(SAVE_KEY)) } catch { return null }
-    // 地图生成器已重构，旧存档（v1~v5）的 seed 会生成不一致地图，直接开始新局。
-    // v6（战法系统前）与 v7 地图口径一致，可平滑迁移。
-    if (!data || data.v < 6) return null
+    if (!data || data.v < 14) return null
 
     const gs = new GameState(data.seed)
-    gs.now = data.now || 0
-    gs.res = { ...gs.res, ...data.res }
-    gs.cityLv = data.cityLv || 1
-    // v3+ 才有建筑；v1/v2 迁移时保持默认各 1 级
-    gs.buildings = { ...gs.buildings, ...(data.buildings || {}) }
-    // v4+ 才有免费招募次数；v1~v3 旧存档已获得过起手三武将，不再补送
-    gs.freeRecruits = data.v >= 4 ? (data.freeRecruits ?? 0) : 0
-    // v9+ 招募开关：旧档缺省 false
-    gs.autoJadeCommon = data.autoJadeCommon === true
-    // v12+ 精锐招募开关：旧档缺省 false
-    gs.autoJadeElite = data.autoJadeElite === true
-    // v9+ 抽装备开关：旧档缺省 false
-    gs.autoJadeEquipCommon = data.autoJadeEquipCommon === true
-    // v12+ 精锐抽装备开关：旧档缺省 false
-    gs.autoJadeEquipElite = data.autoJadeEquipElite === true
-    // v7+ 才有战法仓库；从 v6 迁移的旧档保留构造时随机发的 3 个（data.skills 缺省）
-    if (data.skills) gs.skills = data.skills.slice()
-    // v8+ 才有战法等级；v6/v7 旧档缺省 {}，所有战法默认 Lv.1
-    if (data.skillLevels) gs.skillLevels = { ...data.skillLevels }
-    // v9+ 才有装备仓库；旧档缺省空仓库，武将装备槽在 Object.assign 后由 makeGeneral 兜底为空槽
-    if (data.equipments) gs.equipments = data.equipments.map(e => ({ ...e }))
-    if (data._equipSeq) gs._equipSeq = data._equipSeq
+    gs._applySaveData(data)
+    gs._offlineCatchUp(data.savedAt)
+    return gs
+  }
+
+  /** 将 v14 存档数据应用到本实例。load() 和 applyServerSave() 共用。 */
+  _applySaveData(data) {
+    this.now = data.now || 0
+    this._aiAcc = data._aiAcc || 0
+    this.res = { ...this.res, ...data.res }
+    this.cityLv = data.cityLv || 1
+    this.buildings = { ...this.buildings, ...(data.buildings || {}) }
+    this.freeRecruits = data.freeRecruits ?? 0
+    this.autoJadeCommon = data.autoJadeCommon === true
+    this.autoJadeElite = data.autoJadeElite === true
+    this.autoJadeEquipCommon = data.autoJadeEquipCommon === true
+    this.autoJadeEquipElite = data.autoJadeEquipElite === true
+    if (data.skills) this.skills = data.skills.slice()
+    if (data.skillLevels) this.skillLevels = { ...this.skillLevels }
+    if (data.equipments) this.equipments = data.equipments.map(e => ({ ...e }))
+    if (data._equipSeq) this._equipSeq = data._equipSeq
 
     for (const sg of data.generals || []) {
-      let g = gs.general(sg.id)
-      // 招募武将不在初始阵容，需按模板重建后再套用存档动态字段
+      let g = this.general(sg.id)
       if (!g) {
         const tpl = findGeneralTemplate(sg.id)
         if (!tpl) continue
         g = makeGeneral(tpl, false)
-        gs.generals.push(g)
+        this.generals.push(g)
       }
-      // v1/v2 存档无 stamina/awaken 字段：Object.assign 不会覆盖，保留 makeGeneral 的默认
       Object.assign(g, sg)
-      // v8 旧档无 equip 字段：补默认空槽（避免后续 equipBonus/g.equip.xxx 访问报错）
       if (!g.equip) g.equip = { weapon: null, helmet: null, necklace: null, armor: null, belt: null, boots: null }
-      // v11+ 才有 skillIds 数组；v6~v10 旧档为单一 skillId 字段，迁移进槽位 0
       if (!Array.isArray(g.skillIds)) g.skillIds = [null, null]
-      if (sg.skillId && !g.skillIds[0] && !g.skillIds[1]) g.skillIds[0] = sg.skillId
       delete g.skillId
-      // spd 由五维平均值得出；旧档可能缺失 pol/cha，用模板补齐后重算
       const tpl = findGeneralTemplate(g.id)
       if (tpl) {
         if (g.pol === undefined) g.pol = tpl.pol
@@ -1312,148 +1445,141 @@ export class GameState extends Emitter {
         g.spd = calcSpd(g)
       }
     }
-    // V2.0 战法精简迁移：旧 ID → 新 ID（17 旧战法收缩为 7 保留战法）
-    // 武将 skillId、gs.skills 仓库、gs.skillLevels 等级一并迁移；等级取 max 避免回退
-    _migrateV2Skills(gs)
+
     for (const o of data.owned || []) {
-      const t = gs.tileAt(o.x, o.y)
+      const t = this.tileAt(o.x, o.y)
       if (!t) continue
-      t.owner = 'player'
-      t.garrison = 0
-      for (const gd of t.guards) gd.troops = 0
-      if (o.isCity) t.isCity = true
+      t.owner = o.owner
+      if (o.owner === 'player') {
+        t.garrison = 0
+        for (const gd of t.guards) gd.troops = 0
+        if (o.isCity) t.isCity = true
+      } else if (o.owner) {
+        // AI 归属地块：直接还原存档里的守军明细（保持武将身份不变）
+        t.guards = (o.guards || []).map(gd => ({ ...gd }))
+        t.garrisonType = o.garrisonType ?? t.garrisonType
+        t.garrison = t.guards.reduce((s, g) => s + g.troops, 0)
+      }
+      // o.owner 为 null：地块曾是老巢但已被放弃/势力已灭，保留构造函数给的默认状态
     }
     for (const m of data.marches || []) {
-      // v1 行军为单武将（generalId），迁移为 generalIds 数组
       if (!m.generalIds) m.generalIds = m.generalId ? [m.generalId] : []
-      // 旧存档无 path（直线行军）：按当前地图重建网格路径
-      if (!m.path) m.path = findPath(gs.tiles, m.from, m.to)
-      gs.marches.push(m)
+      if (!m.path) m.path = findPath(this.tiles, m.from, m.to)
+      this.marches.push(m)
       for (const id of m.generalIds) {
-        const g = gs.general(id)
+        const g = this.general(id)
         if (g) g.state = 'marching'
       }
       if (m.id >= marchSeq) marchSeq = m.id + 1
     }
-    // v10+ 玩家编队预设；旧档缺省空列表
     if (Array.isArray(data.formations)) {
-      gs.formations = data.formations
+      this.formations = data.formations
         .filter(f => f && typeof f.id === 'number' && Array.isArray(f.generalIds))
-        .map(f => ({ id: f.id, name: String(f.name || '').slice(0, FORMATION_NAME_MAX_LEN) || '编队', generalIds: f.generalIds.filter(id => gs.generals.some(g => g.id === id)) }))
-      gs._formationSeq = data._formationSeq || (gs.formations.reduce((m, f) => Math.max(m, f.id), 0) + 1)
+        .map(f => ({ id: f.id, name: String(f.name || '').slice(0, FORMATION_NAME_MAX_LEN) || '编队', generalIds: f.generalIds.filter(id => this.generals.some(g => g.id === id)) }))
+      this._formationSeq = data._formationSeq || (this.formations.reduce((m, f) => Math.max(m, f.id), 0) + 1)
     }
     for (const d of data.damaged || []) {
-      const t = gs.tileAt(d.x, d.y)
+      const t = this.tileAt(d.x, d.y)
       if (!t || t.owner === 'player') continue
-      if (data.v >= 10 && Array.isArray(d.teams)) {
-        // v10+：编队制守将，各将剩余兵力逐一恢复（长度 = teams × FORMATION_SIZE）
+      if (Array.isArray(d.teams)) {
         t.guards.forEach((gd, i) => { gd.troops = d.teams[i] ?? gd.troops })
-      } else if (!Array.isArray(d.teams)) {
-        // v1~v4：单一守军数字，按比例摊到各将
-        const max = garrisonOf(t.level, t.type)
-        const factor = Math.max(0, Math.min(1, (d.garrison ?? max) / max))
-        t.guards.forEach(gd => { gd.troops = Math.round(gd.troops * factor) })
       }
-      // v6~v9 的 d.teams 数组（旧口径：teams 名武将）忽略 —— 守将结构已改为 teams×3，
-      // 旧兵力值会越界新上限，故按 seed 重建满兵，不加入回复列表。
       t.garrison = t.guards.reduce((s, gd) => s + gd.troops, 0)
-      if (t.garrison < garrisonOf(t.level, t.type)) gs.damaged.add(t)
+      if (t.garrison < garrisonOf(t.level, t.type)) this.damaged.add(t)
     }
-    // 若存档时已一统，不再重复提示
-    gs.victoryShown = gs.npcCities.every(c => gs.tileAt(c.x, c.y).owner === 'player')
-    gs.log = data.log || []
+    this.victoryShown = this.npcCities.every(c => this.tileAt(c.x, c.y).owner === 'player')
+    this.log = data.log || []
+  }
 
-    // 离线推进：把离线真实时长折算为游戏时长（封顶），补产出并结算行军
-    const offline = Math.max(0, (Date.now() - (data.savedAt || Date.now())) / 1000)
+  /** 离线推进：把离线真实时长折算为游戏时长（封顶），补产出/AI/行军 */
+  _offlineCatchUp(savedAt) {
+    const offline = Math.max(0, (Date.now() - (savedAt || Date.now())) / 1000)
     const gameSecs = Math.min(offline * TIME_SCALE, OFFLINE_CAP_SECONDS)
     if (gameSecs > 1) {
-      gs.now += gameSecs
-      gs._produce(gameSecs)
-      gs._processMarches()
-      gs._pushLog(`⏳ 离线收益已结算（${Math.round(gameSecs / 3600 * 10) / 10} 游戏小时）`)
+      this.now += gameSecs
+      this._produce(gameSecs)
+      this._advanceAi(gameSecs)
+      this._processMarches()
+      this._pushLog(`⏳ 离线收益已结算（${Math.round(gameSecs / 3600 * 10) / 10} 游戏小时）`)
     }
-    return gs
   }
-}
 
-// V2.0 战法精简迁移表：17 个旧战法 ID → 7 个保留战法 ID
-// 删除的旧战法按属性/类型映射到保留代表：武力单体→力劈、速度单体→疾风、智力单体→火攻、
-// 武力群体→箭雨（旋风）、智力群体→落雷（毒计）、追击→连击、控制→谎报
-const SKILL_MIGRATION_V2 = {
-  huikan:  'lipi',     mengji:  'lipi',     tuci:    'lipi',
-  jianta:  'jifeng',   tuxi:    'jifeng',
-  shuigong:'huogong',  tianlei: 'huogong',
-  xuanfeng:'jianyu',
-  duji:    'luolei',
-  zhuiji:  'lianji',   hengsao: 'lianji',
-  weishe:  'huangbao', mizhen:  'huangbao', jiaoxie: 'huangbao',
-}
-// 旧战法兑换价表（用于迁移玉石补偿；旧战法已从 SKILLS 字典删除，需硬编码）
-const OLD_SKILL_COSTS_V2 = {
-  huikan: 20, mengji: 30, tuci: 20,
-  jianta: 20, tuxi: 25,
-  shuigong: 25, tianlei: 30,
-  xuanfeng: 25, duji: 30,
-  zhuiji: 25, hengsao: 30,
-  weishe: 25, mizhen: 30, jiaoxie: 20,
-}
+  // ── 多人模式：服务器同步 ──────────────────────────────────────────────────
 
-/**
- * V2.0 战法精简迁移：在 GameState.load() 末尾调用，把旧战法 ID 迁移到新 ID。
- * 1) 武将 skillIds 各槽位旧 ID → 新 ID（同新 ID 冲突时只保留第一个，其余清空让玩家重绑）
- * 2) gs.skills 仓库去重（旧+新合并到新 ID）
- * 3) gs.skillLevels 等级迁移（同新 ID 取 max，避免回退）
- * 4) 玉石补偿：仓库中重复映射导致丢失的旧战法按兑换价退还
- * 5) 过滤掉迁移后仍不在 SKILLS 字典中的无效 ID（保险）
- */
-function _migrateV2Skills(gs) {
-  // 1) 武将 skillIds 各槽位迁移（处理冲突：同新 ID 只保留第一个武将/槽位，其余清空）
-  const usedSkillIds = new Set()
-  for (const g of gs.generals) {
-    if (!Array.isArray(g.skillIds)) g.skillIds = [null, null]
-    for (let slot = 0; slot < g.skillIds.length; slot++) {
-      const sid = g.skillIds[slot]
-      if (!sid) continue
-      const newId = SKILL_MIGRATION_V2[sid] || sid
-      if (!getSkill(newId)) { g.skillIds[slot] = null; continue }   // 未知 ID 清空
-      if (usedSkillIds.has(newId)) {
-        g.skillIds[slot] = null                                    // 冲突：清空，玩家需重新绑定
-      } else {
-        g.skillIds[slot] = newId
-        usedSkillIds.add(newId)
-      }
+  /**
+   * 从服务器数据初始化其他玩家的领地。
+   * @param {{x:number,y:number,owner_chat_id:string,owner_name:string,is_city:boolean}[]} territories
+   */
+  applyServerTerritories(territories) {
+    this.otherTerritories.clear()
+    for (const t of territories) {
+      // 跳过自己的领地（自己的领地由本地 GameState 管理）
+      if (t.owner_chat_id === this.chatId) continue
+      this.otherTerritories.set(`${t.x},${t.y}`, {
+        ownerChatId: t.owner_chat_id,
+        ownerName: t.owner_name,
+        isCity: t.is_city,
+      })
     }
+    this.emit('slg_territories', this.getOtherTerritoryList())
   }
-  // 2) skills 仓库去重迁移 + 统计丢失的旧战法（用于玉石补偿）
-  let refund = 0
-  if (Array.isArray(gs.skills) && gs.skills.length) {
-    const seen = new Set()
-    const next = []
-    for (const id of gs.skills) {
-      const nid = SKILL_MIGRATION_V2[id] || id
-      if (!getSkill(nid)) continue                         // 保险：跳过未知 ID
-      if (!seen.has(nid)) {
-        seen.add(nid); next.push(nid)
-      } else if (OLD_SKILL_COSTS_V2[id]) {
-        // 重复映射：此旧战法被合并丢失，退还兑换价
-        refund += OLD_SKILL_COSTS_V2[id]
-      }
+
+  /**
+   * 应用来自服务器的领地变更事件（其他玩家占领/放弃）。
+   * @param {{x:number,y:number,owner_chat_id:string,owner_name:string,is_city:boolean,action:string}} ev
+   */
+  applyTerritoryUpdate(ev) {
+    // 忽略自己的变更（本地已处理）
+    if (ev.owner_chat_id === this.chatId && ev.action === 'claim') return
+    const key = `${ev.x},${ev.y}`
+    if (ev.action === 'abandon' || !ev.owner_chat_id) {
+      this.otherTerritories.delete(key)
+    } else {
+      this.otherTerritories.set(key, {
+        ownerChatId: ev.owner_chat_id,
+        ownerName: ev.owner_name,
+        isCity: ev.is_city,
+      })
     }
-    gs.skills = next
+    this.emit('slg_territory', ev)
   }
-  // 3) skillLevels 等级迁移（同新 ID 取 max）
-  if (gs.skillLevels && Object.keys(gs.skillLevels).length) {
-    const next = {}
-    for (const [id, lv] of Object.entries(gs.skillLevels)) {
-      const nid = SKILL_MIGRATION_V2[id] || id
-      if (!getSkill(nid)) continue                         // 保险：跳过未知 ID
-      next[nid] = Math.max(next[nid] || 0, lv)
+
+  /**
+   * 获取其他玩家领地列表（供渲染层使用）。
+   */
+  getOtherTerritoryList() {
+    const list = []
+    for (const [key, val] of this.otherTerritories) {
+      const [x, y] = key.split(',').map(Number)
+      list.push({ x, y, ...val })
     }
-    gs.skillLevels = next
+    return list
   }
-  // 4) 玉石补偿发放
-  if (refund > 0) {
-    gs.res.jade = (gs.res.jade || 0) + refund
-    gs._pushLog?.(`💎 战法精简迁移补偿 +${refund} 玉石（重复战法已合并）`)
+
+  /**
+   * 查询某地块是否被其他玩家占领。
+   */
+  isOtherPlayerTile(x, y) {
+    return this.otherTerritories.has(`${x},${y}`)
+  }
+
+  /**
+   * 序列化玩家状态供上传服务器。与 save() 共用 _buildSaveData()，格式完全一致。
+   */
+  toServerState() {
+    return this._buildSaveData()
+  }
+
+  /**
+   * 从服务器存档恢复玩家状态（在线模式替代 localStorage.load）。
+   * 仅接受 v14 存档；旧版本返回 false，调用方应新开局。
+   * @param {object} data 服务器返回的存档 JSON
+   * @returns {boolean} 是否成功恢复
+   */
+  applyServerSave(data) {
+    if (!data || data.v < 14) return false
+    this._applySaveData(data)
+    this._offlineCatchUp(data.savedAt)
+    return true
   }
 }

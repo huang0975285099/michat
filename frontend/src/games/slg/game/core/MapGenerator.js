@@ -1,7 +1,10 @@
 // 九州征途 - 种子化地图生成
 // 同一 seed 必然生成同一张地图，存档只需记录 seed + 领地增量，为后续联网版打基础。
 
-import { MAP_W, MAP_H, TILE_TYPES, COPPER_TILE_RATE, NPC_CITY_LEVEL_COUNTS, garrisonOf, tileGuardSpec, guardPoolOf, FORMATION_SIZE } from '../GameConstants.js'
+import {
+  MAP_W, MAP_H, TILE_TYPES, COPPER_TILE_RATE, NPC_CITY_LEVEL_COUNTS, garrisonOf, tileGuardSpec, guardPoolOf, FORMATION_SIZE,
+  AI_FACTIONS, AI_LAIR_MIN_DIST_FROM_SPAWN, AI_LAIR_MIN_DIST_FROM_CITY, AI_LAIR_MIN_DIST_BETWEEN,
+} from '../GameConstants.js'
 
 /** 按权重随机取一项。items = [[value, weight], ...] */
 function weightedPick(rng, items) {
@@ -280,5 +283,70 @@ export function generateMap(seed) {
     }
   }
 
-  return { tiles, spawn, cities }
+  // 7) AI 势力老巢：放在「NPC 城池核心区」与「玩家出生点外圈」之间的中间地带。
+  //    用独立的第三条 rng（与步骤 1~6 的 rng/rng2 完全无关），保证既有存档的地图不受影响——
+  //    新增这一步不会改变任何已有的地形/等级/城池/出生点/守将输出。
+  const rng3 = mulberry32((seed ^ 0x12345678) >>> 0)
+  const aiLairs = []
+  for (let i = 0; i < AI_FACTIONS.length; i++) {
+    let placed = null
+    let g3 = 0
+    while (!placed && g3++ < 3000) {
+      const x = Math.floor(rng3() * MAP_W)
+      const y = Math.floor(rng3() * MAP_H)
+      const t = tiles[y][x]
+      if (!TILE_TYPES[t.type].passable) continue
+      if (t.type === 'npcCity' || t.type === 'lake' || t.type === 'mountain' || t.type === 'copper') continue
+      if (Math.hypot(x - spawn.x, y - spawn.y) < AI_LAIR_MIN_DIST_FROM_SPAWN) continue
+      if (cities.some(c => Math.hypot(c.x - x, c.y - y) < AI_LAIR_MIN_DIST_FROM_CITY)) continue
+      if (aiLairs.some(l => Math.hypot(l.x - x, l.y - y) < AI_LAIR_MIN_DIST_BETWEEN)) continue
+      placed = { x, y }
+    }
+    if (!placed) {
+      // 兜底（理论上不会触发）：放宽条件，找第一块可通行且非城池/非出生点/非已占的地块
+      outer:
+      for (let y = 0; y < MAP_H; y++) {
+        for (let x = 0; x < MAP_W; x++) {
+          const t = tiles[y][x]
+          if (!TILE_TYPES[t.type].passable) continue
+          if (t.type === 'npcCity' || t.type === 'mountain' || t.type === 'copper') continue
+          if (x === spawn.x && y === spawn.y) continue
+          if (aiLairs.some(l => l.x === x && l.y === y)) continue
+          placed = { x, y }
+          break outer
+        }
+      }
+    }
+    aiLairs.push(placed)
+  }
+
+  return { tiles, spawn, cities, aiLairs }
+}
+
+/**
+ * 为指定等级/地块类型重新生成一份满编守军（占领后重铺、AI 占地、读档重建 AI 领地守军时用）。
+ * 与步骤 6 同一套规格表，但不追求确定性——调用方本身就代表"游戏过程中动态变化的地块"，
+ * 不需要（也不能）跟地图生成时的种子随机流绑定，因此默认用 Math.random。
+ */
+export function rollGuardsForTile(level, type, rng = Math.random) {
+  const spec = tileGuardSpec(level, type)
+  if (!spec) return { guards: [], garrisonType: null }
+  const pool = guardPoolOf(spec.pool)
+  const genPerForm = Math.min(FORMATION_SIZE, pool.length)
+  const totalGen = spec.teams * genPerForm
+  if (totalGen <= 0) return { guards: [], garrisonType: null }
+  const perGen = garrisonOf(level, type) / totalGen
+  const guards = []
+  let firstTpl = null
+  for (let f = 0; f < spec.teams; f++) {
+    const used = new Set()
+    while (used.size < genPerForm) {
+      const tpl = pool[Math.floor(rng() * pool.length)]
+      if (used.has(tpl.id)) continue
+      used.add(tpl.id)
+      if (!firstTpl) firstTpl = tpl
+      guards.push({ id: tpl.id, lv: spec.guardLv, troops: perGen })
+    }
+  }
+  return { guards, garrisonType: firstTpl ? firstTpl.troopType : null }
 }

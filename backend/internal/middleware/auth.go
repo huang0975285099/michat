@@ -11,6 +11,7 @@ import (
 
 const CtxChatID = "chat_id"
 const CtxUserID = "user_id"
+const CtxNickname = "nickname"
 
 // Auth 校验 session token，将 chat_id 注入 context
 func Auth(svc *service.IdentityService) gin.HandlerFunc {
@@ -33,6 +34,7 @@ func Auth(svc *service.IdentityService) gin.HandlerFunc {
 		}
 		c.Set(CtxChatID, chatID)
 		c.Set(CtxUserID, user.ID)
+		c.Set(CtxNickname, user.Nickname)
 		c.Next()
 	}
 }

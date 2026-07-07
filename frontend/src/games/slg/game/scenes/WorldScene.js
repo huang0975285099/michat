@@ -55,6 +55,9 @@ export class WorldScene extends Phaser.Scene {
       this.state.on('territory', ({ x, y }) => { this._refreshTile(x, y); this._drawTerritory() }),
       this.state.on('battle', ({ tile, outcome }) => this._battleFlash(tile, outcome)),
       this.state.on('city', () => this._drawTerritory()),
+      // 多人模式：其他玩家领地变更
+      this.state.on('slg_territory', () => this._drawTerritory()),
+      this.state.on('slg_territories', () => this._drawTerritory()),
     ]
     this._saveTimer = 0
 
@@ -150,6 +153,28 @@ export class WorldScene extends Phaser.Scene {
       g.fillStyle(0xd43a3a, 1)
       g.fillTriangle(T * 0.5, T * 0.03, T * 0.5, T * 0.13, T * 0.72, T * 0.08)
       this._bakeTileTexture('t_playerCity', g, null)
+    }
+
+    // AI 势力老巢贴图：冷紫色调，与玩家主城的暖金色、NPC 城池的赭红色区分开
+    if (!this.textures.exists('t_aiCity')) {
+      const g = this.make.graphics({ add: false })
+      this._drawTileBase(g, 0x4a3a5a)
+      g.fillStyle(0x000000, 0.35)
+      g.fillEllipse(T * 0.5, T * 0.84, T * 0.72, T * 0.16)
+      g.fillGradientStyle(0x6a4a8a, 0x6a4a8a, 0x3a2a52, 0x3a2a52)
+      g.fillRect(T * 0.2, T * 0.3, T * 0.6, T * 0.5)
+      g.fillStyle(0x8a6ab0, 0.8)
+      g.fillRect(T * 0.2, T * 0.3, T * 0.6, T * 0.04)
+      g.fillStyle(0x2a1a42, 1)
+      g.fillRect(T * 0.2, T * 0.26, T * 0.1, T * 0.06)
+      g.fillRect(T * 0.45, T * 0.26, T * 0.1, T * 0.06)
+      g.fillRect(T * 0.7, T * 0.26, T * 0.1, T * 0.06)
+      // 旗杆与暗色旗帜（区别于玩家主城的红旗）
+      g.lineStyle(1.5, 0x1a0a2a, 1)
+      g.lineBetween(T * 0.5, T * 0.1, T * 0.5, T * 0.28)
+      g.fillStyle(0x2a1030, 1)
+      g.fillTriangle(T * 0.5, T * 0.11, T * 0.5, T * 0.21, T * 0.72, T * 0.16)
+      this._bakeTileTexture('t_aiCity', g, null)
     }
   }
 
@@ -336,6 +361,9 @@ export class WorldScene extends Phaser.Scene {
 
   _texKey(tile) {
     if (tile.isCity) return 't_playerCity'
+    // aiLair 只记录"这里原本是谁的老巢"；只有当前仍归该势力所有才画敌方老巢贴图，
+    // 否则（被玩家攻占/放弃/其他势力占据）应该显示正常地块，避免永久卡成敌方城堡贴图
+    if (tile.aiLair && tile.owner === tile.aiLair) return 't_aiCity'
     return `t_${tile.type}_${tile.level}`
   }
 
@@ -345,14 +373,33 @@ export class WorldScene extends Phaser.Scene {
 
   // ── 覆盖层绘制 ────────────────────────────────────────────────────────────
 
+  /** 玩家领地画金色覆盖层，各 AI 势力按专属色画同风格覆盖层，一眼区分归属 */
   _drawTerritory() {
     const g = this.territoryG
     g.clear()
-    for (const t of this.state.ownedTiles()) {
-      g.fillStyle(0xffd700, t.isCity ? 0 : 0.14)
-      g.fillRect(t.x * T, t.y * T, T, T)
-      g.lineStyle(2, 0xffd700, 0.9)
-      g.strokeRect(t.x * T + 1, t.y * T + 1, T - 2, T - 2)
+    const factionById = new Map(this.state.aiLairs.map(f => [f.id, f]))
+    for (const row of this.state.tiles) {
+      for (const t of row) {
+        let color, isCapital
+        if (t.owner === 'player') { color = 0xffd700; isCapital = t.isCity }
+        else if (t.owner && factionById.has(t.owner)) {
+          const f = factionById.get(t.owner)
+          color = f.color; isCapital = (t.x === f.x && t.y === f.y)
+        } else continue
+        g.fillStyle(color, isCapital ? 0 : 0.14)
+        g.fillRect(t.x * T, t.y * T, T, T)
+        g.lineStyle(2, color, 0.9)
+        g.strokeRect(t.x * T + 1, t.y * T + 1, T - 2, T - 2)
+      }
+    }
+    // 多人模式：其他玩家领地画蓝色覆盖层
+    if (this.state.otherTerritories && this.state.otherTerritories.size > 0) {
+      for (const ot of this.state.getOtherTerritoryList()) {
+        g.fillStyle(0x4a90d9, ot.isCity ? 0.28 : 0.12)
+        g.fillRect(ot.x * T, ot.y * T, T, T)
+        g.lineStyle(2, 0x4a90d9, 0.7)
+        g.strokeRect(ot.x * T + 1, ot.y * T + 1, T - 2, T - 2)
+      }
     }
   }
 
