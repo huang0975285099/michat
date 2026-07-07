@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,7 @@ func NewSlgHandler(svc *service.SlgService, hub *ws.Hub) *SlgHandler {
 
 // POST /api/games/slg/join
 // 加入世界。返回世界种子、出生点、玩家存档与全图领地。
+// 世界满员时返回 403 {error:"world_full"}。
 func (h *SlgHandler) Join(c *gin.Context) {
 	userID := c.GetUint64(middleware.CtxUserID)
 	chatID := c.GetString(middleware.CtxChatID)
@@ -28,6 +30,10 @@ func (h *SlgHandler) Join(c *gin.Context) {
 
 	result, err := h.svc.Join(c.Request.Context(), userID, chatID, nickname)
 	if err != nil {
+		if errors.Is(err, service.ErrWorldFull) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "world_full"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -61,6 +67,21 @@ func (h *SlgHandler) GetWorld(c *gin.Context) {
 		"season":      w.Season,
 		"territories": territories,
 		"players":     players,
+	})
+}
+
+// GET /api/games/slg/status
+// 查询世界状态（玩家数/是否已满），供前端入口判断是否可进入
+func (h *SlgHandler) GetStatus(c *gin.Context) {
+	count, full, err := h.svc.GetWorldStatus(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"player_count":  count,
+		"max_players":   5,
+		"full":          full,
 	})
 }
 
@@ -99,12 +120,36 @@ func (h *SlgHandler) UpdateTerritory(c *gin.Context) {
 
 	ev, err := h.svc.UpdateTerritory(c.Request.Context(), userID, chatID, nickname, &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		switch {
+		case errors.Is(err, service.ErrTileOwnedByOther):
+			c.JSON(http.StatusForbidden, gin.H{"error": "tile_owned_by_other"})
+		case errors.Is(err, service.ErrNotAdjacent):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "not_adjacent"})
+		case errors.Is(err, service.ErrInvalidClaim):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_claim"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
 		return
 	}
 
 	// 通过 WS 广播给同世界在线玩家（含自己）
 	h.hub.BroadcastSLGEvent(chatID, ev)
 
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// POST /api/games/slg/reset
+// 管理员重置当前世界（标记 ended + 清空玩家/领地，下次 Join 创建新世界）
+func (h *SlgHandler) ResetWorld(c *gin.Context) {
+	userID := c.GetUint64(middleware.CtxUserID)
+	if err := h.svc.ResetWorld(c.Request.Context(), userID); err != nil {
+		if errors.Is(err, service.ErrNotAdmin) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "not admin"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

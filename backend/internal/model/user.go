@@ -8,6 +8,7 @@ type User struct {
 	Nickname  string     `json:"nickname"`
 	PublicKey string     `json:"public_key"`
 	IsReady   bool       `json:"is_ready"`
+	IsAdmin   bool       `json:"is_admin"`
 	CreatedAt time.Time  `json:"created_at"`
 	LastSeen  *time.Time `json:"last_seen"`
 }

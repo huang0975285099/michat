@@ -47,6 +47,8 @@ type TerritoryView struct {
 	OwnerChatID string `json:"owner_chat_id"`
 	OwnerName   string `json:"owner_name"`
 	IsCity      bool   `json:"is_city"`
+	TileLevel   int    `json:"tile_level,omitempty"`
+	TileType    string `json:"tile_type,omitempty"`
 }
 
 // PlayerBrief 返回给前端的其他玩家摘要（地图标记/在线列表用）

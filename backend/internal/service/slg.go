@@ -7,10 +7,20 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"sync"
 	"time"
 
 	"e2eechat/internal/model"
+)
+
+// 错误定义
+var (
+	ErrWorldFull        = errors.New("world full")
+	ErrNotAdmin         = errors.New("not admin")
+	ErrTileOwnedByOther = errors.New("tile owned by another player")
+	ErrNotAdjacent      = errors.New("tile not adjacent to owned territory")
+	ErrInvalidClaim     = errors.New("invalid claim request")
 )
 
 // SlgService 九州征途多人世界服务
@@ -22,23 +32,44 @@ type SlgService struct {
 	// 多实例需改为 Redis Set，当前阶段不涉及）。
 	onlineMu sync.RWMutex
 	online   map[string]uint64 // chatID → worldID
+
+	// 地图缓存：worldID → *SlgMap（从种子确定性生成，用于 AI 扩张判定）
+	mapMu    sync.RWMutex
+	mapCache map[uint64]*SlgMap
+
+	// AI 扩张事件广播回调（由 main.go 注入，避免 service→ws 循环依赖）
+	broadcastAI func(worldID uint64, ev *AITerritoryEvent)
+
+	// worldCreateMu/joinMu 串行化"查后建"临界区（单进程部署假设，与 online map 一致），
+	// 避免并发请求同时判断"条件未满足"而重复创建世界、或读到同一份玩家计数/出生点。
+	worldCreateMu sync.Mutex
+	joinMu        sync.Mutex
 }
 
 func NewSlgService(db *sql.DB) *SlgService {
-	return &SlgService{db: db, online: make(map[string]uint64)}
+	return &SlgService{
+		db:       db,
+		online:   make(map[string]uint64),
+		mapCache: make(map[uint64]*SlgMap),
+	}
+}
+
+// SetBroadcastAI 注入 AI 扩张事件广播函数（由 main.go 调用）
+func (s *SlgService) SetBroadcastAI(fn func(worldID uint64, ev *AITerritoryEvent)) {
+	s.broadcastAI = fn
 }
 
 // JoinResult 加入世界返回
 type JoinResult struct {
-	WorldID     uint64              `json:"world_id"`
-	Seed        int                 `json:"seed"`
-	Season      int                 `json:"season"`
-	SpawnX      int                 `json:"spawn_x"`
-	SpawnY      int                 `json:"spawn_y"`
-	IsNewPlayer bool                `json:"is_new_player"`
-	State       json.RawMessage     `json:"state,omitempty"` // 玩家上次存档（新玩家为空）
+	WorldID     uint64                `json:"world_id"`
+	Seed        int                   `json:"seed"`
+	Season      int                   `json:"season"`
+	SpawnX      int                   `json:"spawn_x"`
+	SpawnY      int                   `json:"spawn_y"`
+	IsNewPlayer bool                  `json:"is_new_player"`
+	State       json.RawMessage       `json:"state,omitempty"` // 玩家上次存档（新玩家为空）
 	Territories []model.TerritoryView `json:"territories"`
-	Players     []model.PlayerBrief  `json:"players"`
+	Players     []model.PlayerBrief   `json:"players"`
 }
 
 // SaveStateRequest 保存玩家状态
@@ -48,10 +79,10 @@ type SaveStateRequest struct {
 
 // TerritoryUpdateRequest 领地变更
 type TerritoryUpdateRequest struct {
-	X         int    `json:"x"`
-	Y         int    `json:"y"`
-	IsCity    bool   `json:"is_city"`
-	Action    string `json:"action"` // "claim" | "abandon"
+	X      int    `json:"x"`
+	Y      int    `json:"y"`
+	IsCity bool   `json:"is_city"`
+	Action string `json:"action"` // "claim" | "abandon"
 }
 
 // TerritoryChangeEvent 领地变更事件（WS 广播用）
@@ -77,6 +108,20 @@ func (s *SlgService) GetActiveWorld(ctx context.Context) (*model.SlgWorld, error
 		return nil, fmt.Errorf("query active world: %w", err)
 	}
 
+	// 并发首次创建保护：持锁后二次确认，避免多个请求同时判断"无 active 世界"
+	// 而各自建出多个世界（玩家被短暂分裂到不同世界）。
+	s.worldCreateMu.Lock()
+	defer s.worldCreateMu.Unlock()
+	err = s.db.QueryRowContext(ctx,
+		`SELECT id, seed, season, status, created_at FROM slg_worlds WHERE status='active' ORDER BY id DESC LIMIT 1`,
+	).Scan(&w.ID, &w.Seed, &w.Season, &w.Status, &w.CreatedAt)
+	if err == nil {
+		return &w, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("query active world: %w", err)
+	}
+
 	// 创建新世界：种子用当前时间戳
 	seed := int(time.Now().UnixNano() & 0x7FFFFFFF)
 	res, err := s.db.ExecContext(ctx,
@@ -86,7 +131,49 @@ func (s *SlgService) GetActiveWorld(ctx context.Context) (*model.SlgWorld, error
 	}
 	id, _ := res.LastInsertId()
 	w = model.SlgWorld{ID: uint64(id), Seed: seed, Season: 1, Status: "active", CreatedAt: time.Now()}
+
+	// 初始化 AI 势力老巢（共享 AI：所有玩家看到同一份 AI）
+	if err := s.initAITerritories(ctx, w.ID, seed); err != nil {
+		return nil, fmt.Errorf("init AI: %w", err)
+	}
 	return &w, nil
+}
+
+// initAITerritories 在新建世界时放置 AI 势力老巢到 slg_territories 表。
+// AI 老巢等级固定 AI_LAIR_LEVEL(6)，类型 plain，由服务端确定性地图生成位置。
+func (s *SlgService) initAITerritories(ctx context.Context, worldID uint64, seed int) error {
+	m := s.getOrBuildMap(worldID, seed)
+	for i, f := range slgAiFactions {
+		if i >= len(m.aiLairs) {
+			break
+		}
+		lair := m.aiLairs[i]
+		_, err := s.db.ExecContext(ctx,
+			`INSERT INTO slg_territories (world_id, x, y, owner_chat_id, owner_name, is_city, tile_level, tile_type)
+			 VALUES (?, ?, ?, ?, ?, 0, ?, 'plain')
+			 ON DUPLICATE KEY UPDATE owner_chat_id=VALUES(owner_chat_id), tile_level=VALUES(tile_level), tile_type=VALUES(tile_type)`,
+			worldID, lair.x, lair.y, f.id, f.name, aiLairLevel)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// getOrBuildMap 获取或构建世界地图缓存（从种子确定性生成）
+func (s *SlgService) getOrBuildMap(worldID uint64, seed int) *SlgMap {
+	s.mapMu.RLock()
+	if m, ok := s.mapCache[worldID]; ok {
+		s.mapMu.RUnlock()
+		return m
+	}
+	s.mapMu.RUnlock()
+
+	m := NewSlgMap(seed)
+	s.mapMu.Lock()
+	s.mapCache[worldID] = m
+	s.mapMu.Unlock()
+	return m
 }
 
 // calcSpawnPoint 根据已有玩家数量计算新出生点
@@ -104,14 +191,72 @@ func calcSpawnPoint(existingCount int) (int, int) {
 	x := int(math.Round(cx + math.Cos(angle)*radius))
 	y := int(math.Round(cy + math.Sin(angle)*radius))
 	// 钳制到地图边界内
-	if x < 1 { x = 1 }
-	if y < 1 { y = 1 }
-	if x >= mapW-1 { x = mapW - 2 }
-	if y >= mapH-1 { y = mapH - 2 }
+	if x < 1 {
+		x = 1
+	}
+	if y < 1 {
+		y = 1
+	}
+	if x >= mapW-1 {
+		x = mapW - 2
+	}
+	if y >= mapH-1 {
+		y = mapH - 2
+	}
 	return x, y
 }
 
+// createNewPlayer 在世界未满员的前提下，原子地创建新玩家记录与初始主城领地。
+// joinMu 串行化"查人数→判满→插入"，事务保证两条 INSERT 同生共死：
+// 避免并发加入导致超员、拿到重复出生点，或主城领地插入失败被静默吞掉
+// （原实现里 territory INSERT 的 err 完全没检查，失败后玩家会没有主城）。
+func (s *SlgService) createNewPlayer(ctx context.Context, worldID, userID uint64, chatID, nickname string) (playerID uint64, spawnX, spawnY int, err error) {
+	s.joinMu.Lock()
+	defer s.joinMu.Unlock()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var count int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM slg_players WHERE world_id=?`, worldID).Scan(&count); err != nil {
+		return 0, 0, 0, fmt.Errorf("count players: %w", err)
+	}
+	if count >= maxPlayersPerWorld {
+		return 0, 0, 0, ErrWorldFull
+	}
+	spawnX, spawnY = calcSpawnPoint(count)
+
+	emptyState, _ := json.Marshal(map[string]any{"v": 0})
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO slg_players (world_id, user_id, chat_id, nickname, spawn_x, spawn_y, state_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		worldID, userID, chatID, nickname, spawnX, spawnY, emptyState)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("create slg player: %w", err)
+	}
+	lastID, _ := res.LastInsertId()
+	playerID = uint64(lastID)
+
+	// 初始领地：出生点即主城
+	if _, err = tx.ExecContext(ctx,
+		`INSERT INTO slg_territories (world_id, x, y, owner_chat_id, owner_name, is_city, tile_level, tile_type)
+		 VALUES (?, ?, ?, ?, ?, 1, 0, '')`,
+		worldID, spawnX, spawnY, chatID, nickname); err != nil {
+		return 0, 0, 0, fmt.Errorf("create initial territory: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return 0, 0, 0, fmt.Errorf("commit: %w", err)
+	}
+	return playerID, spawnX, spawnY, nil
+}
+
 // Join 加入世界。返回世界种子、出生点、玩家存档与全图领地。
+// 世界玩家上限 maxPlayersPerWorld(5)，满后返回 ErrWorldFull（不创建新世界）。
+// 已在该世界的老玩家始终可以重返。
 func (s *SlgService) Join(ctx context.Context, userID uint64, chatID, nickname string) (*JoinResult, error) {
 	w, err := s.GetActiveWorld(ctx)
 	if err != nil {
@@ -132,31 +277,11 @@ func (s *SlgService) Join(ctx context.Context, userID uint64, chatID, nickname s
 
 	isNew := false
 	if errors.Is(err, sql.ErrNoRows) {
-		// 新玩家：分配出生点
 		isNew = true
-		// 统计当前世界已有玩家数，用于散布出生点
-		var count int
-		s.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM slg_players WHERE world_id=?`, w.ID).Scan(&count)
-		spawnX, spawnY = calcSpawnPoint(count)
-
-		// 初始空状态 JSON（前端会发送完整存档）
-		emptyState, _ := json.Marshal(map[string]any{"v": 0})
-		res, err := s.db.ExecContext(ctx,
-			`INSERT INTO slg_players (world_id, user_id, chat_id, nickname, spawn_x, spawn_y, state_json)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			w.ID, userID, chatID, nickname, spawnX, spawnY, emptyState)
+		playerID, spawnX, spawnY, err = s.createNewPlayer(ctx, w.ID, userID, chatID, nickname)
 		if err != nil {
-			return nil, fmt.Errorf("create slg player: %w", err)
+			return nil, err
 		}
-		lastID, _ := res.LastInsertId()
-		playerID = uint64(lastID)
-
-		// 初始领地：出生点即主城
-		s.db.ExecContext(ctx,
-			`INSERT INTO slg_territories (world_id, x, y, owner_chat_id, owner_name, is_city)
-			 VALUES (?, ?, ?, ?, ?, 1)`,
-			w.ID, spawnX, spawnY, chatID, nickname)
 	} else if err != nil {
 		return nil, fmt.Errorf("query slg player: %w", err)
 	}
@@ -261,10 +386,10 @@ func (s *SlgService) GetOnlinePlayersInWorld(worldID uint64) []string {
 	return result
 }
 
-// GetTerritories 获取世界全图领地
+// GetTerritories 获取世界全图领地（含 AI 领地的 tile_level/tile_type）
 func (s *SlgService) GetTerritories(ctx context.Context, worldID uint64) ([]model.TerritoryView, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT x, y, owner_chat_id, owner_name, is_city FROM slg_territories WHERE world_id=?`,
+		`SELECT x, y, owner_chat_id, owner_name, is_city, tile_level, tile_type FROM slg_territories WHERE world_id=?`,
 		worldID)
 	if err != nil {
 		return nil, err
@@ -275,7 +400,7 @@ func (s *SlgService) GetTerritories(ctx context.Context, worldID uint64) ([]mode
 	for rows.Next() {
 		var t model.TerritoryView
 		var isCity int
-		if err := rows.Scan(&t.X, &t.Y, &t.OwnerChatID, &t.OwnerName, &isCity); err != nil {
+		if err := rows.Scan(&t.X, &t.Y, &t.OwnerChatID, &t.OwnerName, &isCity, &t.TileLevel, &t.TileType); err != nil {
 			return nil, err
 		}
 		t.IsCity = isCity == 1
@@ -352,16 +477,216 @@ func (s *SlgService) UpdateTerritory(ctx context.Context, userID uint64, chatID,
 		ev.OwnerChatID = ""
 		ev.OwnerName = ""
 	} else {
+		// claim 校验（client-authoritative 战斗结果目前无法完全验证，这里堵住明显的伪造/越权路径）：
+		// - 主城归属只在 Join() 时确定，claim 请求一律不许携带 is_city=true（否则可伪造"占领主城"）
+		// - 目标地块若已属于另一名真人玩家，拒绝——游戏本身不支持攻打玩家领地（client 的
+		//   isOtherPlayerTile 也会拦，这里是服务端兜底，防止绕过前端直接打接口）
+		// - 目标必须与本人已有领地相邻，拒绝隔空/远距离伪造占领请求
+		if req.IsCity {
+			return nil, ErrInvalidClaim
+		}
+		var curOwner string
+		err = s.db.QueryRowContext(ctx,
+			`SELECT owner_chat_id FROM slg_territories WHERE world_id=? AND x=? AND y=?`,
+			w.ID, req.X, req.Y).Scan(&curOwner)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("query tile owner: %w", err)
+		}
+		if curOwner != "" && curOwner != chatID && !isAIFactionID(curOwner) {
+			return nil, ErrTileOwnedByOther
+		}
+		var adjacent int
+		err = s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM slg_territories WHERE world_id=? AND owner_chat_id=? AND x BETWEEN ? AND ? AND y BETWEEN ? AND ?`,
+			w.ID, chatID, req.X-1, req.X+1, req.Y-1, req.Y+1).Scan(&adjacent)
+		if err != nil {
+			return nil, fmt.Errorf("check adjacency: %w", err)
+		}
+		if adjacent == 0 {
+			return nil, ErrNotAdjacent
+		}
+
 		// claim：UPSERT（同一地块只能有一个领主）
 		_, err = s.db.ExecContext(ctx,
 			`INSERT INTO slg_territories (world_id, x, y, owner_chat_id, owner_name, is_city)
-			 VALUES (?, ?, ?, ?, ?, ?)
-			 ON DUPLICATE KEY UPDATE owner_chat_id=VALUES(owner_chat_id), owner_name=VALUES(owner_name), is_city=VALUES(is_city), updated_at=NOW()`,
-			w.ID, req.X, req.Y, chatID, nickname, req.IsCity)
+			 VALUES (?, ?, ?, ?, ?, 0)
+			 ON DUPLICATE KEY UPDATE owner_chat_id=VALUES(owner_chat_id), owner_name=VALUES(owner_name), is_city=0, updated_at=NOW()`,
+			w.ID, req.X, req.Y, chatID, nickname)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	return ev, nil
+}
+
+// isAIFactionID 判断 chat_id 字段是否实际是 AI 势力 id（AI 领地也存在 slg_territories.owner_chat_id 里）
+func isAIFactionID(id string) bool {
+	for _, f := range slgAiFactions {
+		if f.id == id {
+			return true
+		}
+	}
+	return false
+}
+
+// ── AI 扩张定时器（服务端权威，所有玩家共享同一份 AI）──────────────────────────
+
+// StartAITicker 启动 AI 扩张定时器：每 aiTickRealSeconds(60) 真实秒执行一次。
+// 对每个活跃世界，加载全图领地，运行各 AI 势力的一次扩张判定，
+// 将新占领地块写入 slg_territories 并通过 WS 广播给在线玩家。
+func (s *SlgService) StartAITicker() {
+	go func() {
+		ticker := time.NewTicker(time.Duration(aiTickRealSeconds) * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.tickAllWorlds()
+		}
+	}()
+}
+
+// tickAllWorlds 遍历所有活跃世界，执行 AI 扩张
+func (s *SlgService) tickAllWorlds() {
+	ctx := context.Background()
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, seed FROM slg_worlds WHERE status='active'`)
+	if err != nil {
+		return
+	}
+	type worldInfo struct {
+		id   uint64
+		seed int
+	}
+	var worlds []worldInfo
+	for rows.Next() {
+		var wi worldInfo
+		rows.Scan(&wi.id, &wi.seed)
+		worlds = append(worlds, wi)
+	}
+	rows.Close()
+
+	for _, w := range worlds {
+		s.tickAIWorld(ctx, w.id, w.seed)
+	}
+}
+
+// tickAIWorld 执行单个世界的 AI 扩张
+func (s *SlgService) tickAIWorld(ctx context.Context, worldID uint64, seed int) {
+	m := s.getOrBuildMap(worldID, seed)
+
+	// 加载全图领地，构建 ownerMap 和 isCityMap
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT x, y, owner_chat_id, is_city FROM slg_territories WHERE world_id=?`,
+		worldID)
+	if err != nil {
+		return
+	}
+	ownerMap := make(map[string]string)
+	isCityMap := make(map[string]bool)
+	for rows.Next() {
+		var x, y int
+		var ownerChatID string
+		var isCity int
+		rows.Scan(&x, &y, &ownerChatID, &isCity)
+		ownerMap[key2d(x, y)] = ownerChatID
+		isCityMap[key2d(x, y)] = isCity == 1
+	}
+	rows.Close()
+
+	// 每个存活 AI 势力执行一次扩张
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	for i, f := range slgAiFactions {
+		if i >= len(m.aiLairs) {
+			break
+		}
+		lair := m.aiLairs[i]
+		ev := m.RunAIExpansionForFaction(f, lair.x, lair.y, ownerMap, isCityMap, rng)
+		if ev == nil {
+			continue
+		}
+		// 持久化到 DB
+		_, err := s.db.ExecContext(ctx,
+			`INSERT INTO slg_territories (world_id, x, y, owner_chat_id, owner_name, is_city, tile_level, tile_type)
+			 VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+			 ON DUPLICATE KEY UPDATE owner_chat_id=VALUES(owner_chat_id), owner_name=VALUES(owner_name),
+			   tile_level=VALUES(tile_level), tile_type=VALUES(tile_type), updated_at=NOW()`,
+			worldID, ev.X, ev.Y, f.id, f.name, ev.Level, ev.TileType)
+		if err != nil {
+			continue
+		}
+		// 更新内存 map（供后续势力判定使用，避免同一 tick 内重复占领）
+		ownerMap[key2d(ev.X, ev.Y)] = f.id
+
+		// 广播给在线玩家
+		if s.broadcastAI != nil {
+			s.broadcastAI(worldID, ev)
+		}
+	}
+}
+
+// ── 管理员重置 ──────────────────────────────────────────────────────────────
+
+// IsAdmin 检查用户是否为管理员
+func (s *SlgService) IsAdmin(ctx context.Context, userID uint64) (bool, error) {
+	var isAdmin int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT is_admin FROM users WHERE id=?`, userID).Scan(&isAdmin)
+	if err != nil {
+		return false, err
+	}
+	return isAdmin == 1, nil
+}
+
+// ResetWorld 管理员重置当前世界：标记为 ended，删除所有玩家与领地。
+// 下次 Join 时 GetActiveWorld 会创建新世界（新种子 + 新 AI 老巢）。
+func (s *SlgService) ResetWorld(ctx context.Context, userID uint64) error {
+	isAdmin, err := s.IsAdmin(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("check admin: %w", err)
+	}
+	if !isAdmin {
+		return ErrNotAdmin
+	}
+
+	w, err := s.GetActiveWorld(ctx)
+	if err != nil {
+		return err
+	}
+
+	// 标记世界结束
+	_, err = s.db.ExecContext(ctx,
+		`UPDATE slg_worlds SET status='ended' WHERE id=?`, w.ID)
+	if err != nil {
+		return fmt.Errorf("end world: %w", err)
+	}
+
+	// 删除领地与玩家记录
+	s.db.ExecContext(ctx, `DELETE FROM slg_territories WHERE world_id=?`, w.ID)
+	s.db.ExecContext(ctx, `DELETE FROM slg_players WHERE world_id=?`, w.ID)
+
+	// 清理地图缓存与在线状态
+	s.mapMu.Lock()
+	delete(s.mapCache, w.ID)
+	s.mapMu.Unlock()
+
+	s.onlineMu.Lock()
+	for cid, wid := range s.online {
+		if wid == w.ID {
+			delete(s.online, cid)
+		}
+	}
+	s.onlineMu.Unlock()
+
+	return nil
+}
+
+// GetWorldStatus 返回世界状态摘要（玩家数/上限），供前端判断是否可进入
+func (s *SlgService) GetWorldStatus(ctx context.Context) (playerCount int, full bool, err error) {
+	w, err := s.GetActiveWorld(ctx)
+	if err != nil {
+		return 0, false, err
+	}
+	s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM slg_players WHERE world_id=?`, w.ID).Scan(&playerCount)
+	return playerCount, playerCount >= maxPlayersPerWorld, nil
 }

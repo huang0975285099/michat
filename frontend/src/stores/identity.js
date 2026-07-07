@@ -11,6 +11,7 @@ export const useIdentityStore = defineStore('identity', () => {
   const nickname = ref(localStorage.getItem('nickname') || '')
   const hasPrivateKey = ref(false)
   const serverReady = ref(false)
+  const isAdmin = ref(false)
 
   // 安全码锁定状态
   const isLocked = ref(false)        // 当前是否锁定
@@ -84,6 +85,7 @@ export const useIdentityStore = defineStore('identity', () => {
       try {
         const { data } = await identityApi.me()
         serverReady.value = data.is_ready
+        isAdmin.value = !!data.is_admin
         if (serverReady.value) {
           await connect()
           await loadFriendPubKeys()
@@ -265,6 +267,7 @@ export const useIdentityStore = defineStore('identity', () => {
     localStorage.removeItem('nickname')
     chatId.value = ''
     nickname.value = ''
+    isAdmin.value = false
     hasPrivateKey.value = false
     serverReady.value = false
     hasCode.value = false
@@ -279,7 +282,7 @@ export const useIdentityStore = defineStore('identity', () => {
   }
 
   return {
-    chatId, nickname, hasPrivateKey, serverReady, isReady,
+    chatId, nickname, hasPrivateKey, serverReady, isReady, isAdmin,
     isLocked, hasCode, lockTimeout,
     friendPubKeys, getFriendPubKey, getFriendName, cacheFriendPubKey,
     pendingRequestCount,

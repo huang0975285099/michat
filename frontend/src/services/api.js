@@ -104,13 +104,18 @@ export const versionApi = {
 // 九州征途（SLG）多人世界
 export const slgApi = {
   // 加入世界 → 返回 { world_id, seed, season, spawn_x, spawn_y, is_new_player, state, territories, players }
+  // 满员时返回 403 {error:'world_full'}
   join: () => api.post('/games/slg/join'),
   // 获取世界快照（领地列表 + 在线玩家）
   getWorld: () => api.get('/games/slg/world'),
+  // 查询世界状态 { player_count, max_players, full }
+  getStatus: () => api.get('/games/slg/status'),
   // 保存玩家状态
   saveState: (state) => api.put('/games/slg/state', { state }),
   // 更新领地归属 { x, y, is_city, action: 'claim'|'abandon' }
   updateTerritory: (payload) => api.post('/games/slg/territory', payload),
+  // 管理员重置当前世界（清空所有玩家与领地，下次 Join 创建新世界）
+  resetWorld: () => api.post('/games/slg/reset'),
 }
 
 export default api

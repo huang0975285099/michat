@@ -4,6 +4,7 @@
 import {
   MAP_W, MAP_H, TILE_TYPES, COPPER_TILE_RATE, NPC_CITY_LEVEL_COUNTS, garrisonOf, tileGuardSpec, guardPoolOf, FORMATION_SIZE,
   AI_FACTIONS, AI_LAIR_MIN_DIST_FROM_SPAWN, AI_LAIR_MIN_DIST_FROM_CITY, AI_LAIR_MIN_DIST_BETWEEN,
+  SAFE_ZONE_TYPE_WEIGHTS,
 } from '../GameConstants.js'
 
 /** 按权重随机取一项。items = [[value, weight], ...] */
@@ -210,7 +211,9 @@ export function generateMap(seed) {
   }
   if (!spawn) spawn = { x: 4, y: 4 }   // 兜底（理论上不会触发）
 
-  // 5.4) 出生点自身及八邻强制改为平原/农田，避免开局被铜矿/森林/丘陵等地貌包围。
+  // 5.4) 出生点自身强制平原；八邻按 SAFE_ZONE_TYPE_WEIGHTS 加权重铺类型（不再局限平原/
+  //      农田，各类资源地都可能出现，权重上平原调低、铜矿调高，与多人模式的
+  //      GameState._applySpawnSafeZone 保持一致体验）。
   const spawnTile = tiles[spawn.y][spawn.x]
   spawnTile.type = 'plain'
   spawnTile.garrison = garrisonOf(spawnTile.level, spawnTile.type)
@@ -219,7 +222,7 @@ export function generateMap(seed) {
       if (!dx && !dy) continue
       const t = tiles[spawn.y + dy]?.[spawn.x + dx]
       if (!t || t.type === 'npcCity' || !TILE_TYPES[t.type].passable) continue
-      t.type = rng() < 0.5 ? 'plain' : 'farm'
+      t.type = weightedPick(rng, SAFE_ZONE_TYPE_WEIGHTS)
       t.garrison = garrisonOf(t.level, t.type)
     }
   }

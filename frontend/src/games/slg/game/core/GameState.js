@@ -23,8 +23,9 @@ import {
   EQUIP_TYPES, EQUIP_QUALITY, EQUIP_MAX_LEVEL, EQUIP_DRAW_COST, EQUIP_DISMISS_JADE,
   AI_FACTIONS, AI_TICK_SECONDS, AI_LAIR_LEVEL, AI_AGGRESSION_CITY_LV, PLAYER_TILE_DEFENSE_MULT,
   AI_SUCCESS_MIN, AI_SUCCESS_MAX,
+  SAFE_ZONE_TYPE_WEIGHTS, SAFE_ZONE_TYPE_TOTAL,
 } from '../GameConstants.js'
-import { generateMap, rollGuardsForTile } from './MapGenerator.js'
+import { generateMap, rollGuardsForTile, mulberry32 } from './MapGenerator.js'
 import { findPath } from './pathfind.js'
 import { resolveBattle } from './battle.js'
 import { getSkill, BINDABLE_SKILLS } from './skills.js'
@@ -73,13 +74,30 @@ export class GameState extends Emitter {
     // 多人模式：使用服务器分配的出生点覆盖种子默认出生点
     if (opts.spawnOverride) {
       const so = opts.spawnOverride
-      // 确保出生点地块可通行且为主城类型
-      const t = tiles[so.y]?.[so.x]
-      if (t && TILE_TYPES[t.type]?.passable) {
-        t.type = 'plain'
-        t.level = 1
-        t.garrison = garrisonOf(1, 'plain')
-        this.spawn = { x: so.x, y: so.y }
+      // 服务器分配的出生点可能落在湖泊/NPC城池上，螺旋搜索最近的有效地块
+      const tryTile = (x, y) => {
+        const t = tiles[y]?.[x]
+        return t && TILE_TYPES[t.type]?.passable && t.type !== 'npcCity' ? t : null
+      }
+      let spTile = tryTile(so.x, so.y), spX = so.x, spY = so.y
+      for (let r = 1; r <= 5 && !spTile; r++) {
+        for (let dy = -r; dy <= r && !spTile; dy++) {
+          for (let dx = -r; dx <= r && !spTile; dx++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
+            spTile = tryTile(so.x + dx, so.y + dy)
+            if (spTile) { spX = so.x + dx; spY = so.y + dy }
+          }
+        }
+      }
+      if (spTile) {
+        spTile.type = 'plain'
+        spTile.level = 1
+        spTile.garrison = garrisonOf(1, 'plain')
+        this.spawn = { x: spX, y: spY }
+        // 新手安全区：第一圈 1~2 级平原/农田，第二圈降至 3~4 级（与 MapGenerator 步骤 5.4/5.5 一致）。
+        // 多人模式下每个客户端都会对"当前已知的每一座主城"（自己+其他玩家，见
+        // applyServerTerritories）重复调用这个纯坐标函数，保证所有人对同一坐标算出同一结果。
+        this._applySpawnSafeZone(spX, spY)
       } else {
         // 兜底：出生点不可通行时用种子默认值
         this.spawn = spawn
@@ -116,8 +134,8 @@ export class GameState extends Emitter {
     this.victoryShown = false  // 「天下一统」只提示一次
     this._frozen = false       // 冻结后 save() 变为空操作（重置存档时用，防止 teardown 阶段的自动保存复活旧数据）
 
-    // 主城落位
-    const cityTile = this.tiles[spawn.y][spawn.x]
+    // 主城落位（使用 this.spawn 而非原始 spawn，支持多人模式出生点覆盖）
+    const cityTile = this.tiles[this.spawn.y][this.spawn.x]
     cityTile.owner = 'player'
     cityTile.isCity = true
     cityTile.garrison = 0
@@ -129,9 +147,13 @@ export class GameState extends Emitter {
       const t = this.tiles[f.y][f.x]
       t.type = 'plain'
       t.level = AI_LAIR_LEVEL
-      t.owner = f.id
       t.aiLair = f.id
-      this._garrisonTile(t, AI_LAIR_LEVEL, 'plain')
+      if (!this.online) {
+        // 单机模式：本地驱动 AI，老巢立即归属 AI 并铺守军
+        t.owner = f.id
+        this._garrisonTile(t, AI_LAIR_LEVEL, 'plain')
+      }
+      // 多人模式：老巢归属与守军由服务端 slg_territories 下发（applyServerTerritories）
     }
     this._aiAcc = 0            // AI 扩张判定的秒级累加器（见 _advanceAi），存档时一并保存
 
@@ -427,19 +449,56 @@ export class GameState extends Emitter {
     if (gameSecs <= 0) return
     this.now += gameSecs
     this._produce(gameSecs)
-    this._advanceAi(gameSecs)
+    // 多人模式：AI 由服务端权威驱动（StartAITicker），客户端不本地跑 AI 扩张
+    if (!this.online) this._advanceAi(gameSecs)
     this._processMarches()
   }
 
   // ── AI 对手势力（见 docs/slg-AI势力设计.md）─────────────────────────────────
 
   /** 给地块铺一份满编守军（按等级/类型重新生成，不复用旧守军身份）。
-   *  用于老巢初始化、AI 新占领地块——这两种场景本来就该是"全新的一份守军"。 */
+   *  用于老巢初始化、AI 新占领地块、出生点安全区降级——这些场景本来就该是"全新的一份守军"。
+   *  按 (全局种子, x, y) 派生确定性 rng：多人模式下任意客户端为同一坐标算出的守将必须一致
+   *  （AI 占地广播、出生点安全区收敛都靠这个），单机模式下顺带让守将身份可复现。 */
   _garrisonTile(t, level, type) {
-    const { guards, garrisonType } = rollGuardsForTile(level, type)
+    const tileSeed = (Math.imul(this.seed | 0, 0x9E3779B1) ^ Math.imul(t.x, 0x85EBCA6B) ^ Math.imul(t.y, 0xC2B2AE35)) >>> 0
+    const { guards, garrisonType } = rollGuardsForTile(level, type, mulberry32(tileSeed))
     t.guards = guards
     t.garrisonType = garrisonType
     t.garrison = guards.reduce((s, g) => s + g.troops, 0)
+  }
+
+  /** 出生点安全区：城池外第一圈强制降到 1~2 级、但类型按 SAFE_ZONE_TYPE_WEIGHTS 加权抽取
+   *  （不再局限平原/农田，各类资源地都可能出现，权重上平原调低、铜矿调高），第二圈保留原
+   *  地形类型、原本 >4 级的降到 3~4 级。纯函数于 (cx,cy)（地形取值靠坐标哈希、守军靠
+   *  _garrisonTile 的坐标确定性 rng），可安全重复调用（幂等），任意客户端为任意已知主城
+   *  坐标（自己或其他玩家）调用都会收敛到同一结果——这是多人模式下修复"不同玩家看到同一
+   *  坐标不同等级/守军" desync 的关键：之前只对"自己的"出生点降级，且降级只改了
+   *  level/garrison 汇总数，没重掷 guards 明细，导致面板显示的等级与实际出征打到的守将强度对不上。 */
+  _applySpawnSafeZone(cx, cy) {
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        if (!dx && !dy) continue
+        const t = this.tiles[cy + dy]?.[cx + dx]
+        if (!t || !TILE_TYPES[t.type]?.passable || t.type === 'npcCity') continue
+        const dist = Math.max(Math.abs(dx), Math.abs(dy))
+        const hash = ((cx + dx) * 73856093) ^ ((cy + dy) * 19349663)
+        let changed = false
+        if (dist === 1) {
+          let r = (hash >>> 0) % SAFE_ZONE_TYPE_TOTAL
+          for (const [ty, w] of SAFE_ZONE_TYPE_WEIGHTS) {
+            r -= w
+            if (r < 0) { t.type = ty; break }
+          }
+          t.level = 1 + ((hash >> 1) & 1)
+          changed = true
+        } else if (dist === 2 && t.level > 4) {
+          t.level = 3 + ((hash >> 2) & 1)
+          changed = true
+        }
+        if (changed) this._garrisonTile(t, t.level, t.type)
+      }
+    }
   }
 
   /** 推进 AI 扩张：按游戏秒数累加，每满 AI_TICK_SECONDS 为每个存活势力跑一次扩张判定。
@@ -1337,6 +1396,8 @@ export class GameState extends Emitter {
         // 老巢坐标即使已被放弃（owner=null）也要存一条记录，否则读档时构造函数会
         // 把老巢强制归还给对应势力，等于把玩家的"永久击败该势力"复活了。
         if (!t.owner && !t.aiLair) continue
+        // 多人模式：AI 领地由服务端管理，不写入玩家存档（避免与服务端权威数据冲突）
+        if (this.online && t.owner && t.owner !== 'player') continue
         const entry = { x: t.x, y: t.y, isCity: !!t.isCity, owner: t.owner || null }
         if (t.owner && t.owner !== 'player') {
           // AI 归属地块：连同守军明细一起存，读档直接还原身份，不重新随机抽取
@@ -1512,14 +1573,39 @@ export class GameState extends Emitter {
    */
   applyServerTerritories(territories) {
     this.otherTerritories.clear()
+    // 多人模式：清除本地 AI 领地归属（以服务端权威数据为准，防止旧存档残留）
+    if (this.online) {
+      for (const row of this.tiles) {
+        for (const t of row) {
+          if (t.owner === 'ai1' || t.owner === 'ai2') t.owner = null
+        }
+      }
+    }
     for (const t of territories) {
+      // 每一座已知主城（自己 + 其他玩家）都重新跑一遍出生点安全区：_applySpawnSafeZone
+      // 是坐标的纯函数、幂等，任意客户端为同一坐标算出的结果必然相同——这是让所有玩家
+      // 对"别人主城周边地块等级/守军"看法一致的关键（自己的已在构造函数里跑过一次，
+      // 这里重跑是无害的空操作）。
+      if (t.is_city) this._applySpawnSafeZone(t.x, t.y)
       // 跳过自己的领地（自己的领地由本地 GameState 管理）
       if (t.owner_chat_id === this.chatId) continue
-      this.otherTerritories.set(`${t.x},${t.y}`, {
-        ownerChatId: t.owner_chat_id,
-        ownerName: t.owner_name,
-        isCity: t.is_city,
-      })
+      if (t.owner_chat_id === 'ai1' || t.owner_chat_id === 'ai2') {
+        // AI 领地（服务端权威）：设置 tile.owner 并生成守军
+        const tile = this.tileAt(t.x, t.y)
+        if (tile) {
+          tile.owner = t.owner_chat_id
+          const lvl = t.tile_level || tile.level
+          const typ = t.tile_type || tile.type
+          this._garrisonTile(tile, lvl, typ)
+        }
+      } else {
+        // 其他玩家领地
+        this.otherTerritories.set(`${t.x},${t.y}`, {
+          ownerChatId: t.owner_chat_id,
+          ownerName: t.owner_name,
+          isCity: t.is_city,
+        })
+      }
     }
     this.emit('slg_territories', this.getOtherTerritoryList())
   }
@@ -1532,16 +1618,53 @@ export class GameState extends Emitter {
     // 忽略自己的变更（本地已处理）
     if (ev.owner_chat_id === this.chatId && ev.action === 'claim') return
     const key = `${ev.x},${ev.y}`
-    if (ev.action === 'abandon' || !ev.owner_chat_id) {
-      this.otherTerritories.delete(key)
+    if (ev.owner_chat_id === 'ai1' || ev.owner_chat_id === 'ai2') {
+      // AI 领地变更：直接修改 tile
+      const tile = this.tileAt(ev.x, ev.y)
+      if (ev.action === 'abandon' || !ev.owner_chat_id) {
+        if (tile) tile.owner = null
+      } else if (tile) {
+        tile.owner = ev.owner_chat_id
+        const lvl = ev.tile_level || tile.level
+        const typ = ev.tile_type || tile.type
+        this._garrisonTile(tile, lvl, typ)
+      }
     } else {
-      this.otherTerritories.set(key, {
-        ownerChatId: ev.owner_chat_id,
-        ownerName: ev.owner_name,
-        isCity: ev.is_city,
-      })
+      // 玩家领地变更
+      if (ev.action === 'abandon' || !ev.owner_chat_id) {
+        this.otherTerritories.delete(key)
+      } else {
+        this.otherTerritories.set(key, {
+          ownerChatId: ev.owner_chat_id,
+          ownerName: ev.owner_name,
+          isCity: ev.is_city,
+        })
+      }
     }
     this.emit('slg_territory', ev)
+  }
+
+  /**
+   * 应用来自服务器的 AI 扩张事件（slg_ai_expansion）。
+   * 多人模式下 AI 由服务端权威驱动，客户端只负责更新地块归属与渲染。
+   * @param {{faction_id:string,x:number,y:number,level:number,tile_type:string,action:string}} ev
+   */
+  applyAIExpansion(ev) {
+    const tile = this.tileAt(ev.x, ev.y)
+    if (!tile) return
+    if (ev.action === 'claim') {
+      tile.owner = ev.faction_id
+      const lvl = ev.level || tile.level
+      const typ = ev.tile_type || tile.type
+      this._garrisonTile(tile, lvl, typ)
+      this.damaged.delete(tile)
+      const f = this.aiLairs.find(a => a.id === ev.faction_id)
+      if (f && tile.owner !== 'player') {
+        this._pushLog(`🚩 ${f.name} 占领了 ${TILE_TYPES[tile.type].name} Lv.${tile.level} (${ev.x},${ev.y})`)
+      }
+    }
+    // 触发渲染刷新；owner 为 AI 势力 ID，SlgPage 的 territory 监听会跳过 AI 同步
+    this.emit('territory', { x: ev.x, y: ev.y, owner: ev.faction_id })
   }
 
   /**
@@ -1561,6 +1684,13 @@ export class GameState extends Emitter {
    */
   isOtherPlayerTile(x, y) {
     return this.otherTerritories.has(`${x},${y}`)
+  }
+
+  /**
+   * 查询某地块的其他玩家归属信息（无则 null）。供 UI 面板展示归属方昵称。
+   */
+  otherTerritoryAt(x, y) {
+    return this.otherTerritories.get(`${x},${y}`) || null
   }
 
   /**

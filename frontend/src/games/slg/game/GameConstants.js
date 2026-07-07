@@ -8,6 +8,14 @@ export const TILE_SIZE = 48      // 单格像素
 // 铜矿地占比：地貌平滑后按此概率把陆地随机改为铜矿（散点式矿脉，见 MapGenerator 步骤 2.5）
 export const COPPER_TILE_RATE = 0.04
 
+// 主城安全区第一圈（8 格，见 GameState._applySpawnSafeZone）地块类型权重：只保证低等级
+// （好打），不再局限于平原/农田——各类资源地都可能出现在主城正对面，平原调低、铜矿调高，
+// 让主城周边能更快摸到铜矿加速前期资金周转。
+export const SAFE_ZONE_TYPE_WEIGHTS = [
+  ['plain', 10], ['farm', 20], ['forest', 15], ['hill', 15], ['mountain', 15], ['copper', 25],
+]
+export const SAFE_ZONE_TYPE_TOTAL = SAFE_ZONE_TYPE_WEIGHTS.reduce((s, [, w]) => s + w, 0)
+
 // 时间加速：1 真实秒 = 60 游戏秒（游戏内 1 小时 ≈ 真实 1 分钟）
 export const TIME_SCALE = 60
 

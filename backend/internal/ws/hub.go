@@ -1512,3 +1512,28 @@ func (h *Hub) BroadcastSLGEvent(senderChatID string, ev *service.TerritoryChange
 	h.mu.RUnlock()
 }
 
+// BroadcastSLGAIEvent 向指定世界所有在线玩家广播 AI 扩张事件。
+// 由 SLG 服务端 AI 定时器在 AI 占领新地块后调用。
+func (h *Hub) BroadcastSLGAIEvent(worldID uint64, ev *service.AITerritoryEvent) {
+	if h.slgSvc == nil {
+		return
+	}
+	peers := h.slgSvc.GetOnlinePlayersInWorld(worldID)
+
+	msg, _ := json.Marshal(Message{
+		Type:    "slg_ai_expansion",
+		Payload: mustMarshal(ev),
+	})
+
+	h.mu.RLock()
+	for _, pid := range peers {
+		if rc, ok := h.clients[pid]; ok {
+			select {
+			case rc.send <- msg:
+			default:
+			}
+		}
+	}
+	h.mu.RUnlock()
+}
+

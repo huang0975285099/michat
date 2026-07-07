@@ -9,8 +9,10 @@ import { UIScene } from './scenes/UIScene.js'
 /**
  * @param {HTMLElement} container 挂载容器
  * @param {import('./core/GameState.js').GameState} state 逻辑层实例
+ * @param {{isAdmin?: boolean}} [opts] isAdmin：当前登录用户是否为管理员（控制设置面板里的
+ *   「重置整个世界」入口，仅在线模式下有意义）
  */
-export function createSlgGame(container, state) {
+export function createSlgGame(container, state, opts = {}) {
   const game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: container,
@@ -24,6 +26,6 @@ export function createSlgGame(container, state) {
     disableVisibilityChange: true, // 失焦/切后台也继续 tick，避免资源产出停滞
   })
   game.scene.add('World', WorldScene, true, { state })
-  game.scene.add('UI', UIScene, true, { state })   // 后添加 → 渲染在上层
+  game.scene.add('UI', UIScene, true, { state, isAdmin: !!opts.isAdmin })   // 后添加 → 渲染在上层
   return game
 }

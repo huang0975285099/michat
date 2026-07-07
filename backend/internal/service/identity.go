@@ -135,9 +135,9 @@ func (s *IdentityService) UploadPublicKey(ctx context.Context, chatID, publicKey
 func (s *IdentityService) GetByChatID(ctx context.Context, chatID string) (*model.User, error) {
 	u := &model.User{}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, chat_id, nickname, public_key, is_ready, created_at, last_seen FROM users WHERE chat_id = ?`,
+		`SELECT id, chat_id, nickname, public_key, is_ready, is_admin, created_at, last_seen FROM users WHERE chat_id = ?`,
 		chatID,
-	).Scan(&u.ID, &u.ChatID, &u.Nickname, &u.PublicKey, &u.IsReady, &u.CreatedAt, &u.LastSeen)
+	).Scan(&u.ID, &u.ChatID, &u.Nickname, &u.PublicKey, &u.IsReady, &u.IsAdmin, &u.CreatedAt, &u.LastSeen)
 	if err == sql.ErrNoRows {
 		return nil, ErrUserNotFound
 	}
@@ -295,9 +295,9 @@ func (s *IdentityService) Reauth(ctx context.Context, publicKey, signature, nonc
 	// 2. 查询用户
 	u := &model.User{}
 	err = s.db.QueryRowContext(ctx,
-		`SELECT id, chat_id, nickname, public_key, is_ready, created_at, last_seen FROM users WHERE chat_id = ? AND is_ready = 1`,
+		`SELECT id, chat_id, nickname, public_key, is_ready, is_admin, created_at, last_seen FROM users WHERE chat_id = ? AND is_ready = 1`,
 		chatID,
-	).Scan(&u.ID, &u.ChatID, &u.Nickname, &u.PublicKey, &u.IsReady, &u.CreatedAt, &u.LastSeen)
+	).Scan(&u.ID, &u.ChatID, &u.Nickname, &u.PublicKey, &u.IsReady, &u.IsAdmin, &u.CreatedAt, &u.LastSeen)
 	if err == sql.ErrNoRows {
 		return nil, "", ErrUserNotFound
 	}

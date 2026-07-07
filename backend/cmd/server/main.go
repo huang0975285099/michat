@@ -153,6 +153,10 @@ func main() {
 	// 启用 SLG 多人世界实时同步
 	hub.SetSlgService(slgSvc)
 
+	// 注入 AI 扩张广播回调（服务端权威 AI，所有玩家共享同一份）+ 启动 AI 扩张定时器
+	slgSvc.SetBroadcastAI(hub.BroadcastSLGAIEvent)
+	slgSvc.StartAITicker()
+
 	identHandler := handler.NewIdentityHandler(identSvc, inviteSvc, friendSvc, hub)
 	userHandler := handler.NewUserHandler(identSvc)
 	friendHandler := handler.NewFriendHandler(friendSvc, hub)
@@ -233,8 +237,10 @@ func main() {
 		// SLG 多人世界
 		auth.POST("/games/slg/join", slgHandler.Join)
 		auth.GET("/games/slg/world", slgHandler.GetWorld)
+		auth.GET("/games/slg/status", slgHandler.GetStatus)
 		auth.PUT("/games/slg/state", slgHandler.SaveState)
 		auth.POST("/games/slg/territory", slgHandler.UpdateTerritory)
+		auth.POST("/games/slg/reset", slgHandler.ResetWorld)
 	}
 
 	// 启动定时任务：自动拒绝超过 7 天未处理的好友申请

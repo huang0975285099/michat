@@ -56,7 +56,7 @@ function shadeColor(color, factor) {
 export class UIScene extends Phaser.Scene {
   constructor() { super('UI') }
 
-  init(data) { this.state = data.state }
+  init(data) { this.state = data.state; this.isAdmin = !!data.isAdmin }
 
   create() {
     this.modal = null
@@ -291,13 +291,16 @@ export class UIScene extends Phaser.Scene {
     const def = TILE_TYPES[t.type]
     // 归属某个 AI 势力时，面板要多加一行「⚔️ xx领地」提示，帮玩家区分中立地和对手地盘
     const aiFaction = (t.owner && t.owner !== 'player') ? this.state.aiLairs.find(f => f.id === t.owner) : null
+    // 多人模式：其他玩家的领地不记录在本地 tile.owner 上（旁路存在 otherTerritories），
+    // 必须先查一遍，否则会被当成「无主守军地块」展示地图生成时的假守军数据
+    const otherTerritory = this.state.otherTerritoryAt(t.x, t.y)
 
     const sw = this.scale.width, sh = this.scale.height
     const w = Math.min(sw - 16, 400)
     // 主城两行按钮（升级 + 建筑）加高；守将/NPC 城池面板按队伍数动态加高
     let h = 108
     if (t.isCity) h = 148
-    else if (t.owner !== 'player' && def.passable) {
+    else if (!otherTerritory && t.owner !== 'player' && def.passable) {
       // 守将按编队分组展示（每队 FORMATION_SIZE 名武将一行）
       const formCount = Math.max(1, Math.ceil((t.guards || []).length / FORMATION_SIZE))
       h = 112 + (formCount - 1) * 22
@@ -335,6 +338,8 @@ export class UIScene extends Phaser.Scene {
       info = `🏯 我方主城（Lv.${this.state.cityLv}）· 领地上限 ${this.state.territoryCapNow()}`
     } else if (t.owner === 'player') {
       info = `🚩 我方领地 · 产量 ${yieldText}`
+    } else if (otherTerritory) {
+      info = `${otherTerritory.isCity ? '🏯' : '🚩'} ${otherTerritory.ownerName || '其他玩家'} 的领地，无法出征`
     } else if (!def.passable) {
       info = '🌊 不可通行'
     } else {
@@ -414,6 +419,8 @@ export class UIScene extends Phaser.Scene {
         if (err) this._toast(err, COLOR.toastWarn)
         else this._refreshTilePanel()
       }))
+    } else if (otherTerritory) {
+      // 其他玩家领地：游戏不支持攻打玩家领地，不显示出征按钮
     } else if (def.passable) {
       c.add(this._button(0, by, 130, 32, '⚔️ 出征', COLOR.btnRed, adjacent,
         () => this._openMarchSelect()))
@@ -1832,21 +1839,38 @@ export class UIScene extends Phaser.Scene {
   // ── 弹窗：设置 / 确认 ────────────────────────────────────────────────────
 
   _openSettings() {
-    const w = Math.min(this.scale.width - 24, 360), h = 150
+    // 「重置存档」清的是 localStorage 本地镜像，只有离线单机模式才会真正读它；
+    // 多人模式的存档权威在服务端（applyServerSave），清本地镜像后刷新页面等于没点，
+    // 反而误导玩家以为重开了局，故多人模式下不显示这个按钮。
+    // 管理员在多人世界里换成看到「重置整个世界」入口：影响该世界所有玩家（清空领地/存档、
+    // 换新地图种子），与旧的「重置存档」是完全不同量级的操作，更重的二次确认。
+    const showResetSave = !this.state.online
+    const showAdminReset = this.isAdmin && this.state.online
+    const h = (showResetSave || showAdminReset) ? 150 : 104
+    const w = Math.min(this.scale.width - 24, 360)
     this._openModal(w, h, (panel) => {
       panel.add(this.add.text(0, -h / 2 + 14, '设置', style(15, '#ffffff', true)).setOrigin(0.5, 0))
       panel.add(this.add.text(0, -8,
         `地图种子：${this.state.seed}\n进度每 10 秒自动保存`,
         { ...style(12, '#9e9e9e'), align: 'center' }).setOrigin(0.5))
-      panel.add(this._button(0, h / 2 - 26, 180, 30, '重置存档（重新开局）',
-        COLOR.btnRed, true, () => {
-          this._openConfirm('将删除当前进度并重新开局，确定吗？', () => {
-            // 先冻结，避免 reload 触发的 beforeunload/场景销毁自动保存把旧存档写回来
-            this.state.freeze()
-            GameState.clearSave()
-            window.location.reload()
-          })
-        }))
+      if (showResetSave) {
+        panel.add(this._button(0, h / 2 - 26, 180, 30, '重置存档（重新开局）',
+          COLOR.btnRed, true, () => {
+            this._openConfirm('将删除当前进度并重新开局，确定吗？', () => {
+              // 先冻结，避免 reload 触发的 beforeunload/场景销毁自动保存把旧存档写回来
+              this.state.freeze()
+              GameState.clearSave()
+              window.location.reload()
+            })
+          }))
+      } else if (showAdminReset) {
+        panel.add(this._button(0, h / 2 - 26, 220, 30, '⚠️ 管理员：重置整个世界',
+          COLOR.btnRed, true, () => {
+            this._openConfirm('将清空所有玩家的领地与存档，生成全新地图，且不可撤销，确定吗？', () => {
+              this.game.events.emit('slg-admin-reset-world')
+            })
+          }))
+      }
     })
   }
 
