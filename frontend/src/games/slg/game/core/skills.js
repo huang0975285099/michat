@@ -64,111 +64,117 @@ export const SKILLS = {
   // 1. 力劈（替代挥砍/猛击/突刺，作为武力单体代表）
   lipi: {
     id: 'lipi', name: '力劈', timing: 'beforeAction', rate: 40, rateStep: 2,
-    attribute: 'atk', mult: 1.0, multStep: 0.05,
+    attribute: 'atk', mult: 1.2, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
     effect: 'damage', useCounter: false, maxLevel: 10,
     tier: 'S', cost: SKILL_TIER_COST.S,
-    desc: '40% 概率对随机 1 名敌军造成 100% 武力的兵刃伤害（无视兵种克制）',
+    desc: '40% 概率对随机 1 名敌军造成 120% 武力的兵刃伤害（无视兵种克制）',
   },
 
   // 2. 疾风（速度单体代表，替代践踏/突袭）
+  // 平衡：rate 35→40 + mult 1.1→1.5 后 Lv.1 EV 0.385→0.60，已超过多数 S 档基准 → 升为 S
   jifeng: {
-    id: 'jifeng', name: '疾风', timing: 'beforeAction', rate: 35, rateStep: 2,
-    attribute: 'spd', mult: 1.1, multStep: 0.05,
+    id: 'jifeng', name: '疾风', timing: 'beforeAction', rate: 40, rateStep: 2,
+    attribute: 'spd', mult: 1.5, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
     effect: 'damage', useCounter: false, maxLevel: 10,
-    tier: 'A', cost: SKILL_TIER_COST.A,
-    desc: '35% 概率对随机 1 名敌军造成 110% 速度的兵刃伤害（无视兵种克制）',
+    tier: 'S', cost: SKILL_TIER_COST.S,
+    desc: '40% 概率对随机 1 名敌军造成 150% 速度的兵刃伤害（无视兵种克制）',
   },
 
-  // 3. 火攻（智力单体代表，替代水攻/天雷）
+  // 3. 火攻（智力群体，替代水攻/天雷；原单体已改为 2 目标）
+  // 平衡：单体 120%→双目标各 100% 后 Lv.1 EV 0.42→0.70，全表第二高 → 升为 S
   huogong: {
     id: 'huogong', name: '火攻', timing: 'beforeAction', rate: 35, rateStep: 2,
-    attribute: 'int', mult: 1.2, multStep: 0.05,
-    target: 'random_enemy', targetCount: 1,
-    effect: 'damage', useCounter: false, maxLevel: 10,
-    tier: 'A', cost: SKILL_TIER_COST.A,
-    desc: '35% 概率对随机 1 名敌军造成 120% 智力的谋略伤害（无视兵种克制）',
-  },
-
-  // 4. 箭雨（武力群体 3 目标）
-  jianyu: {
-    id: 'jianyu', name: '箭雨', timing: 'beforeAction', rate: 25, rateStep: 2,
-    attribute: 'atk', mult: 0.5, multStep: 0.03,
-    target: 'random_enemy', targetCount: 3,
-    effect: 'damage', useCounter: false, maxLevel: 10,
-    tier: 'A', cost: SKILL_TIER_COST.A,
-    desc: '25% 概率对随机 3 名敌军各造成 50% 武力的兵刃伤害（无视兵种克制）',
-  },
-
-  // 5. 落雷（智力群体 2 目标）
-  luolei: {
-    id: 'luolei', name: '落雷', timing: 'beforeAction', rate: 35, rateStep: 2,
-    attribute: 'int', mult: 0.55, multStep: 0.03,
+    attribute: 'int', mult: 1.0, multStep: 0.03,
     target: 'random_enemy', targetCount: 2,
     effect: 'damage', useCounter: false, maxLevel: 10,
     tier: 'S', cost: SKILL_TIER_COST.S,
-    desc: '35% 概率对随机 2 名敌军各造成 55% 智力的谋略伤害（无视兵种克制）',
+    desc: '35% 概率对随机 2 名敌军各造成 100% 智力的谋略伤害（无视兵种克制）',
+  },
+
+  // 4. 箭雨（武力群体 3 目标）
+  // 平衡：rate 25→35 后 Lv.1 EV 0.375→0.525，超过落雷等既有 S 档基准 → 升为 S
+  jianyu: {
+    id: 'jianyu', name: '箭雨', timing: 'beforeAction', rate: 35, rateStep: 2,
+    attribute: 'atk', mult: 0.5, multStep: 0.03,
+    target: 'random_enemy', targetCount: 3,
+    effect: 'damage', useCounter: false, maxLevel: 10,
+    tier: 'S', cost: SKILL_TIER_COST.S,
+    desc: '35% 概率对随机 3 名敌军各造成 50% 武力的兵刃伤害（无视兵种克制）',
+  },
+
+  // 5. 落雷（智力群体 3 目标）
+  luolei: {
+    id: 'luolei', name: '落雷', timing: 'beforeAction', rate: 30, rateStep: 2,
+    attribute: 'int', mult: 0.50, multStep: 0.03,
+    target: 'random_enemy', targetCount: 3,
+    effect: 'damage', useCounter: false, maxLevel: 10,
+    tier: 'S', cost: SKILL_TIER_COST.S,
+    desc: '30% 概率对随机 3 名敌军各造成 50% 智力的谋略伤害（无视兵种克制）',
   },
 
   // 6. 连击（追击代表，替代追击/横扫）
   lianji: {
-    id: 'lianji', name: '连击', timing: 'afterAttack', rate: 35, rateStep: 2,
+    id: 'lianji', name: '连击', timing: 'afterAttack', rate: 40, rateStep: 2,
     mult: 1.0, multStep: 0.025, useCounter: true,
     effect: 'extra_attack', maxLevel: 10,
     tier: 'A', cost: SKILL_TIER_COST.A,
-    desc: '普通攻击后 35% 概率再追加一次普通攻击（造成兵刃伤害，受兵种克制影响）',
+    desc: '普通攻击后 40% 概率再追加一次普通攻击（造成兵刃伤害，受兵种克制影响）',
   },
 
   // 7. 谎报（唯一控制战法，替代威慑/迷阵/缴械）
+  // 平衡：目标 1→2 后控场覆盖面翻倍，B 档定价已偏低 → 升为 A
   huangbao: {
     id: 'huangbao', name: '谎报', timing: 'beforeAction', rate: 30, rateStep: 2,
-    attribute: 'int', target: 'random_enemy', targetCount: 1,
+    attribute: 'int', target: 'random_enemy', targetCount: 2,
     effect: 'control', status: 'huangbao', duration: 1, durationScaleLevels: [10],
     maxLevel: 10,
-    tier: 'B', cost: SKILL_TIER_COST.B,
-    desc: '30% 概率使随机 1 名敌军进入谎报状态，跳过其下一次行动（持续 1 回合，Lv.10 额外 +1 回合）',
+    tier: 'A', cost: SKILL_TIER_COST.A,
+    desc: '30% 概率使随机 2 名敌军进入谎报状态，跳过其下一次行动（持续 1 回合，Lv.10 额外 +1 回合）',
   },
 
   // ── 新增战法（8 个）─────────────────────────────────────────────────────────
 
-  // 8. 青囊（智力治疗我军，新机制 heal）
+  // 8. 青囊（智力治疗我军，新机制 heal）—— 目标 1→2 后改按群体档成长，避免重蹈火攻的 multStep 疏漏。
   // 平衡：原 mult 1.5 使单次回复≈施法者 70% 兵力，全战法第一（审计 S 档最高）→ 降到 1.0
   // 回复量公式（casterPower，见 battle.js）：施法者当前兵力 ×(1+施法者智力/150)× 倍率 × BATTLE_ROUND_ATTRITION，
-  // 只吃「施法者」智力，与目标属性无关；智力越高/兵力越多回复越多；倍率 1.00x 起，每级 +0.05（Lv.10 = 1.45x）；
+  // 只吃「施法者」智力，与目标属性无关；智力越高/兵力越多回复越多；倍率 1.00x 起，每级 +0.03（Lv.10 = 1.27x）；
   // 结果封顶目标入场兵力 30%（BATTLE_HEAL_RATE_MAX），超出部分溢出浪费。
   qingnang: {
     id: 'qingnang', name: '青囊', timing: 'beforeAction', rate: 30, rateStep: 2,
-    attribute: 'int', mult: 1.0, multStep: 0.05,
-    target: 'random_ally', targetCount: 1,
+    attribute: 'int', mult: 1.0, multStep: 0.03,
+    target: 'random_ally', targetCount: 2,
     effect: 'heal', useCounter: false, maxLevel: 10,
     tier: 'A', cost: SKILL_TIER_COST.A,
-    desc: '30% 概率治疗随机 1 名我军，回复量随施法者智力与当前兵力提升（智力越高回复越多），单次回复不超过目标入场兵力的 30%',
+    desc: '30% 概率治疗随机 2 名我军，回复量随施法者智力与当前兵力提升（智力越高回复越多），单次回复不超过目标入场兵力的 30%',
   },
 
   // 9. 激励（增益我军武力，新机制 buff）
-  // 平衡：原单目标 buff 收益极低（审计 B 档垫底）→ 改为全队(最多3)增益，让 buff 类站得住脚
+  // 平衡：原单目标 buff 收益极低（审计 B 档垫底）→ 改为全队(最多3)增益，让 buff 类站得住脚；
+  // 增益数值 25%→50% 后是翻倍强度的团队增伤，B 档定价已明显偏低 → 升为 A
   jili: {
     id: 'jili', name: '激励', timing: 'beforeAction', rate: 35, rateStep: 2,
     attribute: 'atk',
     target: 'random_ally', targetCount: 3,
-    effect: 'buff', buffAttr: 'atk', buffValue: 25,
+    effect: 'buff', buffAttr: 'atk', buffValue: 50,
     duration: 2, durationScaleLevels: [5, 10],
     maxLevel: 10,
-    tier: 'B', cost: SKILL_TIER_COST.B,
-    desc: '35% 概率使我军最多 3 名武将武力 +25%，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
+    tier: 'A', cost: SKILL_TIER_COST.A,
+    desc: '35% 概率使我军最多 3 名武将武力 +50%，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
   },
 
   // 10. 铁壁（增益我军统率，新机制 buff；用 def 属性发动）
+  // 平衡：与激励同理，增益数值 25%→50% 后升为 A
   tiebi: {
     id: 'tiebi', name: '铁壁', timing: 'beforeAction', rate: 35, rateStep: 2,
     attribute: 'def',
     target: 'random_ally', targetCount: 3,
-    effect: 'buff', buffAttr: 'def', buffValue: 25,
+    effect: 'buff', buffAttr: 'def', buffValue: 50,
     duration: 2, durationScaleLevels: [5, 10],
     maxLevel: 10,
-    tier: 'B', cost: SKILL_TIER_COST.B,
-    desc: '35% 概率使我军最多 3 名武将统率 +25%，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
+    tier: 'A', cost: SKILL_TIER_COST.A,
+    desc: '35% 概率使我军最多 3 名武将统率 +50%，持续 2 回合（Lv.5/Lv.10 各 +1 回合）',
   },
 
   // 11. 破甲（兵刃+谋略双伤，damage 多属性命中）—— 一次发动同时打出一记兵刃(武力)与一记谋略(智力)。
@@ -197,12 +203,12 @@ export const SKILLS = {
 
   // 13. 嗜血（兵刃伤害 + 吸血，damage 变种）
   shixue: {
-    id: 'shixue', name: '嗜血', timing: 'beforeAction', rate: 35, rateStep: 2,
+    id: 'shixue', name: '嗜血', timing: 'beforeAction', rate: 40, rateStep: 2,
     attribute: 'atk', mult: 1.0, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
     effect: 'damage', useCounter: false, lifesteal: 0.3, maxLevel: 10,
     tier: 'S', cost: SKILL_TIER_COST.S,
-    desc: '35% 概率对随机 1 名敌军造成 100% 武力的兵刃伤害，并将 30% 伤害转化为自身兵力回复',
+    desc: '40% 概率对随机 1 名敌军造成 100% 武力的兵刃伤害，并将 30% 伤害转化为自身兵力回复',
   },
 
   // 14. 背水（速度残血爆发，damage 变种 + condition）
@@ -218,12 +224,13 @@ export const SKILLS = {
   },
 
   // 15. 鬼神（高倍率突击，extra_attack 变种）
+  // 平衡：rate 25→40 后 Lv.1 EV 0.375→0.60，与疾风并列全表前段 → 升为 S
   guishen: {
-    id: 'guishen', name: '鬼神', timing: 'afterAttack', rate: 25, rateStep: 2,
+    id: 'guishen', name: '鬼神', timing: 'afterAttack', rate: 40, rateStep: 2,
     mult: 1.5, multStep: 0.025, useCounter: true,
     effect: 'extra_attack', maxLevel: 10,
-    tier: 'A', cost: SKILL_TIER_COST.A,
-    desc: '普通攻击后 25% 概率再追加一次普通攻击，伤害提升至 150%（造成兵刃伤害，受兵种克制影响）',
+    tier: 'S', cost: SKILL_TIER_COST.S,
+    desc: '普通攻击后 40% 概率再追加一次普通攻击，伤害提升至 150%（造成兵刃伤害，受兵种克制影响）',
   },
 
   // 16. 沙暴（智力持续伤害 + 兵刃易伤，新机制 dot）—— 施加时按当回合战力快照每回合伤害，逐回合结算；
@@ -252,14 +259,15 @@ export const SKILLS = {
   },
 
   // 18. 斩杀（兵刃处决，damage + 新机制 targetCondition）—— 目标残血时倍率暴增，专收割残兵。
+  // 平衡：rate/基础伤害/处决倍率均有提升，但价值高度依赖「目标残血」这个前提，仍保留在 B 档。
   zhansha: {
-    id: 'zhansha', name: '斩杀', timing: 'beforeAction', rate: 30, rateStep: 2,
-    attribute: 'atk', mult: 0.8, multStep: 0.05,
+    id: 'zhansha', name: '斩杀', timing: 'beforeAction', rate: 40, rateStep: 2,
+    attribute: 'atk', mult: 1.0, multStep: 0.05,
     target: 'random_enemy', targetCount: 1,
-    targetCondition: 'low_hp', targetConditionThreshold: 0.3, targetConditionMult: 2.2,
+    targetCondition: 'low_hp', targetConditionThreshold: 0.3, targetConditionMult: 3,
     effect: 'damage', useCounter: false, maxLevel: 10,
     tier: 'B', cost: SKILL_TIER_COST.B,
-    desc: '30% 概率对随机 1 名敌军造成 80% 武力的兵刃伤害；若其当前兵力低于入场兵力 30%，伤害倍率 ×2.2',
+    desc: '40% 概率对随机 1 名敌军造成 100% 武力的兵刃伤害；若其当前兵力低于入场兵力 30%，伤害倍率 ×3',
   },
 
   // 19. 凯歌（团队驱散+治疗，新机制 cleanse）—— 清除我军减益/持续伤害效果并附带治疗，克制减益/DOT 体系。
@@ -268,22 +276,23 @@ export const SKILLS = {
   // 治疗部分与青囊同一套 casterPower 公式（同吃「施法者」智力，与目标属性无关），只是倍率更低（0.65x 起，
   // 每级 +0.03，Lv.10 = 0.92x）、目标数更多（2 人而非 1 人），同样封顶各自目标入场兵力 30%。
   kaige: {
-    id: 'kaige', name: '凯歌', timing: 'beforeAction', rate: 25, rateStep: 2,
+    id: 'kaige', name: '凯歌', timing: 'beforeAction', rate: 30, rateStep: 2,
     attribute: 'int', mult: 0.65, multStep: 0.03,
     target: 'random_ally', targetCount: 2,
     effect: 'cleanse', maxLevel: 10,
     tier: 'S', cost: SKILL_TIER_COST.S,
-    desc: '25% 概率为我军最多 2 名清除全部减益/持续伤害效果，并按施法者智力治疗少量兵力（智力越高回复越多）',
+    desc: '30% 概率为我军最多 2 名清除全部减益/持续伤害效果，并按施法者智力治疗少量兵力（智力越高回复越多）',
   },
 
   // 20. 复仇（受击反击，新机制 timing:'onHit' + effect:'counter'）—— 全战法中唯一「被动反应」类，
   //     不占用自己回合，受到攻击时判定反击；反击命中不会再被对方复仇触发（防连锁死循环）。
+  // 平衡：rate 30→50 提升明显，但纯被动、完全依赖「被攻击」这个前提（后排不受击则等于没有），仍保留 B 档。
   fuchou: {
-    id: 'fuchou', name: '复仇', timing: 'onHit', rate: 30, rateStep: 2,
+    id: 'fuchou', name: '复仇', timing: 'onHit', rate: 50, rateStep: 2,
     attribute: 'atk', mult: 0.7, multStep: 0.04,
     effect: 'counter', useCounter: false, maxLevel: 10,
     tier: 'B', cost: SKILL_TIER_COST.B,
-    desc: '受到攻击时 30% 概率反击攻击者，造成 70% 武力的兵刃伤害（无视兵种克制）',
+    desc: '受到攻击时 50% 概率反击攻击者，造成 70% 武力的兵刃伤害（无视兵种克制）',
   },
 
   // 21. 破釜沉舟（背水一战，damage + 新机制 pityStep 憋气）—— 基础概率不高，但每次未发动都攒憋气值，

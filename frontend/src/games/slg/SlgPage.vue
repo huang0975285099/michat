@@ -154,7 +154,7 @@ onMounted(async () => {
                 await slgApi.reportMarchBattle({
                     march_uid: ev.marchUid, units: ev.units, status: ev.status,
                     other_march_uid: ev.otherMarchUid, other_units: ev.otherUnits, other_status: ev.otherStatus,
-                    seed: ev.seed,
+                    seed: ev.seed, x: ev.x, y: ev.y, rounds: ev.rounds,
                 })
             } catch (e) { /* 同步失败不阻塞游戏；对方已上报过的情况服务端会返回 already_resolved */ }
         })

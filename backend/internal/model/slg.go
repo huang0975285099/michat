@@ -78,6 +78,8 @@ type MarchUnit struct {
 	Spd       float64         `json:"spd"`
 	Troops    float64         `json:"troops"`
 	TroopType string          `json:"troopType"`
+	Quality   string          `json:"quality,omitempty"`
+	Lv        int             `json:"lv,omitempty"`
 	Skills    json.RawMessage `json:"skills,omitempty"`
 }
 

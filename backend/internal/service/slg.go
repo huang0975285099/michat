@@ -131,6 +131,12 @@ type MarchBattleRequest struct {
 	OtherUnits    []model.MarchUnit `json:"other_units"`
 	OtherStatus   string            `json:"other_status"`
 	Seed          int64             `json:"seed"`
+	X             int               `json:"x"` // 相遇格坐标，供双方战报展示位置
+	Y             int               `json:"y"`
+	// 逐回合战斗日志（resolveBattle 返回的 rounds，原样透传不解析），供被动接收方也能
+	// 渲染完整战报而不是只有战前/战后总量对比。以上报者视角记录（atk=上报者、def=对方），
+	// 被动接收方渲染前需要按自己是哪一方左右互换。
+	Rounds json.RawMessage `json:"rounds,omitempty"`
 }
 
 // MarchEvent 部队事件（WS 广播用），action 为 start|end|battle。
@@ -153,6 +159,11 @@ type MarchEvent struct {
 	OtherOwnerChatID string            `json:"other_owner_chat_id,omitempty"`
 	OtherUnits       []model.MarchUnit `json:"other_units,omitempty"`
 	OtherStatus      string            `json:"other_status,omitempty"`
+
+	X int `json:"x,omitempty"` // battle 专用：相遇格坐标
+	Y int `json:"y,omitempty"`
+
+	Rounds json.RawMessage `json:"rounds,omitempty"`
 }
 
 // GetActiveWorld 获取当前活跃世界，没有则创建
@@ -721,6 +732,7 @@ func (s *SlgService) ReportMarchBattle(ctx context.Context, userID uint64, chatI
 		Units: req.Units, Status: status,
 		OtherMarchUID: req.OtherMarchUID, OtherOwnerChatID: otherOwner,
 		OtherUnits: req.OtherUnits, OtherStatus: otherStatusOut,
+		X: req.X, Y: req.Y, Rounds: req.Rounds,
 	}, nil
 }
 

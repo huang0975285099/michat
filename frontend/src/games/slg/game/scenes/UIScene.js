@@ -1600,6 +1600,11 @@ export class UIScene extends Phaser.Scene {
 
   // ── 弹窗：战报详情（按守将队伍分段，逐回合）───────────────────────────────
 
+  /** 兵力损耗格式化：loss 为负数时代表本回合净回复（治疗超过伤亡），显示为「+回复量」而非双负号 */
+  _fmtLoss(loss) {
+    return loss >= 0 ? `-${loss}` : `+${-loss}`
+  }
+
   /** 生成一个单行文本，超过 maxW 时用省略号截断（尾部保留完整信息不丢，仅裁中/尾） */
   _ellipsisText(str, styleObj, maxW) {
     const t = this.add.text(0, 0, str, styleObj)
@@ -1659,7 +1664,7 @@ export class UIScene extends Phaser.Scene {
       }
       b.rounds.forEach((r) => {
         if (mode === 'simple') {
-          rows.push({ x: 10, y, text: `第${r.round}回合   我方 ${r.atkTroops}（-${r.atkLoss}）    守军 ${r.defTroops}（-${r.defLoss}）`,
+          rows.push({ x: 10, y, text: `第${r.round}回合   我方 ${r.atkTroops}（${this._fmtLoss(r.atkLoss)}）    守军 ${r.defTroops}（${this._fmtLoss(r.defLoss)}）`,
             size: 11, color: '#dddddd', origin: 0 })
           y += 22
         } else {
@@ -1727,7 +1732,7 @@ export class UIScene extends Phaser.Scene {
         y += 18
       }
       if (mode === 'simple') {
-        rows.push({ x: 10, y, text: `第${r.round}回合   我方 ${r.atkTroops}（-${r.atkLoss}）    守军 ${r.defTroops}（-${r.defLoss}）`,
+        rows.push({ x: 10, y, text: `第${r.round}回合   我方 ${r.atkTroops}（${this._fmtLoss(r.atkLoss)}）    守军 ${r.defTroops}（${this._fmtLoss(r.defLoss)}）`,
           size: 11, color: '#dddddd', origin: 0 })
         y += 22
       } else {
@@ -1838,13 +1843,14 @@ export class UIScene extends Phaser.Scene {
         : (battles.length
           ? battles.map(b => `${TROOP_TYPES[b.enemy.troopType]?.icon || ''}${b.enemy.name}Lv.${b.enemy.lv}`).join('、')
           : '空虚守军')
-      const rosterLine = `${report.names}  vs  ${guardRoster}  ·  ${report.tile.type}Lv.${report.tile.level}(${report.tile.x},${report.tile.y})`
+      const tileLabel = report.tile.level ? `${report.tile.type}Lv.${report.tile.level}` : report.tile.type
+      const rosterLine = `${report.names}  vs  ${guardRoster}  ·  ${tileLabel}(${report.tile.x},${report.tile.y})`
       const rt = this._ellipsisText(rosterLine, style(11, '#9e9e9e'), w - 28)
       rt.setPosition(-w / 2 + 14, -h / 2 + 38).setOrigin(0, 0)
       panel.add(rt)
       panel.add(this.add.text(-w / 2 + 14, -h / 2 + 56,
-        `我方 ${report.atkStart} → ${report.atkStart - report.atkLossTotal}（-${report.atkLossTotal}）    ` +
-        `守军 ${report.defStart} → ${report.defStart - report.defLossTotal}（-${report.defLossTotal}）`,
+        `我方 ${report.atkStart} → ${report.atkStart - report.atkLossTotal}（${this._fmtLoss(report.atkLossTotal)}）    ` +
+        `守军 ${report.defStart} → ${report.defStart - report.defLossTotal}（${this._fmtLoss(report.defLossTotal)}）`,
         style(11, '#dddddd')).setOrigin(0, 0))
 
       if (!rows.length) {

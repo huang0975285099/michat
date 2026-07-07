@@ -172,7 +172,7 @@ export class GameState extends Emitter {
 
   _grantStarterSkills(n) {
     // 开局起手战法只发 S 档，让新玩家一上来就摸到强力战法；S 档不够 n 个时（理论不会发生，
-    // 目前 S 档有 6 个）退回全档池兜底，避免游戏内容变动后这里静默发出更少的战法。
+    // 目前 S 档有 10 个）退回全档池兜底，避免游戏内容变动后这里静默发出更少的战法。
     const sTier = BINDABLE_SKILLS.filter(s => s.tier === 'S').map(s => s.id)
     const pool = sTier.length >= n ? sTier : BINDABLE_SKILLS.map(s => s.id)
     for (let i = pool.length - 1; i > 0; i--) {   // Fisher-Yates
@@ -1003,8 +1003,52 @@ export class GameState extends Emitter {
       key: g.id, name: g.name,
       atk: e.atk, def: e.def, int: e.int, spd: e.spd,
       troops: g.troops, troopType: g.troopType,
+      quality: g.quality, lv: g.lv,
       skills: (g.skillIds || []).filter(Boolean).map(id => ({ id, lv: this.skillLevel(id) })),
     }
+  }
+
+  /**
+   * 构造 PvP 遭遇战战报用的单位卡片。与 _arriveAndFight 里攻打地块用的 unitCard 同形状，
+   * 供 UIScene._openBattleReport 复用同一套渲染。区别：这里的单位来自网络快照（对方武将
+   * 没有「基础值」概念，只有已经算好的实战数值），故 base===eff，不显示加成箭头。
+   * @param {object} u 战斗后的单位快照（含 troops=战后兵力）
+   * @param {number} startTroops 战斗前兵力
+   * @param {object} [combatStats] resolveBattle 返回的单位统计（dealt/taken/skillFire...），
+   *   被动接收方（对方上报）没有这份细节时可省略，全部按 0 处理
+   */
+  _pvpUnitCard(u, startTroops, combatStats) {
+    const c = combatStats || {}
+    const skillIds = (u.skills || []).map(s => s?.id).filter(Boolean)
+    return {
+      key: u.key, name: u.name, quality: u.quality || 'common', lv: u.lv || 1, troopType: u.troopType,
+      skill: skillIds.map(id => getSkill(id)?.name).filter(Boolean).join('、') || null,
+      atk: Math.round(u.atk), atkEff: Math.round(u.atk),
+      def: Math.round(u.def), defEff: Math.round(u.def),
+      spd: Math.round(u.spd), spdEff: Math.round(u.spd),
+      int: Math.round(u.int), intEff: Math.round(u.int),
+      start: Math.round(startTroops), end: Math.round(u.troops),
+      dealt: c.dealt || 0, taken: c.taken || 0, healed: c.healed || 0, lifesteal: c.lifesteal || 0,
+      skillFire: c.skillFire || 0, extra: c.extra || 0, control: c.control || 0,
+      buffCast: c.buffCast || 0, debuffCast: c.debuffCast || 0, conditionMet: c.conditionMet || 0,
+      shielded: c.shielded || 0, countered: c.countered || 0, cleansed: c.cleansed || 0,
+    }
+  }
+
+  /**
+   * 上报者广播的 rounds 是以「上报者=atk、对方=def」记录的；被动接收方如果就是那个
+   * "对方"，要把 atk/def 双方对调过来渲染，回合概览的兵力/损失数字和逐回合事件的高亮颜色
+   * 才会以「我方=atk」的视角正确显示，而不是自己的操作显示成红色、对方显示成绿色。
+   */
+  _flipRoundsPerspective(rounds) {
+    return (rounds || []).map(r => ({
+      ...r,
+      atkTroops: r.defTroops, defTroops: r.atkTroops,
+      atkLoss: r.defLoss, defLoss: r.atkLoss,
+      events: (r.events || []).map(e => (
+        e.side === 'atk' ? { ...e, side: 'def' } : e.side === 'def' ? { ...e, side: 'atk' } : e
+      )),
+    }))
   }
 
   /** 标记某条行军的网络广播已结束（避免重复发送 marchEnd）；单机模式下 marchUid 为空，天然跳过 */
@@ -1012,6 +1056,34 @@ export class GameState extends Emitter {
     if (!m.marchUid || m._netEnded) return
     m._netEnded = true
     this.emit('marchEnd', { marchUid: m.marchUid })
+  }
+
+  /**
+   * 部队在 PvP 遭遇战中被全歼（兵力清零）后，从遭遇战发生的格子直接折返主城，
+   * 不再继续原定目的地（无论原本是出征还是行军）——总不能让一支死光的部队还傻乎乎
+   * 走到敌方城下摆着，或者继续去打地块守军。调用前须确保这些武将已从原 march 中摘除
+   * （原 march 已 done + _endMarchNet），这里只负责另起一条回城的行军。
+   */
+  _forceRetreat(gens, fromCell) {
+    if (!gens.length) return
+    const path = findPath(this.tiles, fromCell, this.spawn)
+    const steps = path.length - 1
+    const minSpd = Math.min(...gens.map(g => this._marchSpeed(g)))
+    const dur = steps * tileMarchSeconds(minSpd)
+    const id = marchSeq++
+    const m = {
+      id, generalIds: gens.map(g => g.id), intent: 'march', isRecall: true,
+      from: { x: fromCell.x, y: fromCell.y }, to: { x: this.spawn.x, y: this.spawn.y }, path,
+      departAt: this.now, arriveAt: this.now + dur, phase: 'out',
+      marchUid: this.chatId ? `${this.chatId}:${id}` : null,
+      departAtMs: Date.now(), arriveAtMs: Math.round(Date.now() + (dur / TIME_SCALE) * 1000),
+    }
+    for (const g of gens) { g.state = 'marching'; g.pos = null; g.stationedMarchUid = null }
+    this.marches.push(m)
+    this._pushLog(`💀 ${gens.map(g => g.name).join('、')} 全军覆没，残部撤回主城`)
+    this._broadcastMarchStart(m, gens)
+    this.emit('marches', this.marches)
+    this.emit('generals', this.generals)
   }
 
   /** 召回驻扎中的武将：从当前驻扎地块行军回主城，途中不交战，到家后变回 idle */
@@ -1040,7 +1112,10 @@ export class GameState extends Emitter {
       marchUid: this.chatId ? `${this.chatId}:${id}` : null,
       departAtMs: Date.now(), arriveAtMs: Math.round(Date.now() + (dur / TIME_SCALE) * 1000),
     }
-    for (const g of gens) { g.state = 'marching'; g.pos = null }
+    // 结束驻扎 presence 的网络广播（同一批武将共享同一个驻扎 marchUid，只需结束一次）
+    const stationedMarchUid = gens[0]?.stationedMarchUid
+    if (stationedMarchUid) this.emit('marchEnd', { marchUid: stationedMarchUid })
+    for (const g of gens) { g.state = 'marching'; g.pos = null; g.stationedMarchUid = null }
     this.marches.push(m)
     this._pushLog(`🏠 ${gens.map(g => g.name).join('、')} 自 (${pos.x},${pos.y}) 召回`)
     this._broadcastMarchStart(m, gens)
@@ -1118,6 +1193,9 @@ export class GameState extends Emitter {
     this._checkMarchCollisions()
     let changed = false
     for (const m of this.marches) {
+      // 已经被 PvP 遭遇战提前结束（如全军覆没被迫折返）——即便原定到达时间已过也不再走
+      // 正常到达流程，避免和 _checkMarchCollisions 里另起的折返 march 打架
+      if (m.done) continue
       if (m.arriveAt > this.now) continue
       changed = true
       if (m.phase === 'out' && m.isRecall) this._returnHome(m)
@@ -1148,7 +1226,13 @@ export class GameState extends Emitter {
       if (!cell) continue
       for (const fm of this.foreignMarches.values()) {
         if (fm.status !== 'active') continue
-        if (this.chatId > fm.ownerChatId) continue   // 字典序较大的一方只被动接收广播，不重复上报
+        // 字典序较大的一方只被动接收广播、不重复上报——但这条 tie-break 只在双方都在
+        // 主动行军时才需要（防止两边同时检测到同一场相遇各自上报一次）。若对方是驻扎中
+        // 的固定 presence（path 只有 1 个点），对方永远不会把自己列进 this.marches 主动
+        // 检测这场相遇，此时必须由己方（行军经过的一方）上报，不能因为字典序较大而跳过，
+        // 否则这场遭遇永远不会被任何一方发现。
+        const opponentStationary = !fm.path || fm.path.length <= 1
+        if (!opponentStationary && this.chatId > fm.ownerChatId) continue
         const lastAt = m._collideCooldown?.[fm.marchUid] || 0
         if (nowMs - lastAt < 5000) continue
         const fcell = this._marchCellAt(fm.path, fm.departAtMs, fm.arriveAtMs, nowMs)
@@ -1195,7 +1279,25 @@ export class GameState extends Emitter {
 
     const names = gens.map(g => g.name).join('、')
     const outcomeText = r.outcome === 'win' ? '击溃' : r.outcome === 'lose' ? '被击退' : '未分胜负'
-    this._pushLog(`⚔️ ${names} 与 ${fm.ownerName || '对方'} 的部队遭遇战，${outcomeText}`)
+
+    // 完整战报（本方是实际算出这场战斗的一方，拥有逐回合细节）：战前兵力取自 myUnits/
+    // theirUnits（battle 前的快照），战后统计取自 r.units.atk/def（含 dealt/taken 等）
+    const myCards = myUnits.map(before => {
+      const after = r.units.atk.find(u => u.key === before.key)
+      return this._pvpUnitCard({ ...before, troops: after ? after.troops : before.troops }, before.troops, after)
+    })
+    const foeCards = theirUnits.map(before => {
+      const after = r.units.def.find(u => u.key === before.key)
+      return this._pvpUnitCard({ ...before, troops: after ? after.troops : before.troops }, before.troops, after)
+    })
+    const report = {
+      v: 2, names, outcome: r.outcome, exp: 0,
+      atkStart: Math.round(myUnits.reduce((s, u) => s + u.troops, 0)), atkLossTotal: Math.round(r.atkLoss),
+      defStart: Math.round(theirUnits.reduce((s, u) => s + u.troops, 0)), defLossTotal: Math.round(r.defLoss),
+      our: myCards, foe: foeCards, rounds: r.rounds, waves: 1,
+      tile: { x: cell.x, y: cell.y, type: '遭遇战', level: '' },
+    }
+    this._pushLog(`⚔️ ${names} 与 ${fm.ownerName || '对方'} 的部队遭遇战，${outcomeText}`, report)
     this.emit('generals', this.generals)
     this.emit('battle', { tile: cell, outcome: r.outcome, general: names })
 
@@ -1212,7 +1314,17 @@ export class GameState extends Emitter {
       otherUnits: theirRemaining,
       otherStatus: theirStatus,
       seed,
+      x: cell.x, y: cell.y,
+      rounds: r.rounds,
     })
+
+    // 全军覆没：不再继续原定目的地（无论是出征还是行军），直接从遭遇战格子折返主城
+    if (myStatus === 'done') {
+      const allGens = m.generalIds.map(id => this.general(id)).filter(Boolean)
+      m.done = true
+      this._endMarchNet(m)
+      this._forceRetreat(allGens, cell)
+    }
   }
 
   /** 字符串→int32 简易哈希，供遭遇战种子拼接使用 */
@@ -1228,10 +1340,30 @@ export class GameState extends Emitter {
     for (const g of gens) {
       g.state = 'stationed'
       g.pos = { x: m.to.x, y: m.to.y }
+      g.stationedMarchUid = m.marchUid
     }
     m.done = true
     this._pushLog(`🚩 ${gens.map(g => g.name).join('、')} 抵达并驻扎于 (${m.to.x},${m.to.y})`)
-    this._endMarchNet(m)
+    // 注意：驻扎不等于行军结束——不调用 _endMarchNet，而是把同一 marchUid 重新广播成
+    // 「固定不动」的驻扎presence（path 收缩为单点），这样其他玩家才能持续看到/撞上这支
+    // 部队，直到玩家主动召回（recallStationed 里才会真正 emit marchEnd）。
+    this._broadcastStationed(m, gens)
+  }
+
+  /**
+   * 广播「驻扎中」presence：复用同一 marchUid，把路径收缩成单点。
+   * _marchCellAt/_pointAlong 对 path.length===1 的情况会直接返回该点、不看时间戳，
+   * 所以这里的 departAtMs/arriveAtMs 取值并不影响定位，仅作记录。
+   */
+  _broadcastStationed(m, gens) {
+    if (!m.marchUid) return
+    const pt = { x: m.to.x, y: m.to.y }
+    this.emit('marchStart', {
+      marchUid: m.marchUid, intent: 'march',
+      from: pt, to: pt, path: [pt],
+      departAtMs: Date.now(), arriveAtMs: Date.now(),
+      units: gens.map(g => this._unitSnapshot(g)),
+    })
   }
 
   _arriveAndFight(m) {
@@ -1268,10 +1400,13 @@ export class GameState extends Emitter {
     const guardSkillOf = (i, lv) => {
       const tier = guardSkillTier(lv)
       if (!tier) return { skillId: null, skillLv: 1 }
+      // 兜底：若某档位战法被人工调整到 0 个（skills.js 改 tier 时手滑清空某档），
+      // 不静默崩到 pool[NaN].id 报错，退回全档池，保证战斗结算永远能跑。
       const pool = BINDABLE_SKILLS.filter(s => s.tier === tier)
-      const idx = Math.abs((Math.imul(this.seed | 0, 0x9E3779B1) ^ Math.imul(i, 0x85EBCA6B) ^ (t.x * 8887 + t.y * 2971))) % pool.length
+      const effPool = pool.length ? pool : BINDABLE_SKILLS
+      const idx = Math.abs((Math.imul(this.seed | 0, 0x9E3779B1) ^ Math.imul(i, 0x85EBCA6B) ^ (t.x * 8887 + t.y * 2971))) % effPool.length
       const skillLv = Math.min(SKILL_MAX_LEVEL, Math.max(1, Math.floor(lv / 2)))
-      return { skillId: pool[idx].id, skillLv }
+      return { skillId: effPool[idx].id, skillLv }
     }
     // 按编队分组：须先按 t.guards 原始下标切成固定的 FORMATION_SIZE 组，再判断整队是否全灭——
     // 不能先按兵力过滤再切片，否则「半死」的编队（有人阵亡、有人残血）会把下一队的守将并进来，
@@ -1620,8 +1755,10 @@ export class GameState extends Emitter {
         lv: g.lv, exp: Math.round(g.exp), troops: g.troops,
         atk: g.atk, def: g.def, int: g.int, pol: g.pol, cha: g.cha,
         stamina: Math.round(g.stamina), awaken: g.awaken || 0,
-        // 驻扎中的武将记录当前所在坐标；行军途中的武将由 marches 数组还原，此处不存
+        // 驻扎中的武将记录当前所在坐标 + 驻扎 presence 的 marchUid（召回时用于结束广播）；
+        // 行军途中的武将由 marches 数组还原，此处不存
         pos: g.state === 'stationed' && g.pos ? { x: g.pos.x, y: g.pos.y } : null,
+        stationedMarchUid: g.state === 'stationed' ? (g.stationedMarchUid || null) : null,
         // v11+ 战法 2 槽（第2槽需20级解锁）；缺省补 [null,null]
         skillIds: [g.skillIds?.[0] || null, g.skillIds?.[1] || null],
         // v9+ 武将装备槽：6 类 iid（旧档缺省时回退空槽）
@@ -1907,6 +2044,11 @@ export class GameState extends Emitter {
     } else if (ev.action === 'end') {
       this.foreignMarches.delete(ev.march_uid)
     } else if (ev.action === 'battle') {
+      // ev.owner_chat_id 是上报者（march_uid 那一方）——如果是我自己上报的，说明这场遭遇战
+      // 是我在 _resolveMarchCollision 里本地算出来并主动上报的，双方状态早已同步生效，
+      // 这里只是自己广播的回声，直接跳过，否则会对着已经处理过的结果重复应用一遍
+      // （重复推日志、重复触发全军覆没折返）
+      if (ev.owner_chat_id === this.chatId) return
       this._applyMarchBattleResult(ev)
     }
   }
@@ -1917,17 +2059,76 @@ export class GameState extends Emitter {
       { marchUid: ev.march_uid, ownerChatId: ev.owner_chat_id, units: ev.units, status: ev.status },
       { marchUid: ev.other_march_uid, ownerChatId: ev.other_owner_chat_id, units: ev.other_units, status: ev.other_status },
     ]
-    let touchedMine = false
+    // 被动接收方没有 resolveBattle 的逐回合细节，只能拿「战前 → 战后」兵力对比拼一份简版战报。
+    // 战前快照：我方直接读当前武将现值（这个事件到达前它们还没被改过）；对方读 foreignMarches
+    // 里现存的记录（那是上一次已知、也就是这场战斗之前的兵力），下面应用阶段会把它覆盖成战后值。
+    const beforeByMarchUid = {}
     for (const side of sides) {
       if (!side.marchUid) continue
       if (side.ownerChatId === this.chatId) {
-        const m = this.marches.find(x => x.marchUid === side.marchUid)
-        if (!m) continue
+        beforeByMarchUid[side.marchUid] = (side.units || []).map(u => {
+          const g = this.general(u.key)
+          return { ...u, troops: g ? g.troops : u.troops }
+        })
+      } else {
+        const fm = this.foreignMarches.get(side.marchUid)
+        beforeByMarchUid[side.marchUid] = fm ? fm.units : side.units
+      }
+    }
+
+    let touchedMine = false
+    let myReport = null
+    for (const side of sides) {
+      if (!side.marchUid) continue
+      if (side.ownerChatId === this.chatId) {
+        // marchUid 可能对应一条在途行军，也可能对应一支驻扎中的部队（此时不在 this.marches
+        // 里，要靠武将身上的 stationedMarchUid 才能找到，见 _arriveAndStation/recallStationed）
+        const hasMarch = this.marches.some(x => x.marchUid === side.marchUid)
+        const hasStationed = this.generals.some(g => g.stationedMarchUid === side.marchUid)
+        if (!hasMarch && !hasStationed) continue
         for (const u of side.units || []) {
           const g = this.general(u.key)
           if (g) g.troops = Math.max(0, Math.round(u.troops))
         }
         touchedMine = true
+
+        const otherSide = sides.find(s => s !== side)
+        const myBefore = beforeByMarchUid[side.marchUid] || []
+        const foeBefore = otherSide ? (beforeByMarchUid[otherSide.marchUid] || []) : []
+        const myCards = (side.units || []).map(u => {
+          const b = myBefore.find(x => x.key === u.key)
+          return this._pvpUnitCard(u, b ? b.troops : u.troops)
+        })
+        const foeCards = (otherSide?.units || []).map(u => {
+          const b = foeBefore.find(x => x.key === u.key)
+          return this._pvpUnitCard(u, b ? b.troops : u.troops)
+        })
+        const outcome = side.status === 'done' ? 'lose' : (otherSide?.status === 'done' ? 'win' : 'draw')
+        // 这里的 side 必定是「上报者广播里的对方」（march_uid 那一侧的 owner 就是上报者，
+        // 已在 applyForeignMarchUpdate 里被自己回声的分支挡掉了），也就是说自己在 resolveBattle
+        // 里必定是 def 角色，rounds 需要左右互换才能以「我方=atk」视角正确渲染
+        myReport = {
+          v: 2, names: myCards.map(c => c.name).join('、') || '我方部队', outcome, exp: 0,
+          atkStart: myCards.reduce((s, c) => s + c.start, 0), atkLossTotal: myCards.reduce((s, c) => s + Math.max(0, c.start - c.end), 0),
+          defStart: foeCards.reduce((s, c) => s + c.start, 0), defLossTotal: foeCards.reduce((s, c) => s + Math.max(0, c.start - c.end), 0),
+          our: myCards, foe: foeCards, rounds: this._flipRoundsPerspective(ev.rounds), waves: 1,
+          tile: { x: ev.x || 0, y: ev.y || 0, type: '遭遇战', level: '' },
+        }
+
+        // 全军覆没：无论原本在驻扎还是行军途中，都不再继续原计划，立即折返主城
+        if (side.status === 'done') {
+          if (hasStationed) {
+            const ids = this.generals.filter(g => g.stationedMarchUid === side.marchUid).map(g => g.id)
+            this.recallStationed(ids)
+          } else if (hasMarch) {
+            const march = this.marches.find(x => x.marchUid === side.marchUid)
+            const fromCell = this._marchCellAt(march.path, march.departAtMs, march.arriveAtMs, Date.now()) || march.to
+            const allGens = march.generalIds.map(id => this.general(id)).filter(Boolean)
+            march.done = true
+            this._endMarchNet(march)
+            this._forceRetreat(allGens, fromCell)
+          }
+        }
       } else if (this.foreignMarches.has(side.marchUid)) {
         if (side.status === 'done') {
           this.foreignMarches.delete(side.marchUid)
@@ -1938,7 +2139,7 @@ export class GameState extends Emitter {
       }
     }
     if (touchedMine) {
-      this._pushLog('⚔️ 部队在行军途中遭遇其他玩家部队并交战')
+      this._pushLog('⚔️ 部队在行军途中遭遇其他玩家部队并交战', myReport)
       this.emit('generals', this.generals)
     }
   }
