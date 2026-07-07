@@ -114,6 +114,12 @@ export const slgApi = {
   saveState: (state) => api.put('/games/slg/state', { state }),
   // 更新领地归属 { x, y, is_city, action: 'claim'|'abandon' }
   updateTerritory: (payload) => api.post('/games/slg/territory', payload),
+  // 出征/行军开始上报 { march_uid, intent, from, to, path, depart_at_ms, arrive_at_ms, units }
+  marchStart: (payload) => api.post('/games/slg/march', payload),
+  // 行军结束上报（到达/驻扎/召回/被消灭后清理）{ march_uid }
+  marchEnd: (marchUid) => api.post('/games/slg/march/end', { march_uid: marchUid }),
+  // 玩家部队碰撞遭遇战结果上报 { march_uid, units, status, other_march_uid, other_units, other_status, seed }
+  reportMarchBattle: (payload) => api.post('/games/slg/march/battle', payload),
   // 管理员重置当前世界（清空所有玩家与领地，下次 Join 创建新世界）
   resetWorld: () => api.post('/games/slg/reset'),
 }

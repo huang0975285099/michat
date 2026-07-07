@@ -16,16 +16,16 @@ type SlgWorld struct {
 
 // SlgPlayer SLG 玩家状态
 type SlgPlayer struct {
-	ID        uint64          `json:"id"`
-	WorldID   uint64          `json:"world_id"`
-	UserID    uint64          `json:"user_id"`
-	ChatID    string          `json:"chat_id"`
-	Nickname  string          `json:"nickname"`
-	SpawnX    int             `json:"spawn_x"`
-	SpawnY    int             `json:"spawn_y"`
-	StateJSON json.RawMessage `json:"state_json"` // 前端 GameState 存档格式
-	LastActive time.Time      `json:"last_active"`
-	CreatedAt time.Time       `json:"created_at"`
+	ID         uint64          `json:"id"`
+	WorldID    uint64          `json:"world_id"`
+	UserID     uint64          `json:"user_id"`
+	ChatID     string          `json:"chat_id"`
+	Nickname   string          `json:"nickname"`
+	SpawnX     int             `json:"spawn_x"`
+	SpawnY     int             `json:"spawn_y"`
+	StateJSON  json.RawMessage `json:"state_json"` // 前端 GameState 存档格式
+	LastActive time.Time       `json:"last_active"`
+	CreatedAt  time.Time       `json:"created_at"`
 }
 
 // SlgTerritory SLG 领地归属
@@ -59,4 +59,39 @@ type PlayerBrief struct {
 	SpawnY   int    `json:"spawn_y"`
 	CityLv   int    `json:"city_lv"`
 	Online   bool   `json:"online"`
+}
+
+// PathPoint 地图坐标点（行军路径用）
+type PathPoint struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+}
+
+// MarchUnit 部队快照中的单个作战单位。字段对应前端 core/battle.js#resolveBattle 的
+// unit 入参形状；服务端只存转不解析（与领地 claim 一致的信任模型）。
+type MarchUnit struct {
+	Key       string          `json:"key"`
+	Name      string          `json:"name"`
+	Atk       float64         `json:"atk"`
+	Def       float64         `json:"def"`
+	Int       float64         `json:"int"`
+	Spd       float64         `json:"spd"`
+	Troops    float64         `json:"troops"`
+	TroopType string          `json:"troopType"`
+	Skills    json.RawMessage `json:"skills,omitempty"`
+}
+
+// MarchView 返回给前端的在途部队视图（Join/GetWorld 全量下发，含自己与他人的行军/出征）
+type MarchView struct {
+	MarchUID    string      `json:"march_uid"`
+	OwnerChatID string      `json:"owner_chat_id"`
+	OwnerName   string      `json:"owner_name"`
+	Intent      string      `json:"intent"`
+	From        PathPoint   `json:"from"`
+	To          PathPoint   `json:"to"`
+	Path        []PathPoint `json:"path"`
+	DepartAtMs  int64       `json:"depart_at_ms"`
+	ArriveAtMs  int64       `json:"arrive_at_ms"`
+	Units       []MarchUnit `json:"units"`
+	Status      string      `json:"status"`
 }

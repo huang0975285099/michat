@@ -110,7 +110,7 @@ export const FORGE_STAT_PER_LEVEL = 1          // 每级 +1 全属性（武/防/
 
 // ── 体力（阶段二）─────────────────────────────────────────────────────────────
 export const STAMINA_MAX = 100
-export const MARCH_STAMINA_COST = 10           // 每次出征固定消耗（够连打 10 次）
+export const MARCH_STAMINA_COST = 5           // 每次出征固定消耗（够连打 20 次）
 export const STAMINA_REGEN_PER_HOUR = 5        // 回满约 20 游戏小时 ≈ 20 真实分钟
 
 // ── 兵种 ────────────────────────────────────────────────────────────────────
@@ -355,7 +355,7 @@ export function tileGuardSpec(level, type) {
 }
 // 招募花费（铜币的主要消耗口）与阵容上限
 export const RECRUIT_COST_COIN = 1000
-export const MAX_GENERALS = 8
+export const MAX_GENERALS = 9
 // 开局赠送的免费招募次数（不再固定 3 武将起手，改为送三次抽卡机会）
 export const FREE_RECRUIT_COUNT = 3
 
@@ -445,7 +445,7 @@ export const EQUIP_DISMISS_JADE = {
 // 2 个会自动发育、抢地盘的 AI 势力：老巢在地图生成时按种子确定性放置（MapGenerator 步骤 7），
 // 扩张判定见 GameState._aiExpandStep；地块攻防完全复用现有守军规格表，AI 不设武将系统。
 export const AI_FACTIONS = [
-  { id: 'ai1', name: '黄巾余部', color: 0x9c5fd1 },
+  { id: 'ai1', name: '黄巾军', color: 0x9c5fd1 },
   { id: 'ai2', name: '黑山贼',   color: 0x1fae8e },
 ]
 // 每 1 游戏小时为每个存活势力跑一次扩张判定

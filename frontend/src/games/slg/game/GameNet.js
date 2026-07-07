@@ -12,6 +12,7 @@ export class SlgGameNet {
     this._onTerritoryUpdate = null
     this._onPresence = null
     this._onAIExpansion = null
+    this._onMarchUpdate = null
     this._onReconnect = null
     this._unwatchReconnect = null
   }
@@ -24,6 +25,7 @@ export class SlgGameNet {
     this._register('slg_territory_update', this._handleTerritoryUpdate.bind(this))
     this._register('slg_presence', this._handlePresence.bind(this))
     this._register('slg_ai_expansion', this._handleAIExpansion.bind(this))
+    this._register('slg_march_update', this._handleMarchUpdate.bind(this))
 
     // 通知服务端：进入 SLG 世界
     send('slg_join', {})
@@ -70,6 +72,12 @@ export class SlgGameNet {
   onAIExpansion(cb) { this._onAIExpansion = cb }
 
   /**
+   * 设置部队事件回调（出征/行军开始、结束、玩家碰撞遭遇战结果）。
+   * @param {(ev: {action:'start'|'end'|'battle', march_uid, owner_chat_id, ...}) => void} cb
+   */
+  onMarchUpdate(cb) { this._onMarchUpdate = cb }
+
+  /**
    * 设置 WS 重连回调：断线重连、重新报到（slg_join）之后触发一次，
    * 上层应借机重新拉取一次全量世界快照，避免断线期间错过的领地/上下线广播导致长期 desync。
    * @param {() => void} cb
@@ -91,5 +99,9 @@ export class SlgGameNet {
 
   _handleAIExpansion(payload) {
     if (this._onAIExpansion) this._onAIExpansion(payload)
+  }
+
+  _handleMarchUpdate(payload) {
+    if (this._onMarchUpdate) this._onMarchUpdate(payload)
   }
 }

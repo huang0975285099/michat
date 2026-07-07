@@ -111,6 +111,7 @@ export class GameState extends Emitter {
     this.online = !!opts.online
     this.chatId = opts.chatId || null
     this.otherTerritories = new Map()   // key=`x,y` → { ownerChatId, ownerName, isCity }
+    this.foreignMarches = new Map()     // key=march_uid → 其他玩家在途部队（出征/行军广播同步）
 
     // 玩家状态
     this.res = { ...INITIAL_RESOURCES }
@@ -915,11 +916,16 @@ export class GameState extends Emitter {
     return { steps, gameSeconds: steps * tileMarchSeconds(minSpd), path }
   }
 
-  /** 派一名或多名武将合击目标地块。generalIds 可传数组或单个 id。返回错误信息或 null */
-  march(generalIds, tx, ty) {
+  /**
+   * 派一名或多名武将合击目标地块，或行军驻扎目标地块。generalIds 可传数组或单个 id。
+   * opts.intent: 'attack'（默认，出征，到达后与守军交战）| 'march'（行军，不交战，到达后驻扎原地）
+   * 返回错误信息或 null
+   */
+  march(generalIds, tx, ty, opts = {}) {
+    const intent = opts.intent === 'march' ? 'march' : 'attack'
     const ids = Array.isArray(generalIds) ? generalIds : [generalIds]
-    if (!ids.length) return '请选择出征武将'
-    if (ids.length > MAX_MARCH_PARTY) return `最多同时出征 ${MAX_MARCH_PARTY} 队`
+    if (!ids.length) return intent === 'march' ? '请选择行军武将' : '请选择出征武将'
+    if (ids.length > MAX_MARCH_PARTY) return `最多同时${intent === 'march' ? '行军' : '出征'} ${MAX_MARCH_PARTY} 队`
     const gens = []
     for (const id of ids) {
       const g = this.general(id)
@@ -928,19 +934,22 @@ export class GameState extends Emitter {
       if (g.troops <= 0) return `${g.name} 没有兵力，请先征兵`
       if ((g.stamina ?? STAMINA_MAX) < MARCH_STAMINA_COST) {
         const wait = Math.ceil((MARCH_STAMINA_COST - (g.stamina ?? STAMINA_MAX)) / STAMINA_REGEN_PER_HOUR)
-        return `${g.name} 体力不足，约 ${wait} 分钟后可再出征`
+        return `${g.name} 体力不足，约 ${wait} 分钟后可再${intent === 'march' ? '行军' : '出征'}`
       }
       gens.push(g)
     }
     const target = this.tileAt(tx, ty)
     if (!target) return '目标超出地图'
     if (!TILE_TYPES[target.type].passable) return '目标不可通行'
-    if (target.owner === 'player') return '这是己方领地'
-    if (this.isOtherPlayerTile(tx, ty)) return '该地块属于其他玩家'
-    if (!this.isAdjacentToTerritory(tx, ty)) return '只能攻打与领地相邻的地块'
-    if (this.territoryCount() >= this.territoryCapNow()) {
-      return `领地已达上限（${this.territoryCapNow()}），请升级主城或放弃部分领地`
+    if (intent === 'attack') {
+      if (target.owner === 'player') return '这是己方领地'
+      if (this.isOtherPlayerTile(tx, ty)) return '该地块属于其他玩家'
+      if (!this.isAdjacentToTerritory(tx, ty)) return '只能攻打与领地相邻的地块'
+      if (this.territoryCount() >= this.territoryCapNow()) {
+        return `领地已达上限（${this.territoryCapNow()}），请升级主城或放弃部分领地`
+      }
     }
+    // 行军（intent==='march'）：可到达任意可通行地块，不限归属/相邻，不校验领地上限
 
     // 合击：沿网格逐格行军，按全队最慢的有效速度计时
     const from = this.spawn
@@ -948,10 +957,13 @@ export class GameState extends Emitter {
     const steps = path.length - 1
     const minSpd = Math.min(...gens.map(g => this._marchSpeed(g)))
     const dur = steps * tileMarchSeconds(minSpd)   // 游戏内秒
+    const id = marchSeq++
     const m = {
-      id: marchSeq++, generalIds: ids.slice(),
+      id, generalIds: ids.slice(), intent,
       from: { x: from.x, y: from.y }, to: { x: tx, y: ty }, path,
       departAt: this.now, arriveAt: this.now + dur, phase: 'out',
+      marchUid: this.chatId ? `${this.chatId}:${id}` : null,
+      departAtMs: Date.now(), arriveAtMs: Math.round(Date.now() + (dur / TIME_SCALE) * 1000),
     }
     for (const g of gens) {
       g.state = 'marching'
@@ -959,7 +971,79 @@ export class GameState extends Emitter {
     }
     this.marches.push(m)
     const total = gens.reduce((s, g) => s + g.troops, 0)
-    this._pushLog(`⚔️ ${gens.map(g => g.name).join('、')} 率 ${total} 兵出征 (${tx},${ty})`)
+    if (intent === 'march') {
+      this._pushLog(`🚶 ${gens.map(g => g.name).join('、')} 率 ${total} 兵行军 (${tx},${ty})`)
+    } else {
+      this._pushLog(`⚔️ ${gens.map(g => g.name).join('、')} 率 ${total} 兵出征 (${tx},${ty})`)
+    }
+    this._broadcastMarchStart(m, gens)
+    this.emit('marches', this.marches)
+    this.emit('generals', this.generals)
+    return null
+  }
+
+  /**
+   * 多人模式下把新发起的行军/出征广播给同世界玩家（供渲染他方部队 + 碰撞检测）。
+   * 单机模式（无 chatId）静默跳过。
+   */
+  _broadcastMarchStart(m, gens) {
+    if (!m.marchUid) return
+    this.emit('marchStart', {
+      marchUid: m.marchUid, intent: m.intent,
+      from: m.from, to: m.to, path: m.path,
+      departAtMs: m.departAtMs, arriveAtMs: m.arriveAtMs,
+      units: gens.map(g => this._unitSnapshot(g)),
+    })
+  }
+
+  /** 单个武将的对外作战快照（供部队广播/PvP 遭遇战使用），形状对齐 core/battle.js#resolveBattle 的 unit 入参 */
+  _unitSnapshot(g) {
+    const e = this.effStats(g)
+    return {
+      key: g.id, name: g.name,
+      atk: e.atk, def: e.def, int: e.int, spd: e.spd,
+      troops: g.troops, troopType: g.troopType,
+      skills: (g.skillIds || []).filter(Boolean).map(id => ({ id, lv: this.skillLevel(id) })),
+    }
+  }
+
+  /** 标记某条行军的网络广播已结束（避免重复发送 marchEnd）；单机模式下 marchUid 为空，天然跳过 */
+  _endMarchNet(m) {
+    if (!m.marchUid || m._netEnded) return
+    m._netEnded = true
+    this.emit('marchEnd', { marchUid: m.marchUid })
+  }
+
+  /** 召回驻扎中的武将：从当前驻扎地块行军回主城，途中不交战，到家后变回 idle */
+  recallStationed(generalIds) {
+    const ids = Array.isArray(generalIds) ? generalIds : [generalIds]
+    if (!ids.length) return '请选择要召回的武将'
+    const gens = []
+    let pos = null
+    for (const id of ids) {
+      const g = this.general(id)
+      if (!g) return '武将不存在'
+      if (g.state !== 'stationed' || !g.pos) return `${g.name} 未在驻扎中`
+      if (pos && (pos.x !== g.pos.x || pos.y !== g.pos.y)) return '所选武将不在同一地块，请分别召回'
+      pos = g.pos
+      gens.push(g)
+    }
+    const path = findPath(this.tiles, pos, this.spawn)
+    const steps = path.length - 1
+    const minSpd = Math.min(...gens.map(g => this._marchSpeed(g)))
+    const dur = steps * tileMarchSeconds(minSpd)
+    const id = marchSeq++
+    const m = {
+      id, generalIds: ids.slice(), intent: 'march', isRecall: true,
+      from: { x: pos.x, y: pos.y }, to: { x: this.spawn.x, y: this.spawn.y }, path,
+      departAt: this.now, arriveAt: this.now + dur, phase: 'out',
+      marchUid: this.chatId ? `${this.chatId}:${id}` : null,
+      departAtMs: Date.now(), arriveAtMs: Math.round(Date.now() + (dur / TIME_SCALE) * 1000),
+    }
+    for (const g of gens) { g.state = 'marching'; g.pos = null }
+    this.marches.push(m)
+    this._pushLog(`🏠 ${gens.map(g => g.name).join('、')} 自 (${pos.x},${pos.y}) 召回`)
+    this._broadcastMarchStart(m, gens)
     this.emit('marches', this.marches)
     this.emit('generals', this.generals)
     return null
@@ -1011,8 +1095,8 @@ export class GameState extends Emitter {
     return null
   }
 
-  /** 编队整队出征：编队内所有武将都必须 idle + 有兵 + 体力足。返回错误或 null */
-  marchFormation(formationId, tx, ty) {
+  /** 编队整队出征/行军：编队内所有武将都必须 idle + 有兵 + 体力足。返回错误或 null */
+  marchFormation(formationId, tx, ty, opts = {}) {
     const f = this.formations.find(x => x.id === formationId)
     if (!f) return '编队不存在'
     if (f.generalIds.length === 0) return `${f.name} 编队为空，请先编辑`
@@ -1026,16 +1110,19 @@ export class GameState extends Emitter {
         return `${g.name} 体力不足，约 ${wait} 分钟后可再出征`
       }
     }
-    return this.march(f.generalIds.slice(), tx, ty)
+    return this.march(f.generalIds.slice(), tx, ty, opts)
   }
 
 
   _processMarches() {
+    this._checkMarchCollisions()
     let changed = false
     for (const m of this.marches) {
       if (m.arriveAt > this.now) continue
       changed = true
-      if (m.phase === 'out') this._arriveAndFight(m)
+      if (m.phase === 'out' && m.isRecall) this._returnHome(m)
+      else if (m.phase === 'out' && m.intent === 'march') this._arriveAndStation(m)
+      else if (m.phase === 'out') this._arriveAndFight(m)
       else this._returnHome(m)
     }
     if (changed) {
@@ -1043,6 +1130,108 @@ export class GameState extends Emitter {
       this.emit('marches', this.marches)
       this.emit('generals', this.generals)
     }
+  }
+
+  // ── 多人模式：玩家部队碰撞遭遇战 ──────────────────────────────────────────
+  // 出征/行军路线广播给同世界玩家后（_broadcastMarchStart），各客户端各自在本地按
+  // 真实时间戳独立计算双方部队当前所在格子；一旦重合，由 chatId 字典序较小的一方
+  // 用 resolveBattle 确定性结算（双方相同 units+seed 必得相同结果，无需服务端重算），
+  // 立即在本地生效，再上报服务端存证 + 广播另一方。
+
+  /** 每 tick 检查本地行军中的部队是否与其他玩家部队在同一格相遇 */
+  _checkMarchCollisions() {
+    if (!this.online || !this.chatId || this.foreignMarches.size === 0) return
+    const nowMs = Date.now()
+    for (const m of this.marches) {
+      if (m.phase !== 'out' || !m.marchUid || !m.departAtMs || !m.arriveAtMs) continue
+      const cell = this._marchCellAt(m.path, m.departAtMs, m.arriveAtMs, nowMs)
+      if (!cell) continue
+      for (const fm of this.foreignMarches.values()) {
+        if (fm.status !== 'active') continue
+        if (this.chatId > fm.ownerChatId) continue   // 字典序较大的一方只被动接收广播，不重复上报
+        const lastAt = m._collideCooldown?.[fm.marchUid] || 0
+        if (nowMs - lastAt < 5000) continue
+        const fcell = this._marchCellAt(fm.path, fm.departAtMs, fm.arriveAtMs, nowMs)
+        if (!fcell || fcell.x !== cell.x || fcell.y !== cell.y) continue
+        this._resolveMarchCollision(m, fm, cell)
+      }
+    }
+  }
+
+  /** 沿路径按真实时间戳（Unix ms）插值算当前所在格子，与本地 this.now 无关，供跨客户端比较 */
+  _marchCellAt(path, departAtMs, arriveAtMs, nowMs) {
+    if (!path || path.length === 0) return null
+    const seg = path.length - 1
+    if (seg <= 0) return { x: path[0].x, y: path[0].y }
+    const span = Math.max(arriveAtMs - departAtMs, 1)
+    const p = Math.min(1, Math.max(0, (nowMs - departAtMs) / span))
+    const pos = p * seg
+    const idx = Math.min(seg - 1, Math.floor(pos))
+    const t = pos - idx
+    const a = path[idx], b = path[idx + 1]
+    return t < 0.5 ? { x: a.x, y: a.y } : { x: b.x, y: b.y }
+  }
+
+  /** 结算一场玩家部队遭遇战：本地立即生效 + emit 供上层上报服务端/广播 */
+  _resolveMarchCollision(m, fm, cell) {
+    m._collideCooldown = m._collideCooldown || {}
+    m._collideCooldown[fm.marchUid] = Date.now()
+
+    const gens = m.generalIds.map(id => this.general(id)).filter(Boolean).filter(g => g.troops > 0)
+    const theirUnits = (fm.units || []).filter(u => u.troops > 0)
+    if (gens.length === 0 || theirUnits.length === 0) return
+
+    const myUnits = gens.map(g => this._unitSnapshot(g))
+    const seed = (Math.imul(this._marchSeedPart(m.marchUid), 0x9E3779B1) ^ this._marchSeedPart(fm.marchUid)) >>> 0
+    const r = resolveBattle(myUnits, theirUnits, seed || 1)
+
+    r.units.atk.forEach(u => {
+      const g = this.general(u.key)
+      if (g) g.troops = Math.max(0, Math.round(u.troops))
+    })
+    const theirRemaining = r.units.def.map(u => ({
+      ...(theirUnits.find(x => x.key === u.key) || {}), troops: Math.max(0, Math.round(u.troops)),
+    }))
+
+    const names = gens.map(g => g.name).join('、')
+    const outcomeText = r.outcome === 'win' ? '击溃' : r.outcome === 'lose' ? '被击退' : '未分胜负'
+    this._pushLog(`⚔️ ${names} 与 ${fm.ownerName || '对方'} 的部队遭遇战，${outcomeText}`)
+    this.emit('generals', this.generals)
+    this.emit('battle', { tile: cell, outcome: r.outcome, general: names })
+
+    const myStatus = gens.every(g => g.troops <= 0) ? 'done' : 'active'
+    const theirStatus = theirRemaining.every(u => u.troops <= 0) ? 'done' : 'active'
+    fm.units = theirRemaining
+    if (theirStatus === 'done') this.foreignMarches.delete(fm.marchUid)
+
+    this.emit('marchBattleReport', {
+      marchUid: m.marchUid,
+      units: gens.map(g => this._unitSnapshot(g)),
+      status: myStatus,
+      otherMarchUid: fm.marchUid,
+      otherUnits: theirRemaining,
+      otherStatus: theirStatus,
+      seed,
+    })
+  }
+
+  /** 字符串→int32 简易哈希，供遭遇战种子拼接使用 */
+  _marchSeedPart(str) {
+    let h = 0
+    for (let i = 0; i < str.length; i++) h = (Math.imul(h, 31) + str.charCodeAt(i)) | 0
+    return h
+  }
+
+  /** 行军到达：不交战，原地驻扎（isRecall 的行军到家变回 idle 走 _returnHome 分支） */
+  _arriveAndStation(m) {
+    const gens = m.generalIds.map(id => this.general(id)).filter(Boolean)
+    for (const g of gens) {
+      g.state = 'stationed'
+      g.pos = { x: m.to.x, y: m.to.y }
+    }
+    m.done = true
+    this._pushLog(`🚩 ${gens.map(g => g.name).join('、')} 抵达并驻扎于 (${m.to.x},${m.to.y})`)
+    this._endMarchNet(m)
   }
 
   _arriveAndFight(m) {
@@ -1058,6 +1247,7 @@ export class GameState extends Emitter {
       m.phase = 'back'
       m.departAt = this.now
       m.arriveAt = this.now + steps * tileMarchSeconds(minSpd)
+      this._endMarchNet(m)
       return
     }
 
@@ -1313,6 +1503,7 @@ export class GameState extends Emitter {
     m.phase = 'back'
     m.departAt = this.now
     m.arriveAt = this.now + steps * tileMarchSeconds(minSpd)
+    this._endMarchNet(m)
   }
 
   /** 攻克 NPC 城池的一次性掠夺 */
@@ -1338,6 +1529,7 @@ export class GameState extends Emitter {
     for (const g of gens) g.state = 'idle'
     m.done = true
     this._pushLog(`🏠 ${gens.map(g => g.name).join('、')} 回城`)
+    this._endMarchNet(m)
   }
 
   _gainExp(g, exp) {
@@ -1428,6 +1620,8 @@ export class GameState extends Emitter {
         lv: g.lv, exp: Math.round(g.exp), troops: g.troops,
         atk: g.atk, def: g.def, int: g.int, pol: g.pol, cha: g.cha,
         stamina: Math.round(g.stamina), awaken: g.awaken || 0,
+        // 驻扎中的武将记录当前所在坐标；行军途中的武将由 marches 数组还原，此处不存
+        pos: g.state === 'stationed' && g.pos ? { x: g.pos.x, y: g.pos.y } : null,
         // v11+ 战法 2 槽（第2槽需20级解锁）；缺省补 [null,null]
         skillIds: [g.skillIds?.[0] || null, g.skillIds?.[1] || null],
         // v9+ 武将装备槽：6 类 iid（旧档缺省时回退空槽）
@@ -1499,6 +1693,8 @@ export class GameState extends Emitter {
       if (!g.equip) g.equip = { weapon: null, helmet: null, necklace: null, armor: null, belt: null, boots: null }
       if (!Array.isArray(g.skillIds)) g.skillIds = [null, null]
       delete g.skillId
+      // state 字段不入档：驻扎中的武将靠 pos 还原 state='stationed'；行军中的武将由下方 marches 恢复覆盖
+      g.state = g.pos ? 'stationed' : 'idle'
       const tpl = findGeneralTemplate(g.id)
       if (tpl) {
         if (g.pol === undefined) g.pol = tpl.pol
@@ -1665,6 +1861,86 @@ export class GameState extends Emitter {
     }
     // 触发渲染刷新；owner 为 AI 势力 ID，SlgPage 的 territory 监听会跳过 AI 同步
     this.emit('territory', { x: ev.x, y: ev.y, owner: ev.faction_id })
+  }
+
+  /**
+   * 应用服务端在 Join/GetWorld 时下发的全量在途部队（自己 + 他人）。
+   * 他人的部队存入 foreignMarches 供渲染/碰撞检测；自己的部队用服务端权威兵力
+   * 校正本地存档（覆盖离线期间被别人部队拦截、本地尚未得知的战损）。
+   * @param {Array} marches MarchView[]（服务端 snake_case 字段）
+   */
+  applyActiveMarches(marches) {
+    // 全量下发：先清空再重建，避免断线期间错过的 marchEnd 广播导致他人部队标记永久残留
+    this.foreignMarches.clear()
+    for (const mv of marches || []) {
+      if (mv.owner_chat_id === this.chatId) {
+        // 自己的部队：本地权威来源是各武将的 troops，直接按服务端记录的战损校正
+        for (const u of mv.units || []) {
+          const g = this.general(u.key)
+          if (g) g.troops = Math.max(0, Math.round(u.troops))
+        }
+      } else {
+        this.foreignMarches.set(mv.march_uid, {
+          marchUid: mv.march_uid, ownerChatId: mv.owner_chat_id, ownerName: mv.owner_name,
+          intent: mv.intent, from: mv.from, to: mv.to, path: mv.path,
+          departAtMs: mv.depart_at_ms, arriveAtMs: mv.arrive_at_ms,
+          units: mv.units, status: mv.status,
+        })
+      }
+    }
+    this.emit('generals', this.generals)
+  }
+
+  /**
+   * 应用来自服务器的部队事件（slg_march_update）：出征/行军开始、结束、玩家碰撞遭遇战结果。
+   * @param {{action:'start'|'end'|'battle', march_uid, owner_chat_id, owner_name, ...}} ev
+   */
+  applyForeignMarchUpdate(ev) {
+    if (ev.action === 'start') {
+      if (ev.owner_chat_id === this.chatId) return   // 自己发起的回声广播，本地已处理
+      this.foreignMarches.set(ev.march_uid, {
+        marchUid: ev.march_uid, ownerChatId: ev.owner_chat_id, ownerName: ev.owner_name,
+        intent: ev.intent, from: ev.from, to: ev.to, path: ev.path,
+        departAtMs: ev.depart_at_ms, arriveAtMs: ev.arrive_at_ms,
+        units: ev.units, status: 'active',
+      })
+    } else if (ev.action === 'end') {
+      this.foreignMarches.delete(ev.march_uid)
+    } else if (ev.action === 'battle') {
+      this._applyMarchBattleResult(ev)
+    }
+  }
+
+  /** 应用一场（可能由对方上报的）玩家部队遭遇战结果：校正我方兵力 / 更新或清除对方部队 */
+  _applyMarchBattleResult(ev) {
+    const sides = [
+      { marchUid: ev.march_uid, ownerChatId: ev.owner_chat_id, units: ev.units, status: ev.status },
+      { marchUid: ev.other_march_uid, ownerChatId: ev.other_owner_chat_id, units: ev.other_units, status: ev.other_status },
+    ]
+    let touchedMine = false
+    for (const side of sides) {
+      if (!side.marchUid) continue
+      if (side.ownerChatId === this.chatId) {
+        const m = this.marches.find(x => x.marchUid === side.marchUid)
+        if (!m) continue
+        for (const u of side.units || []) {
+          const g = this.general(u.key)
+          if (g) g.troops = Math.max(0, Math.round(u.troops))
+        }
+        touchedMine = true
+      } else if (this.foreignMarches.has(side.marchUid)) {
+        if (side.status === 'done') {
+          this.foreignMarches.delete(side.marchUid)
+        } else {
+          const fm = this.foreignMarches.get(side.marchUid)
+          fm.units = side.units
+        }
+      }
+    }
+    if (touchedMine) {
+      this._pushLog('⚔️ 部队在行军途中遭遇其他玩家部队并交战')
+      this.emit('generals', this.generals)
+    }
   }
 
   /**

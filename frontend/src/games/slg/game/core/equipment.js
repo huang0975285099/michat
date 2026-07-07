@@ -77,3 +77,4 @@ export function rollEquipment(rng = Math.random) {
   const attr = attrs[Math.floor(rng() * attrs.length)]
   return { type, quality, attr, level: 1 }
 }
+2

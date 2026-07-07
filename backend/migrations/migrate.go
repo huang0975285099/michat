@@ -49,10 +49,13 @@ var slgWorldsSQL string
 //go:embed 013_slg_shared_ai.sql
 var slgSharedAiSQL string
 
+//go:embed 014_slg_marches.sql
+var slgMarchesSQL string
+
 // AutoMigrate 自动执行建表 SQL，幂等（IF NOT EXISTS）。
 // MySQL 1060（列已存在）和 1061（索引已存在）被视为已完成，静默跳过。
 func AutoMigrate(db *sql.DB) error {
-	migrations := []string{initSQL, messageReadsSQL, deviceTokensSQL, fistTokenSQL, ironfistStatsSQL, ironfistMatchesSQL, ironfistFriendModeSQL, ironfistPvpMatchmakingSQL, ironfistMatchPvpRoomSQL, ironfistPvpReportsSQL, fistTxPvpRefundSQL, slgWorldsSQL, slgSharedAiSQL}
+	migrations := []string{initSQL, messageReadsSQL, deviceTokensSQL, fistTokenSQL, ironfistStatsSQL, ironfistMatchesSQL, ironfistFriendModeSQL, ironfistPvpMatchmakingSQL, ironfistMatchPvpRoomSQL, ironfistPvpReportsSQL, fistTxPvpRefundSQL, slgWorldsSQL, slgSharedAiSQL, slgMarchesSQL}
 	for _, sql := range migrations {
 		for _, stmt := range splitStatements(sql) {
 			if _, err := db.Exec(stmt); err != nil {

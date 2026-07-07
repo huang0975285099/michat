@@ -443,6 +443,43 @@ export class WorldScene extends Phaser.Scene {
       g.fillStyle(0xffffff, 1)
       g.fillCircle(px, py, 2.5)
     }
+
+    // 其他玩家的在途部队（出征/行军广播同步而来），紫色区分己方红/蓝
+    const foreignColor = 0xba68c8
+    for (const fm of this.state.foreignMarches.values()) {
+      const cells = fm.path
+      if (!cells || cells.length === 0 || !cells.every(p => p && Number.isFinite(p.x) && Number.isFinite(p.y))) continue
+      if (!Number.isFinite(fm.departAtMs) || !Number.isFinite(fm.arriveAtMs)) continue
+      const span = Math.max(fm.arriveAtMs - fm.departAtMs, 1)
+      const p = Phaser.Math.Clamp((Date.now() - fm.departAtMs) / span, 0, 1)
+      const seg = cells.length - 1
+      const { px, py } = this._pointAlong(cells, p, seg, c)
+      g.lineStyle(2, foreignColor, 0.6)
+      g.beginPath()
+      g.moveTo(c(cells[0].x), c(cells[0].y))
+      for (let i = 1; i < cells.length; i++) g.lineTo(c(cells[i].x), c(cells[i].y))
+      g.strokePath()
+      g.fillStyle(foreignColor, 0.35)
+      g.fillCircle(px, py, 9)
+      g.fillStyle(foreignColor, 1)
+      g.fillCircle(px, py, 6)
+      g.fillStyle(0xffffff, 1)
+      g.fillCircle(px, py, 2.5)
+    }
+
+    // 驻扎中的己方武将：目的地小旗标记（按坐标去重，多将同格只画一面旗）
+    const stationedTiles = new Set()
+    for (const gen of this.state.generals) {
+      if (gen.state !== 'stationed' || !gen.pos) continue
+      const key = `${gen.pos.x},${gen.pos.y}`
+      if (stationedTiles.has(key)) continue
+      stationedTiles.add(key)
+      const px = c(gen.pos.x), py = c(gen.pos.y)
+      g.fillStyle(0x2f6fa8, 0.9)
+      g.fillTriangle(px - 6, py + 7, px - 6, py - 7, px + 7, py)
+      g.lineStyle(1.5, 0xffffff, 0.9)
+      g.strokeTriangle(px - 6, py + 7, px - 6, py - 7, px + 7, py)
+    }
   }
 
   /** 沿格子序列按进度 p∈[0,1] 求插值点（每格等时） */
@@ -472,6 +509,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   _battleFlash(tile, outcome) {
+    if (!tile) return
     const cx = tile.x * T + T / 2, cy = tile.y * T + T / 2
     const color = outcome === 'win' ? 0xffd700 : outcome === 'draw' ? 0x9e9e9e : 0xff3030
     // 中心光圈扩散

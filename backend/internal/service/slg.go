@@ -16,11 +16,14 @@ import (
 
 // 错误定义
 var (
-	ErrWorldFull        = errors.New("world full")
-	ErrNotAdmin         = errors.New("not admin")
-	ErrTileOwnedByOther = errors.New("tile owned by another player")
-	ErrNotAdjacent      = errors.New("tile not adjacent to owned territory")
-	ErrInvalidClaim     = errors.New("invalid claim request")
+	ErrWorldFull            = errors.New("world full")
+	ErrNotAdmin             = errors.New("not admin")
+	ErrTileOwnedByOther     = errors.New("tile owned by another player")
+	ErrNotAdjacent          = errors.New("tile not adjacent to owned territory")
+	ErrInvalidClaim         = errors.New("invalid claim request")
+	ErrMarchNotFound        = errors.New("march not found")
+	ErrMarchNotOwner        = errors.New("not the owner of this march")
+	ErrMarchAlreadyResolved = errors.New("march battle already resolved")
 )
 
 // SlgService 九州征途多人世界服务
@@ -61,15 +64,16 @@ func (s *SlgService) SetBroadcastAI(fn func(worldID uint64, ev *AITerritoryEvent
 
 // JoinResult 加入世界返回
 type JoinResult struct {
-	WorldID     uint64                `json:"world_id"`
-	Seed        int                   `json:"seed"`
-	Season      int                   `json:"season"`
-	SpawnX      int                   `json:"spawn_x"`
-	SpawnY      int                   `json:"spawn_y"`
-	IsNewPlayer bool                  `json:"is_new_player"`
-	State       json.RawMessage       `json:"state,omitempty"` // 玩家上次存档（新玩家为空）
-	Territories []model.TerritoryView `json:"territories"`
-	Players     []model.PlayerBrief   `json:"players"`
+	WorldID       uint64                `json:"world_id"`
+	Seed          int                   `json:"seed"`
+	Season        int                   `json:"season"`
+	SpawnX        int                   `json:"spawn_x"`
+	SpawnY        int                   `json:"spawn_y"`
+	IsNewPlayer   bool                  `json:"is_new_player"`
+	State         json.RawMessage       `json:"state,omitempty"` // 玩家上次存档（新玩家为空）
+	Territories   []model.TerritoryView `json:"territories"`
+	Players       []model.PlayerBrief   `json:"players"`
+	ActiveMarches []model.MarchView     `json:"active_marches"`
 }
 
 // SaveStateRequest 保存玩家状态
@@ -93,6 +97,62 @@ type TerritoryChangeEvent struct {
 	OwnerName   string `json:"owner_name"`
 	IsCity      bool   `json:"is_city"`
 	Action      string `json:"action"` // "claim" | "abandon"
+}
+
+// ── 玩家部队位置同步（出征/行军广播 + 玩家碰撞遭遇战）───────────────────────
+// 战斗结果本身由客户端用 core/battle.js#resolveBattle 确定性计算（双方拿到同样的
+// units+seed 必然算出同样结果），服务端只负责：校验归属、落库存证、广播给同世界玩家，
+// 并在断线重连时把权威结果回放给本地校正——与领地 claim 的信任模型完全一致。
+
+// MarchStartRequest 出征/行军开始上报
+type MarchStartRequest struct {
+	MarchUID   string            `json:"march_uid"`
+	Intent     string            `json:"intent"` // attack | march
+	From       model.PathPoint   `json:"from"`
+	To         model.PathPoint   `json:"to"`
+	Path       []model.PathPoint `json:"path"`
+	DepartAtMs int64             `json:"depart_at_ms"`
+	ArriveAtMs int64             `json:"arrive_at_ms"`
+	Units      []model.MarchUnit `json:"units"`
+}
+
+// MarchEndRequest 行军结束上报（到达/驻扎/召回/被消灭后客户端主动清理）
+type MarchEndRequest struct {
+	MarchUID string `json:"march_uid"`
+}
+
+// MarchBattleRequest 玩家部队碰撞遭遇战结果上报。上报者必须是 MarchUID 一方的 owner；
+// OtherMarchUID 是对方部队的 march_uid（不要求上报者是对方 owner）。
+type MarchBattleRequest struct {
+	MarchUID      string            `json:"march_uid"`
+	Units         []model.MarchUnit `json:"units"`
+	Status        string            `json:"status"` // active | done
+	OtherMarchUID string            `json:"other_march_uid"`
+	OtherUnits    []model.MarchUnit `json:"other_units"`
+	OtherStatus   string            `json:"other_status"`
+	Seed          int64             `json:"seed"`
+}
+
+// MarchEvent 部队事件（WS 广播用），action 为 start|end|battle。
+// battle 事件一次性带出双方战后状态，接收端按 march_uid 是否属于自己分别处理。
+type MarchEvent struct {
+	Action      string            `json:"action"`
+	MarchUID    string            `json:"march_uid"`
+	OwnerChatID string            `json:"owner_chat_id"`
+	OwnerName   string            `json:"owner_name"`
+	Intent      string            `json:"intent,omitempty"`
+	From        *model.PathPoint  `json:"from,omitempty"`
+	To          *model.PathPoint  `json:"to,omitempty"`
+	Path        []model.PathPoint `json:"path,omitempty"`
+	DepartAtMs  int64             `json:"depart_at_ms,omitempty"`
+	ArriveAtMs  int64             `json:"arrive_at_ms,omitempty"`
+	Units       []model.MarchUnit `json:"units,omitempty"`
+	Status      string            `json:"status,omitempty"`
+
+	OtherMarchUID    string            `json:"other_march_uid,omitempty"`
+	OtherOwnerChatID string            `json:"other_owner_chat_id,omitempty"`
+	OtherUnits       []model.MarchUnit `json:"other_units,omitempty"`
+	OtherStatus      string            `json:"other_status,omitempty"`
 }
 
 // GetActiveWorld 获取当前活跃世界，没有则创建
@@ -303,15 +363,22 @@ func (s *SlgService) Join(ctx context.Context, userID uint64, chatID, nickname s
 		return nil, err
 	}
 
+	// 获取全图在途部队（自己 + 他人的出征/行军，供客户端渲染与自我校正）
+	marches, err := s.GetActiveMarches(ctx, w.ID)
+	if err != nil {
+		return nil, err
+	}
+
 	result := &JoinResult{
-		WorldID:     w.ID,
-		Seed:        w.Seed,
-		Season:      w.Season,
-		SpawnX:      spawnX,
-		SpawnY:      spawnY,
-		IsNewPlayer: isNew,
-		Territories: territories,
-		Players:     players,
+		WorldID:       w.ID,
+		Seed:          w.Seed,
+		Season:        w.Season,
+		SpawnX:        spawnX,
+		SpawnY:        spawnY,
+		IsNewPlayer:   isNew,
+		Territories:   territories,
+		Players:       players,
+		ActiveMarches: marches,
 	}
 	if len(stateJSON) > 0 && string(stateJSON) != `{"v":0}` {
 		result.State = json.RawMessage(stateJSON)
@@ -518,6 +585,177 @@ func (s *SlgService) UpdateTerritory(ctx context.Context, userID uint64, chatID,
 	}
 
 	return ev, nil
+}
+
+// StartMarch 出征/行军开始：落库存证 + 返回广播事件。同 march_uid 重复上报按最新数据覆盖
+// （幂等，允许客户端断线重连后补发）。
+func (s *SlgService) StartMarch(ctx context.Context, userID uint64, chatID, nickname string, req *MarchStartRequest) (*MarchEvent, error) {
+	w, err := s.GetActiveWorld(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var playerID uint64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM slg_players WHERE world_id=? AND user_id=?`,
+		w.ID, userID).Scan(&playerID); err != nil {
+		return nil, fmt.Errorf("player not in world: %w", err)
+	}
+
+	pathJSON, err := json.Marshal(req.Path)
+	if err != nil {
+		return nil, err
+	}
+	unitsJSON, err := json.Marshal(req.Units)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO slg_marches
+		   (world_id, march_uid, owner_chat_id, owner_name, intent, from_x, from_y, to_x, to_y,
+		    path_json, depart_at_ms, arrive_at_ms, units_json, status)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+		 ON DUPLICATE KEY UPDATE
+		   owner_name=VALUES(owner_name), intent=VALUES(intent),
+		   from_x=VALUES(from_x), from_y=VALUES(from_y), to_x=VALUES(to_x), to_y=VALUES(to_y),
+		   path_json=VALUES(path_json), depart_at_ms=VALUES(depart_at_ms), arrive_at_ms=VALUES(arrive_at_ms),
+		   units_json=VALUES(units_json), status='active', updated_at=NOW()`,
+		w.ID, req.MarchUID, chatID, nickname, req.Intent,
+		req.From.X, req.From.Y, req.To.X, req.To.Y,
+		string(pathJSON), req.DepartAtMs, req.ArriveAtMs, string(unitsJSON))
+	if err != nil {
+		return nil, err
+	}
+
+	from, to := req.From, req.To
+	return &MarchEvent{
+		Action: "start", MarchUID: req.MarchUID, OwnerChatID: chatID, OwnerName: nickname,
+		Intent: req.Intent, From: &from, To: &to, Path: req.Path,
+		DepartAtMs: req.DepartAtMs, ArriveAtMs: req.ArriveAtMs, Units: req.Units, Status: "active",
+	}, nil
+}
+
+// EndMarch 行军结束（到达/驻扎/召回/清理）：标记 done。只允许清理自己的 march。
+func (s *SlgService) EndMarch(ctx context.Context, userID uint64, chatID string, req *MarchEndRequest) (*MarchEvent, error) {
+	w, err := s.GetActiveWorld(ctx)
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE slg_marches SET status='done', updated_at=NOW() WHERE world_id=? AND march_uid=? AND owner_chat_id=?`,
+		w.ID, req.MarchUID, chatID)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, ErrMarchNotFound
+	}
+	return &MarchEvent{Action: "end", MarchUID: req.MarchUID, OwnerChatID: chatID, Status: "done"}, nil
+}
+
+// ReportMarchBattle 玩家部队碰撞遭遇战结果上报。req.MarchUID 必须是上报者自己的部队；
+// req.OtherMarchUID 是对方部队（无需上报者是其 owner）。两条记录须都是 active 才会落地
+// （幂等：任一方已被结算过则视为重复上报，直接返回 ErrMarchAlreadyResolved，调用方据此
+// 跳过重复广播——最先落库的那次上报才是权威结果）。
+func (s *SlgService) ReportMarchBattle(ctx context.Context, userID uint64, chatID string, req *MarchBattleRequest) (*MarchEvent, error) {
+	w, err := s.GetActiveWorld(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var mineOwner, mineStatus string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT owner_chat_id, status FROM slg_marches WHERE world_id=? AND march_uid=?`,
+		w.ID, req.MarchUID).Scan(&mineOwner, &mineStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrMarchNotFound
+		}
+		return nil, err
+	}
+	if mineOwner != chatID {
+		return nil, ErrMarchNotOwner
+	}
+	var otherOwner, otherStatus string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT owner_chat_id, status FROM slg_marches WHERE world_id=? AND march_uid=?`,
+		w.ID, req.OtherMarchUID).Scan(&otherOwner, &otherStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrMarchNotFound
+		}
+		return nil, err
+	}
+	if mineStatus != "active" || otherStatus != "active" {
+		return nil, ErrMarchAlreadyResolved
+	}
+
+	unitsJSON, err := json.Marshal(req.Units)
+	if err != nil {
+		return nil, err
+	}
+	otherUnitsJSON, err := json.Marshal(req.OtherUnits)
+	if err != nil {
+		return nil, err
+	}
+	status := req.Status
+	if status != "active" && status != "done" {
+		status = "done"
+	}
+	otherStatusOut := req.OtherStatus
+	if otherStatusOut != "active" && otherStatusOut != "done" {
+		otherStatusOut = "done"
+	}
+
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE slg_marches SET units_json=?, status=?, updated_at=NOW() WHERE world_id=? AND march_uid=?`,
+		string(unitsJSON), status, w.ID, req.MarchUID); err != nil {
+		return nil, err
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE slg_marches SET units_json=?, status=?, updated_at=NOW() WHERE world_id=? AND march_uid=?`,
+		string(otherUnitsJSON), otherStatusOut, w.ID, req.OtherMarchUID); err != nil {
+		return nil, err
+	}
+
+	return &MarchEvent{
+		Action: "battle", MarchUID: req.MarchUID, OwnerChatID: chatID,
+		Units: req.Units, Status: status,
+		OtherMarchUID: req.OtherMarchUID, OtherOwnerChatID: otherOwner,
+		OtherUnits: req.OtherUnits, OtherStatus: otherStatusOut,
+	}, nil
+}
+
+// GetActiveMarches 获取世界内全部在途部队（自己 + 他人），供 Join/GetWorld 全量下发
+func (s *SlgService) GetActiveMarches(ctx context.Context, worldID uint64) ([]model.MarchView, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT march_uid, owner_chat_id, owner_name, intent, from_x, from_y, to_x, to_y,
+		        path_json, depart_at_ms, arrive_at_ms, units_json, status
+		 FROM slg_marches WHERE world_id=? AND status='active'`,
+		worldID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []model.MarchView
+	for rows.Next() {
+		var (
+			mv                  model.MarchView
+			pathJSON, unitsJSON string
+		)
+		if err := rows.Scan(&mv.MarchUID, &mv.OwnerChatID, &mv.OwnerName, &mv.Intent,
+			&mv.From.X, &mv.From.Y, &mv.To.X, &mv.To.Y,
+			&pathJSON, &mv.DepartAtMs, &mv.ArriveAtMs, &unitsJSON, &mv.Status); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(pathJSON), &mv.Path); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(unitsJSON), &mv.Units); err != nil {
+			return nil, err
+		}
+		result = append(result, mv)
+	}
+	return result, nil
 }
 
 // isAIFactionID 判断 chat_id 字段是否实际是 AI 势力 id（AI 领地也存在 slg_territories.owner_chat_id 里）

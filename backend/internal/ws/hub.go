@@ -1512,6 +1512,35 @@ func (h *Hub) BroadcastSLGEvent(senderChatID string, ev *service.TerritoryChange
 	h.mu.RUnlock()
 }
 
+// BroadcastSLGMarchEvent 向同世界在线玩家广播部队事件（出征/行军开始、结束、玩家碰撞遭遇战结果）。
+// 由 HTTP handler 在落库存证后调用。
+func (h *Hub) BroadcastSLGMarchEvent(senderChatID string, ev *service.MarchEvent) {
+	if h.slgSvc == nil {
+		return
+	}
+	worldID, ok := h.slgSvc.GetWorldIDByChatID(senderChatID)
+	if !ok {
+		return
+	}
+	peers := h.slgSvc.GetOnlinePlayersInWorld(worldID)
+
+	msg, _ := json.Marshal(Message{
+		Type:    "slg_march_update",
+		Payload: mustMarshal(ev),
+	})
+
+	h.mu.RLock()
+	for _, pid := range peers {
+		if rc, ok := h.clients[pid]; ok {
+			select {
+			case rc.send <- msg:
+			default:
+			}
+		}
+	}
+	h.mu.RUnlock()
+}
+
 // BroadcastSLGAIEvent 向指定世界所有在线玩家广播 AI 扩张事件。
 // 由 SLG 服务端 AI 定时器在 AI 占领新地块后调用。
 func (h *Hub) BroadcastSLGAIEvent(worldID uint64, ev *service.AITerritoryEvent) {
@@ -1536,4 +1565,3 @@ func (h *Hub) BroadcastSLGAIEvent(worldID uint64, ev *service.AITerritoryEvent) 
 	}
 	h.mu.RUnlock()
 }
-

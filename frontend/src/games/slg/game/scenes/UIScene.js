@@ -28,7 +28,7 @@ const DEPTH = { bar: 100, panel: 200, modal: 300, toast: 400 }
 const COLOR = {
   panelBg: 0x20261e, panelLine: 0xffd700,
   btnRed: 0xc62828, btnAmber: 0xd4a017, btnGreen: 0x2e7d32,
-  btnGrey: 0x455a64, rowBg: 0x2c352a,
+  btnGrey: 0x455a64, btnBlue: 0x2f6fa8, rowBg: 0x2c352a,
   toastInfo: 0x37474f, toastWarn: 0xb26a00, toastWin: 0x2e7d32, toastLose: 0xc62828, toastDraw: 0x616161,
 }
 
@@ -294,6 +294,9 @@ export class UIScene extends Phaser.Scene {
     // 多人模式：其他玩家的领地不记录在本地 tile.owner 上（旁路存在 otherTerritories），
     // 必须先查一遍，否则会被当成「无主守军地块」展示地图生成时的假守军数据
     const otherTerritory = this.state.otherTerritoryAt(t.x, t.y)
+    // 驻扎在本地块的己方武将（行军到达后不自动返回，停留直至玩家召回）
+    const stationedHere = this.state.generals.filter(
+      g => g.state === 'stationed' && g.pos && g.pos.x === t.x && g.pos.y === t.y)
 
     const sw = this.scale.width, sh = this.scale.height
     const w = Math.min(sw - 16, 400)
@@ -308,6 +311,7 @@ export class UIScene extends Phaser.Scene {
       if (t.type === 'npcCity') h += 18 // 掠夺收益行
       if (aiFaction) h += 18            // 势力归属提示行
     }
+    if (stationedHere.length > 0 && !t.isCity) h += 34   // 驻扎信息 + 召回按钮
     const cx = sw / 2, cy = sh - h / 2 - 76
     const c = this.add.container(cx, cy).setDepth(DEPTH.panel)
 
@@ -339,7 +343,7 @@ export class UIScene extends Phaser.Scene {
     } else if (t.owner === 'player') {
       info = `🚩 我方领地 · 产量 ${yieldText}`
     } else if (otherTerritory) {
-      info = `${otherTerritory.isCity ? '🏯' : '🚩'} ${otherTerritory.ownerName || '其他玩家'} 的领地，无法出征`
+      info = `${otherTerritory.isCity ? '🏯' : '🚩'} ${otherTerritory.ownerName || '其他玩家'} 的领地，无法出征，可行军路过`
     } else if (!def.passable) {
       info = '🌊 不可通行'
     } else {
@@ -414,16 +418,34 @@ export class UIScene extends Phaser.Scene {
       c.add(this._button(0, by, 180, 32, '🏛️ 建筑管理', COLOR.btnGreen, true,
         () => this._openBuildings()))
     } else if (t.owner === 'player') {
-      c.add(this._button(0, by, 130, 32, '放弃领地', COLOR.btnGrey, true, () => {
+      c.add(this._button(-72, by, 120, 32, '放弃领地', COLOR.btnGrey, true, () => {
         const err = this.state.abandon(t.x, t.y)
         if (err) this._toast(err, COLOR.toastWarn)
         else this._refreshTilePanel()
       }))
+      c.add(this._button(72, by, 120, 32, '🚶 行军', COLOR.btnBlue, true,
+        () => this._openMarchSelect(false, 'march')))
     } else if (otherTerritory) {
-      // 其他玩家领地：游戏不支持攻打玩家领地，不显示出征按钮
+      // 其他玩家领地：游戏不支持攻打玩家领地，但可以行军路过/驻扎（可能与对方部队相遇触发遭遇战）
+      c.add(this._button(0, by, 130, 32, '🚶 行军', COLOR.btnBlue, true,
+        () => this._openMarchSelect(false, 'march')))
     } else if (def.passable) {
-      c.add(this._button(0, by, 130, 32, '⚔️ 出征', COLOR.btnRed, adjacent,
-        () => this._openMarchSelect()))
+      c.add(this._button(-72, by, 120, 32, '⚔️ 出征', COLOR.btnRed, adjacent,
+        () => this._openMarchSelect(false, 'attack')))
+      c.add(this._button(72, by, 120, 32, '🚶 行军', COLOR.btnBlue, true,
+        () => this._openMarchSelect(false, 'march')))
+    }
+
+    // 驻扎武将信息 + 召回按钮（不含主城，主城不会成为行军目的地的常见用例）
+    if (stationedHere.length > 0 && !t.isCity) {
+      const recallY = by - 34
+      const names = stationedHere.map(g => g.name).join('、')
+      c.add(this.add.text(-w / 2 + 12, recallY, `🚩 驻扎：${names}`, style(12, '#90caf9')).setOrigin(0, 0.5))
+      c.add(this._button(w / 2 - 62, recallY, 92, 26, '召回', COLOR.btnGrey, true, () => {
+        const err = this.state.recallStationed(stationedHere.map(g => g.id))
+        if (err) this._toast(err, COLOR.toastWarn)
+        else this._refreshTilePanel()
+      }))
     }
 
     this.tileC = c
@@ -530,10 +552,13 @@ export class UIScene extends Phaser.Scene {
     return content
   }
 
-  // ── 弹窗：选择出征编队（每次只能选 1 队，整队出征）──────────────────────
+  // ── 弹窗：选择出征/行军编队（每次只能选 1 队，整队出发）──────────────────
 
-  _openMarchSelect(keepPick = false) {
+  _openMarchSelect(keepPick = false, intent) {
     if (!keepPick) this._marchFormPick = null
+    if (intent) this._marchIntent = intent
+    const intent2 = this._marchIntent === 'march' ? 'march' : 'attack'
+    const isMarch = intent2 === 'march'
     const forms = this.state.formations || []
     const selTile = this.state.tileAt(this.sel.x, this.sel.y)
     const rowH = 56
@@ -542,7 +567,7 @@ export class UIScene extends Phaser.Scene {
     const empty = forms.length === 0
     const h = empty ? 160 : 52 + forms.length * rowH + 78
     this._openModal(w, h, (panel) => {
-      panel.add(this.add.text(0, -h / 2 + 14, '选择出征编队（1 队）',
+      panel.add(this.add.text(0, -h / 2 + 14, isMarch ? '选择行军编队（1 队）' : '选择出征编队（1 队）',
         style(15, '#ffffff', true)).setOrigin(0.5, 0))
 
       if (empty) {
@@ -563,7 +588,8 @@ export class UIScene extends Phaser.Scene {
         // 整队出征：编队内所有武将都必须 idle + 有兵 + 体力足
         const blockers = []
         members.forEach(g => {
-          if (g.state !== 'idle') blockers.push(`${g.name}行军中`)
+          if (g.state === 'stationed') blockers.push(`${g.name}驻扎中`)
+          else if (g.state !== 'idle') blockers.push(`${g.name}行军中`)
           else if (g.troops <= 0) blockers.push(`${g.name}无兵`)
           else if ((g.stamina ?? STAMINA_MAX) < MARCH_STAMINA_COST) blockers.push(`${g.name}体力不足`)
         })
@@ -610,9 +636,10 @@ export class UIScene extends Phaser.Scene {
         summary = `【${pickedForm.name}】 ${members.length} 将 · 共 ${total} 兵 · ${est.steps} 格 · 单程约 ${Math.floor(eta / 60)}:${String(Math.floor(eta % 60)).padStart(2, '0')}`
       }
       panel.add(this.add.text(0, h / 2 - 50, summary, style(12, '#bbbbbb')).setOrigin(0.5))
-      panel.add(this._button(0, h / 2 - 24, 150, 32, '⚔️ 出征', COLOR.btnRed,
+      panel.add(this._button(0, h / 2 - 24, 150, 32, isMarch ? '🚶 行军' : '⚔️ 出征',
+        isMarch ? COLOR.btnBlue : COLOR.btnRed,
         !!pickedForm, () => {
-          const err = this.state.marchFormation(this._marchFormPick, this.sel.x, this.sel.y)
+          const err = this.state.marchFormation(this._marchFormPick, this.sel.x, this.sel.y, { intent: intent2 })
           if (err) this._toast(err, COLOR.toastWarn)
           else { this._closeModal(); this._closeTilePanel() }
         }))

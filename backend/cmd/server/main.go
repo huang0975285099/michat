@@ -240,6 +240,9 @@ func main() {
 		auth.GET("/games/slg/status", slgHandler.GetStatus)
 		auth.PUT("/games/slg/state", slgHandler.SaveState)
 		auth.POST("/games/slg/territory", slgHandler.UpdateTerritory)
+		auth.POST("/games/slg/march", slgHandler.StartMarch)
+		auth.POST("/games/slg/march/end", slgHandler.EndMarch)
+		auth.POST("/games/slg/march/battle", slgHandler.ReportMarchBattle)
 		auth.POST("/games/slg/reset", slgHandler.ResetWorld)
 	}
 

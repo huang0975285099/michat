@@ -61,12 +61,19 @@ func (h *SlgHandler) GetWorld(c *gin.Context) {
 		return
 	}
 
+	marches, err := h.svc.GetActiveMarches(c.Request.Context(), w.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"world_id":    w.ID,
-		"seed":        w.Seed,
-		"season":      w.Season,
-		"territories": territories,
-		"players":     players,
+		"world_id":       w.ID,
+		"seed":           w.Seed,
+		"season":         w.Season,
+		"territories":    territories,
+		"players":        players,
+		"active_marches": marches,
 	})
 }
 
@@ -79,9 +86,9 @@ func (h *SlgHandler) GetStatus(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"player_count":  count,
-		"max_players":   5,
-		"full":          full,
+		"player_count": count,
+		"max_players":  5,
+		"full":         full,
 	})
 }
 
@@ -136,6 +143,82 @@ func (h *SlgHandler) UpdateTerritory(c *gin.Context) {
 	// 通过 WS 广播给同世界在线玩家（含自己）
 	h.hub.BroadcastSLGEvent(chatID, ev)
 
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// POST /api/games/slg/march
+// 出征/行军开始上报：落库存证 + 广播给同世界在线玩家，供他人渲染/碰撞检测。
+func (h *SlgHandler) StartMarch(c *gin.Context) {
+	userID := c.GetUint64(middleware.CtxUserID)
+	chatID := c.GetString(middleware.CtxChatID)
+	nickname := c.GetString(middleware.CtxNickname)
+
+	var req service.MarchStartRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	ev, err := h.svc.StartMarch(c.Request.Context(), userID, chatID, nickname, &req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	h.hub.BroadcastSLGMarchEvent(chatID, ev)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// POST /api/games/slg/march/end
+// 行军结束上报（到达/驻扎/召回/被消灭后清理）。
+func (h *SlgHandler) EndMarch(c *gin.Context) {
+	userID := c.GetUint64(middleware.CtxUserID)
+	chatID := c.GetString(middleware.CtxChatID)
+
+	var req service.MarchEndRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	ev, err := h.svc.EndMarch(c.Request.Context(), userID, chatID, &req)
+	if err != nil {
+		if errors.Is(err, service.ErrMarchNotFound) {
+			// march 可能已被对方在碰撞战斗中标记 done，或从未成功上报过 start，均无需报错阻塞客户端
+			c.JSON(http.StatusOK, gin.H{"ok": true})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	h.hub.BroadcastSLGMarchEvent(chatID, ev)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// POST /api/games/slg/march/battle
+// 玩家部队碰撞遭遇战结果上报（战斗本身已由客户端用 resolveBattle 确定性算出）。
+func (h *SlgHandler) ReportMarchBattle(c *gin.Context) {
+	userID := c.GetUint64(middleware.CtxUserID)
+	chatID := c.GetString(middleware.CtxChatID)
+
+	var req service.MarchBattleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	ev, err := h.svc.ReportMarchBattle(c.Request.Context(), userID, chatID, &req)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrMarchAlreadyResolved):
+			// 对方已先一步上报同一场战斗：不是错误，静默跳过（避免重复广播）
+			c.JSON(http.StatusOK, gin.H{"ok": true, "already_resolved": true})
+		case errors.Is(err, service.ErrMarchNotOwner):
+			c.JSON(http.StatusForbidden, gin.H{"error": "not_owner"})
+		case errors.Is(err, service.ErrMarchNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "march_not_found"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	h.hub.BroadcastSLGMarchEvent(chatID, ev)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

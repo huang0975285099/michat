@@ -44,13 +44,16 @@ let state = null
 let gameNet = null
 let saveTimer = null
 let territoryUnsub = null
+let marchStartUnsub = null
+let marchEndUnsub = null
+let marchBattleUnsub = null
 
 onMounted(async () => {
     try {
         loadingText.value = '正在加入世界...'
         // 1. 通过 HTTP 加入世界
         const { data } = await slgApi.join()
-        const { seed, spawn_x, spawn_y, is_new_player, state: savedState, territories } = data
+        const { seed, spawn_x, spawn_y, is_new_player, state: savedState, territories, active_marches } = data
 
         loadingText.value = '正在加载地图...'
 
@@ -70,6 +73,11 @@ onMounted(async () => {
         // 4. 应用服务端领地（含 AI 领地 + 其他玩家领地）
         if (territories) {
             state.applyServerTerritories(territories)
+        }
+
+        // 4b. 应用服务端在途部队快照（自己的用于校正离线期间的遭遇战战损，他人的用于渲染/碰撞检测）
+        if (active_marches) {
+            state.applyActiveMarches(active_marches)
         }
 
         // 提前结束 loading，让 v-else 分支挂载 gameContainerRef 对应的容器 div，
@@ -92,6 +100,10 @@ onMounted(async () => {
         // AI 扩张事件（服务端权威 AI，所有玩家共享同一份）
         gameNet.onAIExpansion((ev) => {
             state?.applyAIExpansion(ev)
+        })
+        // 其他玩家部队事件：出征/行军开始、结束、玩家碰撞遭遇战结果
+        gameNet.onMarchUpdate((ev) => {
+            state?.applyForeignMarchUpdate(ev)
         })
         // 新玩家上线时重新拉取领地列表，确保看到新玩家的已有领地
         gameNet.onPresence((ev) => {
@@ -123,6 +135,30 @@ onMounted(async () => {
             }
         })
 
+        // 7b. 监听本地部队事件，同步到服务器（出征/行军开始、结束、玩家碰撞遭遇战结果）
+        marchStartUnsub = state.on('marchStart', async (ev) => {
+            try {
+                await slgApi.marchStart({
+                    march_uid: ev.marchUid, intent: ev.intent,
+                    from: ev.from, to: ev.to, path: ev.path,
+                    depart_at_ms: ev.departAtMs, arrive_at_ms: ev.arriveAtMs,
+                    units: ev.units,
+                })
+            } catch (e) { /* 同步失败不阻塞游戏 */ }
+        })
+        marchEndUnsub = state.on('marchEnd', async (ev) => {
+            try { await slgApi.marchEnd(ev.marchUid) } catch (e) { /* 同步失败不阻塞游戏 */ }
+        })
+        marchBattleUnsub = state.on('marchBattleReport', async (ev) => {
+            try {
+                await slgApi.reportMarchBattle({
+                    march_uid: ev.marchUid, units: ev.units, status: ev.status,
+                    other_march_uid: ev.otherMarchUid, other_units: ev.otherUnits, other_status: ev.otherStatus,
+                    seed: ev.seed,
+                })
+            } catch (e) { /* 同步失败不阻塞游戏；对方已上报过的情况服务端会返回 already_resolved */ }
+        })
+
         // 8. 定期保存到服务器（每 30 秒）
         saveTimer = setInterval(saveToServer, 30000)
         window.addEventListener('beforeunload', saveNow)
@@ -150,6 +186,9 @@ onUnmounted(() => {
     saveNow()
     if (saveTimer) { clearInterval(saveTimer); saveTimer = null }
     if (territoryUnsub) { territoryUnsub(); territoryUnsub = null }
+    if (marchStartUnsub) { marchStartUnsub(); marchStartUnsub = null }
+    if (marchEndUnsub) { marchEndUnsub(); marchEndUnsub = null }
+    if (marchBattleUnsub) { marchBattleUnsub(); marchBattleUnsub = null }
     if (gameNet) { gameNet.leaveWorld(); gameNet = null }
     phaserGame?.destroy(true)
     phaserGame = null
@@ -177,6 +216,9 @@ async function refetchTerritories() {
         const { data } = await slgApi.getWorld()
         if (data.territories) {
             state.applyServerTerritories(data.territories)
+        }
+        if (data.active_marches) {
+            state.applyActiveMarches(data.active_marches)
         }
     } catch (e) { /* 忽略 */ }
 }
