@@ -36,6 +36,23 @@
                 </q-card>
             </div>
 
+            <!-- 门派 PK（梦幻西游风） -->
+            <div class="col-6 col-sm-4 col-md-3">
+                <q-card class="game-card cursor-pointer" @click="router.push('/games/menpai')">
+                    <q-card-section class="text-center q-pa-lg">
+                        <div style="font-size: 52px">⚔️</div>
+                        <div class="text-subtitle1 text-bold q-mt-sm">门派 PK</div>
+                        <div class="text-caption text-grey-6">梦幻西游风·7 门派·回合制</div>
+                    </q-card-section>
+                    <q-separator />
+                    <q-card-actions align="center" class="q-py-sm">
+                        <q-chip dense color="positive" text-color="white" icon="people" label="1v1" />
+                        <q-chip dense color="deep-orange" text-color="white" icon="auto_awesome" label="回合" />
+                        <q-chip dense color="purple" text-color="white" icon="psychology" label="策略" />
+                    </q-card-actions>
+                </q-card>
+            </div>
+
             <!-- Placeholder cards -->
             <div class="col-6 col-sm-4 col-md-3">
                 <q-card class="game-card game-card--soon">
