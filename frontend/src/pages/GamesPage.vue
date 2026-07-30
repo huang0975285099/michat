@@ -20,7 +20,7 @@
             </div>
 
             <!-- 九州征途（SLG） -->
-            <div class="col-6 col-sm-4 col-md-3">
+            <!-- <div class="col-6 col-sm-4 col-md-3">
                 <q-card class="game-card cursor-pointer" @click="enterSlg">
                     <q-card-section class="text-center q-pa-lg">
                         <div style="font-size: 52px">🏯</div>
@@ -34,10 +34,10 @@
                         <q-chip v-if="slgFull" dense color="negative" text-color="white" icon="block" label="已满" />
                     </q-card-actions>
                 </q-card>
-            </div>
+            </div> -->
 
             <!-- 门派 PK（梦幻西游风） -->
-            <div class="col-6 col-sm-4 col-md-3">
+            <!-- <div class="col-6 col-sm-4 col-md-3">
                 <q-card class="game-card cursor-pointer" @click="router.push('/games/menpai')">
                     <q-card-section class="text-center q-pa-lg">
                         <div style="font-size: 52px">⚔️</div>
@@ -51,7 +51,7 @@
                         <q-chip dense color="purple" text-color="white" icon="psychology" label="策略" />
                     </q-card-actions>
                 </q-card>
-            </div>
+            </div> -->
 
             <!-- Placeholder cards -->
             <div class="col-6 col-sm-4 col-md-3">
