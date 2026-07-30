@@ -503,10 +503,10 @@ export const useChatStore = defineStore('chat', () => {
         burnAt: msg.burnAt || null
       })
     } catch (e) {
-      // DB add failed (e.g. ConstraintError on duplicate) — roll back in-memory addition
-      const idx = messages.value[chatId]?.findIndex(m => m.id === msg.id)
-      if (idx !== undefined && idx !== -1) messages.value[chatId].splice(idx, 1)
-      console.error('[chat] persist message failed, rolled back:', e)
+      // DB 写入失败：保留内存中的消息（用户仍可见），仅刷新后丢失。
+      // 回滚内存会导致「消息已发出但发送方看不到」的不一致——
+      // 对方已收到消息，而发送方本地既无内存记录也无 DB 记录。
+      console.error('[chat] persist message failed, kept in memory:', e)
       return false
     }
     return true
@@ -725,7 +725,11 @@ export const useChatStore = defineStore('chat', () => {
    * 添加文件消息到内存和 IndexedDB（仅存元数据）
    */
   async function addFileMessage(chatId, msg) {
-    if (isMsgIdExists(msg.id)) return false
+    if (isMsgIdExists(msg.id)) {
+      // 重复消息：释放调用方传入的 objectUrl，避免泄漏
+      if (msg.objectUrl) URL.revokeObjectURL(msg.objectUrl)
+      return false
+    }
     ensureThread(chatId)
     const fullMsg = { ...msg, type: 'file', read: false, burnAt: null }
     messages.value[chatId].push(fullMsg)
@@ -750,7 +754,10 @@ export const useChatStore = defineStore('chat', () => {
         burnAt: fullMsg.burnAt || null
       })
     } catch (e) {
-      console.error('[chat] persist file message failed:', e)
+      // DB 写入失败：保留内存中的消息（用户仍可见），清理孤儿文件体（刷新后消息丢失）
+      await dbDeleteFile(msg.id).catch(() => {})
+      console.error('[chat] persist file message failed, kept in memory:', e)
+      return false
     }
     return true
   }
@@ -811,6 +818,7 @@ export const useChatStore = defineStore('chat', () => {
       tr.status = 'error'
       tr.errorReason = '传输超时'
       tr.errorAt = Date.now()
+      scheduleTransferCleanup(transferId, 6000)
       send('file_error', { to: tr.fromChatId, transfer_id: transferId, reason: '接收超时' })
     }, RECEIVE_STALL_MS)
   }
@@ -818,6 +826,19 @@ export const useChatStore = defineStore('chat', () => {
   function clearReceiveWatchdog(transferId) {
     const t = fileTransfers.value[transferId]
     if (t && t.timer) { clearTimeout(t.timer); t.timer = null }
+  }
+
+  // ── 传输记录清理：终态后延迟删除，避免 fileTransfers 无限累积 ──────────
+  // done：1s 后清理（给 UI 一瞬显示完成）；error：6s 后清理（覆盖 activeTransfer 的 5s 错误窗口）
+  function scheduleTransferCleanup(transferId, delayMs) {
+    setTimeout(() => {
+      const t = fileTransfers.value[transferId]
+      if (!t) return
+      if (t.status === 'done' || t.status === 'error') {
+        clearReceiveWatchdog(transferId)
+        delete fileTransfers.value[transferId]
+      }
+    }, delayMs)
   }
 
   /**
@@ -850,7 +871,7 @@ export const useChatStore = defineStore('chat', () => {
       // 持久化加密文件体，刷新后仍可下载/预览
       await persistFileBlob(transfer.fromChatId, transfer.msgId, plainBuf, transfer.filetype)
 
-      await addFileMessage(transfer.fromChatId, {
+      const added = await addFileMessage(transfer.fromChatId, {
         id: transfer.msgId,
         from: transfer.fromChatId,
         filename: transfer.filename,
@@ -859,15 +880,22 @@ export const useChatStore = defineStore('chat', () => {
         objectUrl,
         mine: false,
         burnAfterRead: transfer.burnAfterRead || false,
-        ts: transfer.ts  // 服务器时间戳，与发送端一致
+        ts: transfer.ts  // 时间戳，与发送端一致
       })
-      // 通知发送端：已收齐并解密成功，回带服务器时间戳供发送端统一显示
+      if (!added) {
+        // 消息未入库（重复 ID 或 DB 失败），但文件已成功接收解密，内存中可见
+        // 重复 ID：消息已存在；DB 失败：消息在内存中（刷新后丢失）
+        console.warn('[chat] file message not persisted:', transfer.msgId)
+      }
+      // 通知发送端：已收齐并解密成功，回带时间戳供发送端统一显示
       send('file_done', { to: transfer.fromChatId, transfer_id: transfer.id, ts: transfer.ts })
+      scheduleTransferCleanup(transfer.id, 1000)
     } catch (e) {
       transfer.status = 'error'
       transfer.errorReason = '文件解密失败'
       transfer.errorAt = Date.now()
       clearReceiveWatchdog(transfer.id)
+      scheduleTransferCleanup(transfer.id, 6000)
       send('file_error', { to: transfer.fromChatId, transfer_id: transfer.id, reason: '文件解密失败' })
       console.error('[chat] file decrypt failed:', e)
     }
@@ -932,7 +960,8 @@ export const useChatStore = defineStore('chat', () => {
         total_chunks: totalChunks,
         ephemeral_pub_key: ephemeralPubKey,
         iv,
-        burn_after_read: burnAfterRead
+        burn_after_read: burnAfterRead,
+        ts: Date.now()  // 发送方时间戳，供接收端用作消息时间（后端中继若注入 ts 则覆盖）
       })
       if (!ok) throw new Error('发送失败，请检查网络连接')
 
@@ -960,16 +989,17 @@ export const useChatStore = defineStore('chat', () => {
       fileTransfers.value[transferId].progress = 100
 
       // 等待接收端确认收齐并解密成功；超时或收到 file_error 则按失败处理
-      // 返回的 ts 为服务器时间戳，与接收端显示一致
+      // 返回的 ts 来自接收端，两端显示一致
       const doneTs = await waitForFileDone(transferId, 30000)
       fileTransfers.value[transferId].status = 'done'
+      scheduleTransferCleanup(transferId, 1000)
 
       // 发送方本地展示
       const blob = new Blob([fileBuffer], { type: file.type })
       const objectUrl = URL.createObjectURL(blob)
       // 持久化加密文件体，刷新后仍可下载/预览
       await persistFileBlob(toChatId, msgId, fileBuffer, file.type)
-      await addFileMessage(toChatId, {
+      const added = await addFileMessage(toChatId, {
         id: msgId,
         from: 'me',
         filename: file.name,
@@ -978,8 +1008,12 @@ export const useChatStore = defineStore('chat', () => {
         objectUrl,
         mine: true,
         burnAfterRead,
-        ts: (typeof doneTs === 'number' && doneTs > 0) ? doneTs : Date.now()  // 服务器时间戳，与接收端一致
+        ts: (typeof doneTs === 'number' && doneTs > 0) ? doneTs : Date.now()  // 接收端时间戳，两端一致
       })
+      if (!added) {
+        // 消息未入库（重复 ID 或 DB 失败），addFileMessage 内部已处理清理
+        console.warn('[chat] file message not saved locally, transfer succeeded:', msgId)
+      }
 
       return transferId
     } catch (e) {
@@ -987,6 +1021,7 @@ export const useChatStore = defineStore('chat', () => {
         fileTransfers.value[transferId].status = 'error'
         fileTransfers.value[transferId].errorReason = e.message
         fileTransfers.value[transferId].errorAt = Date.now()
+        scheduleTransferCleanup(transferId, 6000)
       }
       send('file_error', { to: toChatId, transfer_id: transferId, reason: e.message })
       throw e
@@ -1176,6 +1211,7 @@ function validateMsgId(msgId) {
     function onFileOffer(payload) {
       const { from, transfer_id, msg_id, filename, filesize, filetype, total_chunks, ephemeral_pub_key, iv } = payload
       if (!validateChatId(from) || !transfer_id || !filename || !total_chunks) return
+      if (!ephemeral_pub_key || !iv) return  // 缺少加密参数，拒绝
 
       fileTransfers.value[transfer_id] = {
         id: transfer_id,
@@ -1229,6 +1265,7 @@ function validateMsgId(msgId) {
         transfer.errorReason = '文件传输不完整'
         transfer.errorAt = Date.now()
         clearReceiveWatchdog(transfer_id)
+        scheduleTransferCleanup(transfer_id, 6000)
         send('file_error', { to: transfer.fromChatId, transfer_id, reason: '接收不完整' })
         return
       }
@@ -1243,6 +1280,7 @@ function validateMsgId(msgId) {
         transfer.errorReason = reason || '传输失败'
         transfer.errorAt = Date.now()
         clearReceiveWatchdog(transfer_id)
+        scheduleTransferCleanup(transfer_id, 6000)
       }
     }
 
