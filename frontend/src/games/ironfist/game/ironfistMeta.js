@@ -14,14 +14,14 @@ export const ACHIEVEMENTS = [
 // 成就 code → meta 快查（结果页解锁提示用）
 export const ACHIEVEMENT_MAP = Object.fromEntries(ACHIEVEMENTS.map((a) => [a.code, a]))
 
-// PVP 房间档位（链上质押对战，后续开放）
+// PVP 房间档位（积分质押对战）
 export const PVP_TIERS = [
   { key: 'gold', name: '黄金场', desc: '入门竞技 · 轻松上分', icon: '🥇', stake: 100 },
   { key: 'platinum', name: '铂金场', desc: '进阶博弈 · 高手过招', icon: '💠', stake: 1000 },
   { key: 'diamond', name: '钻石场', desc: '巅峰对决 · 一掷千金', icon: '👑', stake: 10000 },
 ]
 
-// $FIST 流水类型 → 展示文案（无 remark 时回退）
+// 积分流水类型 → 展示文案（无 remark 时回退）
 export const TX_TYPE_LABEL = {
   pve_reward: 'PvE 奖励',
   pvp_win: 'PvP 赢局',

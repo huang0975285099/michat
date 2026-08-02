@@ -11,7 +11,6 @@ const routes = [
       { path: 'chat/:chatId', component: () => import('src/pages/ChatPage.vue') },
       { path: 'friends', component: () => import('src/pages/FriendsPage.vue') },
       { path: 'games', component: () => import('src/pages/GamesPage.vue') },
-      { path: 'games/bomberman', component: () => import('src/games/bomberman/BombermanPage.vue') },
       { path: 'games/ironfist', component: () => import('src/games/ironfist/IronFistPage.vue') },
       { path: 'profile', component: () => import('src/pages/ProfilePage.vue') }
     ]

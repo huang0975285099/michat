@@ -46,6 +46,10 @@ func (h *FistHandler) ClaimPvEReward(c *gin.Context) {
 			})
 			return
 		}
+		if errors.Is(err, service.ErrNoEligiblePvEWin) {
+			c.JSON(http.StatusConflict, gin.H{"error": "no unclaimed PvE win"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "claim failed"})
 		return
 	}

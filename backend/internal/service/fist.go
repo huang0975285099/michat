@@ -19,7 +19,10 @@ const (
 	StatsDailyWindowDays = 30
 )
 
-var ErrPvEDailyLimitReached = errors.New("daily PvE win limit reached")
+var (
+	ErrPvEDailyLimitReached = errors.New("daily PvE win limit reached")
+	ErrNoEligiblePvEWin     = errors.New("no unclaimed PvE win")
+)
 
 type FistService struct {
 	db *sql.DB
@@ -82,6 +85,28 @@ func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistA
 	defer tx.Rollback()
 
 	if err = s.ensureAccount(ctx, tx, userID); err != nil {
+		return nil, err
+	}
+
+	// 奖励必须消费一条已经由 ReportMatch 落库、且尚未领奖的 PvE 胜局。
+	// FOR UPDATE + 同事务标记保证并发请求也只能消费一次。
+	var matchID uint64
+	err = tx.QueryRowContext(ctx, `
+		SELECT id FROM ironfist_matches
+		WHERE user_id = ? AND pve_reward_eligible = 1
+		  AND pve_reward_claimed_at IS NULL
+		ORDER BY id ASC LIMIT 1 FOR UPDATE
+	`, userID).Scan(&matchID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNoEligiblePvEWin
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `
+		UPDATE ironfist_matches SET pve_reward_claimed_at = CURRENT_TIMESTAMP(3)
+		WHERE id = ? AND pve_reward_claimed_at IS NULL
+	`, matchID); err != nil {
 		return nil, err
 	}
 
@@ -227,7 +252,7 @@ type EcosystemStats struct {
 	PveTotalWins       int64           `json:"pve_total_wins"`      // PvE 历史累计有效胜局数
 	PveTodayIssued     int64           `json:"pve_today_issued"`
 	PveTodayWins       int64           `json:"pve_today_wins"`
-	PveDaily           []PveDailyPoint `json:"pve_daily"` // 最近 StatsDailyWindowDays 天，按日期升序
+	PveDaily           []PveDailyPoint `json:"pve_daily"`         // 最近 StatsDailyWindowDays 天，按日期升序
 	ActivePlayers7d    int64           `json:"active_players_7d"` // 近7天有过任意对局（pve/pvp/friend）的去重用户数
 }
 

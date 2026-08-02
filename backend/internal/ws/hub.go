@@ -1200,7 +1200,8 @@ func (h *Hub) handleIronFistAction(from *Client, payload json.RawMessage) {
 		Action string `json:"action"`
 		TS     int64  `json:"ts"`
 	}
-	if err := json.Unmarshal(payload, &p); err != nil || !chatIDRe.MatchString(p.To) || p.RoomID == "" {
+	if err := json.Unmarshal(payload, &p); err != nil || !chatIDRe.MatchString(p.To) || p.RoomID == "" ||
+		p.Round < 1 || p.Round > 20 || !validIronFistAction(p.Action) {
 		log.Printf("[ws] invalid ironfist_action from %s", from.ChatID)
 		return
 	}
@@ -1253,13 +1254,24 @@ func (h *Hub) handleIronFistAction(from *Client, payload json.RawMessage) {
 
 	ctx := context.Background()
 	key := pkgredis.IronFistActionsKey(p.RoomID)
-	// RPUSH + 刷新 TTL：30 分钟从最后一次活动起算
-	pipe := h.redis.Pipeline()
-	pipe.RPush(ctx, key, entryJSON)
-	pipe.Expire(ctx, key, pkgredis.IronFistActionsTTL)
-	if _, err := pipe.Exec(ctx); err != nil {
-		// 存储失败仅记录日志，不阻塞中继（本回合仍可进行，重连时该动作会缺失）
+	onceKey := pkgredis.IronFistActionOnceKey(p.RoomID, from.ChatID, p.Round)
+	// 同一玩家每回合只接受第一条动作。Lua 将占位、写日志和 TTL 放进一个原子操作，
+	// 防止并发重复提交或“先占位后写日志失败”造成不可恢复的动作缺口。
+	const storeOnce = `
+		if redis.call('SET', KEYS[1], '1', 'NX', 'PX', ARGV[2]) then
+			redis.call('RPUSH', KEYS[2], ARGV[1])
+			redis.call('PEXPIRE', KEYS[2], ARGV[2])
+			return 1
+		end
+		return 0`
+	stored, err := h.redis.Eval(ctx, storeOnce, []string{onceKey, key}, string(entryJSON), pkgredis.IronFistActionsTTL.Milliseconds()).Int()
+	if err != nil {
 		log.Printf("[ws] ironfist_action store failed: %v", err)
+		return
+	}
+	if stored == 0 {
+		log.Printf("[ws] duplicate ironfist_action ignored from %s room=%s round=%d", from.ChatID, p.RoomID, p.Round)
+		return
 	}
 
 	// 中继给对方（注入 from 字段）
@@ -1281,6 +1293,15 @@ func (h *Hub) handleIronFistAction(from *Client, payload json.RawMessage) {
 		case c.send <- fwd:
 		default:
 		}
+	}
+}
+
+func validIronFistAction(action string) bool {
+	switch action {
+	case "attack", "defend", "charge", "counter":
+		return true
+	default:
+		return false
 	}
 }
 

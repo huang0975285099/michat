@@ -1,4 +1,4 @@
-import { on, off, send } from 'src/services/websocket.js'
+import { connect, on, off, send } from 'src/services/websocket.js'
 
 // 房间作用域的 WebSocket 封装：自动过滤非本房间消息，附带 to/room_id。
 export class GameNet {
@@ -10,7 +10,7 @@ export class GameNet {
 
   on(type, handler) {
     const wrapped = (payload) => {
-      if (payload.room_id !== this.roomId) return
+      if (String(payload.room_id) !== String(this.roomId)) return
       handler(payload)
     }
     this._subs.push({ type, wrapped })
@@ -19,6 +19,10 @@ export class GameNet {
 
   send(type, data) {
     send(type, { to: this.opponentId, room_id: this.roomId, ...data })
+  }
+
+  ready() {
+    return connect()
   }
 
   destroy() {

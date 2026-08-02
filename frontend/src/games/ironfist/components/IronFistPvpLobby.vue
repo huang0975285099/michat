@@ -172,6 +172,7 @@ const cancelling = ref(false);
 let matchTimer = null;
 let matchEpoch = 0; // 每次 startMatch/cancelMatch 自增，用于丢弃过期的异步响应
 let pollTimer = null; // WS 通知丢失时的轮询兜底
+let disposed = false;
 
 // 收到 WS 推送的匹配成功（仅作为等待方时触发；B 端立即匹配走 joinPVPQueue 返回值）
 function onPVPMatched(payload) {
@@ -216,6 +217,7 @@ async function joinLobby() {
   wsOn("ironfist_lobby_update", onLobbyUpdate);
   wsOn("ironfist_pvp_matched", onPVPMatched);
   await wsConnect(); // 确保连接已建立（IronFistPage 进入时已连接，幂等）
+  if (disposed) return;
   wsSend("ironfist_lobby_join", {});
 }
 
@@ -417,10 +419,12 @@ function showProfile(u) {
 }
 
 onMounted(() => {
+  disposed = false;
   joinLobby();
 });
 
 onUnmounted(() => {
+  disposed = true;
   leaveLobby();
   clearTimeout(matchTimer);
   clearTimeout(pollTimer);

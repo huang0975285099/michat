@@ -3,7 +3,7 @@
 // 数学上必然得到一致状态。详见 docs/ironfist.md 第十四节。
 
 import { resolveRound, initialState } from './resolve.js'
-import { ACTION } from './GameConstants.js'
+import { ACTION, ACTIONS, MAX_ROUNDS } from './GameConstants.js'
 
 /**
  * 将服务端返回的 action 列表按 round 配对为 [playerAction, opponentAction] 序列。
@@ -20,12 +20,18 @@ export function pairActionsByRound(actionLog, myChatId) {
   const grouped = new Map()
   for (const item of actionLog) {
     const { round, action, from } = item
+    if (!Number.isInteger(round) || round < 1 || round > MAX_ROUNDS) continue
+    if (!ACTIONS.includes(action) || typeof from !== 'string' || !from) continue
     if (!grouped.has(round)) grouped.set(round, {})
     const slot = grouped.get(round)
     // from === myChatId → 我发的 → 玩家视角的 playerAction
     // 否则 → 对手发的 → opponentAction
-    if (from === myChatId) slot.playerAction = action
-    else slot.opponentAction = action
+    // 第一条合法动作即锁定，和实时引擎/后端的每回合幂等语义保持一致。
+    if (from === myChatId) {
+      if (slot.playerAction == null) slot.playerAction = action
+    } else if (slot.opponentAction == null) {
+      slot.opponentAction = action
+    }
   }
   const rounds = [...grouped.keys()].sort((a, b) => a - b)
   return rounds.map((round) => {

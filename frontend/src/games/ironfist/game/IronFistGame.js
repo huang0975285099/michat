@@ -2,7 +2,7 @@
 // 渲染层/UI 通过 on(event, cb) 订阅事件驱动动画，不直接读内部状态。
 // 见 docs/ironfist.md 第十三/十五节（逻辑与渲染解耦）
 
-import { PHASE, ACTION, OPPONENT_GRACE_MS, RECONNECT_WINDOW_MS, LS_PENDING_KEY, LS_ROUND_KEY } from './GameConstants.js'
+import { PHASE, ACTION, ACTIONS, MAX_ROUNDS, OPPONENT_GRACE_MS, RECONNECT_WINDOW_MS, LS_PENDING_KEY, LS_ROUND_KEY } from './GameConstants.js'
 import { resolveRound, initialState } from './resolve.js'
 import { aiDecide, trackAiHistory } from './GameAI.js'
 import { replayGame } from './replay.js'
@@ -95,7 +95,7 @@ export class IronFistGame {
 
   /** 本地玩家选择动作（DECIDING 阶段有效）。超时由 UI 调用 selectAction('defend')。 */
   selectAction(action) {
-    if (this.phase !== PHASE.DECIDING || this._myAction) return
+    if (this.phase !== PHASE.DECIDING || this._myAction || !ACTIONS.includes(action)) return
     this._myAction = action
     this._emit('locked', { side: 'player', action })
 
@@ -166,6 +166,8 @@ export class IronFistGame {
     // （60s 重连窗口超时判负后，对方延迟重连补发动作会在此被拦截）
     if (this.phase === PHASE.GAME_OVER) return
     const { round, action } = payload
+    if (!Number.isInteger(round) || round < 1 || round > MAX_ROUNDS) return
+    if (!ACTIONS.includes(action)) return
 
     // 收到对方任何消息 = 对方已重连（如果在 WAITING_RECONNECT）
     if (this.phase === PHASE.WAITING_RECONNECT) {
@@ -182,6 +184,9 @@ export class IronFistGame {
       this._pendingOppByRound.set(round, action)
       return
     }
+    // 每方每回合的第一条合法动作即锁定。后端也执行原子幂等校验；此处是纵深防护，
+    // 避免旧服务端或异常重放允许同回合后发消息覆盖已经收到的动作。
+    if (this._oppAction) return
     this._oppAction = action
     if (this._myAction) {
       this._resolve()

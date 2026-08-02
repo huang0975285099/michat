@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"e2eechat/internal/model"
 	"github.com/go-sql-driver/mysql"
@@ -138,8 +139,8 @@ func (s *IronFistService) queryAchievements(ctx context.Context, ex interface {
 // ReportMatch 上报对局结果，更新统计并判定成就解锁。
 // 全程在事务内原子执行，返回更新后的统计 + 本次新解锁的成就。
 func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *ReportMatchRequest) (*StatsView, error) {
-	if req.Mode != "pve" && req.Mode != "pvp" && req.Mode != "friend" {
-		return nil, fmt.Errorf("invalid mode: %s", req.Mode)
+	if err := validateReportMatchRequest(req); err != nil {
+		return nil, err
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -286,11 +287,14 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 		if req.Mode == "pvp" && req.RoomID != nil {
 			roomIDVal = *req.RoomID
 		}
+		pveRewardEligible := req.Mode == "pve" && req.Result == "win"
 		if _, err = tx.ExecContext(ctx, `
 			INSERT INTO ironfist_matches
-			  (user_id, mode, result, player_hp, opponent_hp, rounds, opponent_name, detail, pvp_room_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, userID, req.Mode, req.Result, req.PlayerHP, req.OpponentHP, req.Rounds, oppName, detail, roomIDVal); err != nil {
+			  (user_id, mode, result, player_hp, opponent_hp, rounds, opponent_name, detail,
+			   pvp_room_id, pve_reward_eligible)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, userID, req.Mode, req.Result, req.PlayerHP, req.OpponentHP, req.Rounds, oppName, detail,
+			roomIDVal, pveRewardEligible); err != nil {
 			return nil, err
 		}
 
@@ -394,6 +398,75 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 		NewAchievements:  newAchievements,
 		PVPSettle:        settle,
 	}, nil
+}
+
+type reportRound struct {
+	Round          int    `json:"r"`
+	PlayerAction   string `json:"p"`
+	OpponentAction string `json:"o"`
+	PlayerDamage   int    `json:"pd"`
+	OpponentDamage int    `json:"od"`
+}
+
+// validateReportMatchRequest 拒绝无法由正常客户端产生的战绩数据。真实 PVP 的重复结算
+// 轮询会发送 rounds=0/detail=[]，因此仅在携带 room_id 的 pvp 模式允许零回合摘要。
+func validateReportMatchRequest(req *ReportMatchRequest) error {
+	if req == nil {
+		return errors.New("missing report")
+	}
+	if req.Mode != "pve" && req.Mode != "pvp" && req.Mode != "friend" {
+		return fmt.Errorf("invalid mode: %s", req.Mode)
+	}
+	switch req.Result {
+	case "win", "lose", "draw", "doubleLose":
+	default:
+		return fmt.Errorf("invalid result: %s", req.Result)
+	}
+	if req.PlayerHP < 0 || req.PlayerHP > 100 || req.OpponentHP < 0 || req.OpponentHP > 100 {
+		return errors.New("invalid hp")
+	}
+	if req.Rounds < 0 || req.Rounds > 20 || req.CounterSuccesses < 0 || req.CounterSuccesses > req.Rounds {
+		return errors.New("invalid round summary")
+	}
+	if utf8.RuneCountInString(req.OpponentName) > 64 || len(req.Detail) > 32*1024 {
+		return errors.New("report is too large")
+	}
+	isPVPSettleRetry := req.Mode == "pvp" && req.RoomID != nil && req.Rounds == 0
+	if req.Rounds == 0 && !isPVPSettleRetry {
+		return errors.New("zero-round report is not allowed")
+	}
+	if isPVPSettleRetry {
+		return nil
+	}
+	var detail []reportRound
+	if err := json.Unmarshal(req.Detail, &detail); err != nil || len(detail) != req.Rounds {
+		return errors.New("detail does not match rounds")
+	}
+	counterSuccesses := 0
+	for i, item := range detail {
+		if item.Round != i+1 || !validReportedAction(item.PlayerAction) || !validReportedAction(item.OpponentAction) {
+			return errors.New("invalid round detail")
+		}
+		if item.PlayerDamage < 0 || item.PlayerDamage > 100 || item.OpponentDamage < 0 || item.OpponentDamage > 100 {
+			return errors.New("invalid round damage")
+		}
+		if item.PlayerAction == "counter" && item.OpponentAction == "attack" {
+			counterSuccesses++
+		}
+	}
+	if counterSuccesses != req.CounterSuccesses {
+		return errors.New("counter summary does not match detail")
+	}
+	return nil
+}
+
+func validReportedAction(action string) bool {
+	switch action {
+	case "attack", "defend", "charge", "counter":
+		return true
+	default:
+		return false
+	}
 }
 
 // ListMatches 查询逐局对战明细，游标分页（before_id），最新在前。

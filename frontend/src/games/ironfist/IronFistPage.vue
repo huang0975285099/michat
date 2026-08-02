@@ -1,6 +1,7 @@
 <template>
     <q-page class="ironfist-page">
         <!-- ── 大厅与子视图（菜单已拆分为独立组件） ──────────── -->
+        <!-- 国际版 $FIST 的 @open-fist 入口暂时停用。 -->
         <IronFistLobby
             v-if="view === 'lobby'"
             @home="goHome"
@@ -9,10 +10,11 @@
             @open-achievements="view = 'achievements'"
             @start-pve="startPve"
             @open-pvp="view = 'pvp'"
-            @open-fist="view = 'fist'"
             @invite="startInvite"
         />
+        <!-- 国际版 $FIST 介绍页暂时停用。
         <IronFistFist v-else-if="view === 'fist'" @back="view = 'lobby'" />
+        -->
         <IronFistLedger v-else-if="view === 'ledger'" @back="view = 'lobby'" />
         <IronFistRecords v-else-if="view === 'records'" @back="view = 'lobby'" />
         <IronFistAchievements
@@ -371,7 +373,8 @@ import { useFistStore } from "src/stores/fist";
 import { ironfistApi } from "src/services/api";
 import { ACHIEVEMENT_MAP } from "./game/ironfistMeta";
 import IronFistLobby from "./components/IronFistLobby.vue";
-import IronFistFist from "./components/IronFistFist.vue";
+// 国际版 $FIST 介绍页暂时停用。
+// import IronFistFist from "./components/IronFistFist.vue";
 import IronFistLedger from "./components/IronFistLedger.vue";
 import IronFistRecords from "./components/IronFistRecords.vue";
 import IronFistAchievements from "./components/IronFistAchievements.vue";
@@ -389,7 +392,6 @@ import {
     ACTIONS,
     ROUND_SECONDS,
     INITIAL_HP,
-    LS_PENDING_KEY,
     RECONNECT_WINDOW_MS,
 } from "./game/GameConstants.js";
 
@@ -452,6 +454,8 @@ let engine = null;
 let net = null;
 let countdownTimer = null;
 let confirmTimer = null;
+let pageDisposed = false;
+let pvpStartEpoch = 0;
 
 // ── 计算属性 ──────────────────────────────────────────────
 // 回合胜负判语（从玩家视角给出明确结论 + 配色）
@@ -579,6 +583,7 @@ const resultSub = computed(() => {
 
 // ── 生命周期 ──────────────────────────────────────────────
 onMounted(() => {
+    pageDisposed = false;
     window.addEventListener("beforeunload", handleBeforeUnload);
     const role = route.query.role;
     const matched = route.query.matched;
@@ -590,6 +595,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+    pageDisposed = true;
+    pvpStartEpoch += 1;
     window.removeEventListener("beforeunload", handleBeforeUnload);
     teardown();
 });
@@ -651,7 +658,7 @@ async function reportMatchResult(res) {
         // 避免出现"0 回合 · 胜利"这类无意义战绩。真实 PVP（带 room_id）必须照常上报，
         // 由后端结算与双上报仲裁兜底（双方都弃局会被仲裁为平局并退款）。
         if (!pvpRoomId.value && summary.rounds === 0) {
-            return;
+            return null;
         }
         // 逐局明细：从 moveHistory 压成紧凑 JSON 数组
         const detail = moveHistory.value.map((m) => ({
@@ -696,8 +703,10 @@ async function reportMatchResult(res) {
                 pollPvpSettle(pvpRoomId.value, res, 0);
             }
         }
+        return data;
     } catch {
         // 上报失败静默，不阻塞结果页展示
+        return null;
     }
 }
 
@@ -775,6 +784,7 @@ function startPve() {
 }
 
 async function startPvp() {
+    const startEpoch = ++pvpStartEpoch;
     // 通过好友邀请（URL 含 role=host/guest）进入的均为娱乐好友局；
     // 通过真实 PVP 撮合（query.matched=1）进入的为质押 PVP，需在上报时携带 room_id 触发结算。
     const isFriend =
@@ -816,31 +826,28 @@ async function startPvp() {
     // 两者都用作 GameNet 消息过滤、IronFistGame localStorage pending key、后端 redis key。
     const roomId = route.query.room_id || route.query.room;
     const myChatId = identityStore.chatId;
-    net = new GameNet(route.query.opponent, roomId);
+    const nextNet = new GameNet(route.query.opponent, roomId);
+    // requestReconnect 不能在 WS 尚未完成认证时发送，否则 websocket.send 会直接丢弃。
+    await nextNet.ready();
+    // 等待连接期间页面可能已经卸载，或新的匹配已替换了本次启动；旧任务不得再创建引擎。
+    if (pageDisposed || startEpoch !== pvpStartEpoch) {
+        nextNet.destroy();
+        return;
+    }
+    net = nextNet;
     engine = new IronFistGame({ mode: "pvp", net, roomId, myChatId });
 
-    // 检测是否存在未完成对局（页面刷新重连场景，详见 docs 第十四节方案 B）
-    const hasPending = (() => {
-        try {
-            return !!localStorage.getItem(LS_PENDING_KEY(roomId));
-        } catch {
-            return false;
-        }
-    })();
-
-    if (hasPending) {
-        // 刷新重连路径：先显示重连视图，等服务端返回 ironfist_replay 后再切到 playing
-        view.value = "reconnecting";
-        pHP.value = INITIAL_HP;
-        oHP.value = INITIAL_HP;
-        pCharged.value = oCharged.value = false;
-        lastResult.value = null;
-        moveHistory.value = [];
-        setupEngineListeners();
-        engine.requestReconnect();
-    } else {
-        beginBattle();
-    }
+    // 每次进入 PvP 房间都先从服务端恢复 action 流。不能只在“自己已有 pending
+    // action”时重放：若对手先出招、我方页面尚未挂载或尚未出招便刷新，对手动作只在
+    // Redis 中，跳过 replay 会让双方永久互等。空 action 流会由 loadReplay 正常启动第 1 回合。
+    view.value = "reconnecting";
+    pHP.value = INITIAL_HP;
+    oHP.value = INITIAL_HP;
+    pCharged.value = oCharged.value = false;
+    lastResult.value = null;
+    moveHistory.value = [];
+    setupEngineListeners();
+    engine.requestReconnect();
 }
 
 function setupEngineListeners() {
@@ -921,11 +928,12 @@ function setupEngineListeners() {
         teardownTimers();
         stopReconnectTicker();
         if (mode.value === "pvp" || mode.value === "friend") gameStore.reset();
-        if (mode.value === "pve" && res === "win") {
+        // 先落库战绩，再领取与该胜局绑定的一次性 PvE 奖励。上报失败时不调用领奖接口，
+        // 避免奖励与实际战绩脱钩；结果页仍正常展示。
+        const report = await reportMatchResult(res);
+        if (mode.value === "pve" && res === "win" && report) {
             pveReward.value = await fistStore.claimPvEReward();
         }
-        // 上报战绩与成就（静默，不阻塞结果页）
-        reportMatchResult(res);
         // 不切换 view：保留 playing 视图作为结果遮罩背景，玩家可看到战斗末态
     });
     // 对手掉线，进入 60s 重连等待遮罩

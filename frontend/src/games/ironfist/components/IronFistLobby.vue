@@ -12,6 +12,7 @@
             <div style="font-size: 22px" class="q-ml-sm">🥊</div>
             <div class="text-h6 q-ml-xs">铁拳3D</div>
             <q-space />
+            <!-- 国际版 $FIST 介绍入口暂时停用，仅保留中国版积分模式。
             <div
                 v-if="region === 'intl'"
                 class="text-caption text-grey-5 cursor-pointer rules-link"
@@ -20,6 +21,7 @@
                 <q-icon name="info_outline" size="15px" />
                 <span class="q-ml-xs">$fist</span>
             </div>
+            -->
             <div
                 class="text-caption text-grey-5 cursor-pointer rules-link  q-ml-xl"
                 @click="showRules = true"
@@ -171,7 +173,7 @@
             </q-card>
         </q-dialog>
 
-        <!-- 地区选择弹窗（首次进入，persistent 不允许点背景关闭） -->
+        <!-- 国际版及地区选择暂时停用，当前固定为中国版积分模式。
         <q-dialog v-model="showRegionDialog" persistent>
             <q-card class="region-dialog">
                 <q-card-section class="text-center q-pt-lg">
@@ -192,6 +194,7 @@
                 </q-card-section>
             </q-card>
         </q-dialog>
+        -->
 
         <!-- 玩法弹窗 -->
         <q-dialog v-model="showRules" position="bottom">
@@ -237,19 +240,22 @@ defineEmits([
     "open-achievements",
     "start-pve",
     "open-pvp",
-    "open-fist",
+    // 国际版 $FIST 介绍入口暂时停用。
+    // "open-fist",
     "invite",
 ]);
 
 const fistStore = useFistStore();
 
-const { region, currency, setRegion } = useRegion();
-const showRegionDialog = ref(false);
+const { currency } = useRegion();
 
-function selectRegion(r) {
-    setRegion(r);
-    showRegionDialog.value = false;
-}
+// 国际版地区选择暂时停用。
+// const { region, currency, setRegion } = useRegion();
+// const showRegionDialog = ref(false);
+// function selectRegion(r) {
+//     setRegion(r);
+//     showRegionDialog.value = false;
+// }
 
 const showRules = ref(false);
 const showFriends = ref(false);
@@ -279,9 +285,8 @@ async function loadFriends() {
 onMounted(() => {
     fistStore.fetchAccount();
     loadFriends();
-    if (!region.value) {
-        showRegionDialog.value = true;
-    }
+    // 国际版地区选择暂时停用，固定使用中国版积分。
+    // if (!region.value) showRegionDialog.value = true;
 });
 </script>
 
@@ -444,7 +449,7 @@ onMounted(() => {
     font-weight: 700;
 }
 
-/* 地区选择弹窗 */
+/* 国际版地区选择弹窗暂时停用。
 .region-dialog {
     background: linear-gradient(160deg, #1a1635, #0e0c22);
     color: #fff;
@@ -503,6 +508,7 @@ onMounted(() => {
     font-size: 11px;
     color: rgba(255, 255, 255, 0.6);
 }
+*/
 
 /* 玩法弹窗 */
 .rules-dialog {

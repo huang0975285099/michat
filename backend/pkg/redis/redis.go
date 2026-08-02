@@ -51,3 +51,6 @@ func OfflineKey(chatID string) string         { return "offline:" + chatID }
 func ReauthChallengeKey(nonce string) string  { return "reauth_challenge:" + nonce }
 func InviteCodeKey(code string) string        { return "invite:" + code }
 func IronFistActionsKey(roomID string) string { return "ironfist:actions:" + roomID }
+func IronFistActionOnceKey(roomID, chatID string, round int) string {
+	return fmt.Sprintf("ironfist:action-once:%s:%s:%d", roomID, chatID, round)
+}
