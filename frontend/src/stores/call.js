@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { Notify } from 'quasar'
-import { send, on, off } from 'src/services/websocket'
+import { send, on, off, wsConnected } from 'src/services/websocket'
 import { callApi } from 'src/services/api'
 
 function deviceErrorMessage(e, video) {
@@ -20,6 +20,12 @@ function deviceErrorMessage(e, video) {
 
 // 视频约束：限制分辨率以控制带宽，1:1 通话足够
 const VIDEO_CONSTRAINTS = { width: { ideal: 1280 }, height: { ideal: 720 } }
+const CALL_TIMEOUT_MS = 30000
+const INCOMING_TIMEOUT_MS = 35000
+const DISCONNECT_GRACE_MS = 10000
+const CONNECT_TIMEOUT_MS = 20000
+const MAX_BUFFERED_ICE = 256
+const CALL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 function mediaConstraints(video, facing) {
   return {
@@ -36,11 +42,21 @@ export const useCallStore = defineStore('call', () => {
   const remoteStream = ref(null)
   const localStream = ref(null)
   const cameraOn = ref(true)
+  const connectionStatus = ref('idle') // idle | connecting | connected | reconnecting
+  const reconnectSeconds = ref(0)
 
   let pc = null
   let pendingOffer = null
   let iceCandidateBuffer = []
   let callingTimer = null
+  let incomingTimer = null
+  let reconnectTicker = null
+  let connectTimer = null
+  let currentCallId = ''
+  let isInitiator = false
+  let restartInFlight = false
+  let awaitingRestartAnswer = false
+  let lastRestartAttempt = 0
   let facingMode = 'user' // 当前摄像头朝向：user=前置 environment=后置
 
   const isVideo = () => media.value === 'video'
@@ -60,29 +76,134 @@ export const useCallStore = defineStore('call', () => {
     }
   }
 
-  function createPC(iceConfig) {
-    pc = new RTCPeerConnection(iceConfig)
+  function isCurrentSession(callId, fromId = peerId.value) {
+    return !!callId && callId === currentCallId && fromId === peerId.value && state.value !== 'idle'
+  }
 
-    pc.ontrack = (event) => {
+  function clearConnectTimer() {
+    if (connectTimer) {
+      clearTimeout(connectTimer)
+      connectTimer = null
+    }
+  }
+
+  function clearRecoveryState() {
+    if (reconnectTicker) {
+      clearInterval(reconnectTicker)
+      reconnectTicker = null
+    }
+    reconnectSeconds.value = 0
+    restartInFlight = false
+    awaitingRestartAnswer = false
+  }
+
+  function startConnectTimeout(callId, targetPeerId) {
+    if (connectionStatus.value === 'connected') return
+    clearConnectTimer()
+    connectionStatus.value = 'connecting'
+    connectTimer = setTimeout(() => {
+      connectTimer = null
+      if (isCurrentSession(callId, targetPeerId) && connectionStatus.value !== 'connected') {
+        hangup()
+        Notify.create({ type: 'negative', message: '无法建立媒体连接，请检查网络后重试', timeout: 3000 })
+      }
+    }, CONNECT_TIMEOUT_MS)
+  }
+
+  function bindTrackEndHandlers(stream, callId, targetPeerId) {
+    for (const track of stream.getTracks()) {
+      track.onended = () => {
+        if (!isCurrentSession(callId, targetPeerId)) return
+        const device = track.kind === 'video' ? '摄像头' : '麦克风'
+        Notify.create({ type: 'negative', message: `${device}已断开，通话已结束`, timeout: 3000 })
+        hangup()
+      }
+    }
+  }
+
+  async function attemptIceRestart(callId, targetPeerId) {
+    const connection = pc
+    if (!wsConnected.value || !connection || restartInFlight ||
+        !isCurrentSession(callId, targetPeerId) || connectionStatus.value !== 'reconnecting') return
+    const now = Date.now()
+    if (!isInitiator) {
+      if (now - lastRestartAttempt < 2000) return
+      lastRestartAttempt = now
+      send('call_restart_request', { to: targetPeerId, call_id: callId })
+      return
+    }
+    if (awaitingRestartAnswer && now - lastRestartAttempt < 2500) return
+    lastRestartAttempt = now
+    restartInFlight = true
+    try {
+      // 上一次重连 Offer 没有收到 Answer 时先回滚，才能安全发起下一轮协商。
+      if (connection.signalingState === 'have-local-offer') {
+        await connection.setLocalDescription({ type: 'rollback' })
+      }
+      connection.restartIce()
+      const offer = await connection.createOffer({ iceRestart: true })
+      await connection.setLocalDescription(offer)
+      if (pc !== connection || !isCurrentSession(callId, targetPeerId) || connectionStatus.value !== 'reconnecting') return
+      awaitingRestartAnswer = send('call_restart_offer', { to: targetPeerId, call_id: callId, sdp: offer })
+    } catch (e) {
+      console.warn('[call] ICE restart offer:', e)
+    } finally {
+      restartInFlight = false
+    }
+  }
+
+  function beginRecovery(callId, targetPeerId) {
+    if (!isCurrentSession(callId, targetPeerId) || state.value !== 'active' || connectionStatus.value === 'reconnecting') return
+    clearConnectTimer()
+    connectionStatus.value = 'reconnecting'
+    const deadline = Date.now() + DISCONNECT_GRACE_MS
+    reconnectSeconds.value = Math.ceil(DISCONNECT_GRACE_MS / 1000)
+    attemptIceRestart(callId, targetPeerId)
+
+    reconnectTicker = setInterval(() => {
+      if (!isCurrentSession(callId, targetPeerId) || connectionStatus.value !== 'reconnecting') {
+        clearRecoveryState()
+        return
+      }
+      const remaining = deadline - Date.now()
+      reconnectSeconds.value = Math.max(0, Math.ceil(remaining / 1000))
+      if (remaining <= 0) {
+        clearRecoveryState()
+        hangup()
+        Notify.create({ type: 'negative', message: '网络中断，通话已结束', timeout: 3000 })
+        return
+      }
+      attemptIceRestart(callId, targetPeerId)
+    }, 500)
+  }
+
+  function createPC(iceConfig, callId, targetPeerId) {
+    const connection = new RTCPeerConnection(iceConfig)
+    pc = connection
+
+    connection.ontrack = (event) => {
+      if (pc !== connection || !isCurrentSession(callId, targetPeerId)) return
       remoteStream.value = event.streams[0]
     }
 
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        send('call_ice', { to: peerId.value, ice: event.candidate.toJSON() })
+    connection.onicecandidate = (event) => {
+      if (event.candidate && pc === connection && isCurrentSession(callId, targetPeerId)) {
+        send('call_ice', { to: targetPeerId, call_id: callId, ice: event.candidate.toJSON() })
       }
     }
 
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed') {
-        Notify.create({ type: 'negative', message: '通话连接中断，请检查网络后重试', timeout: 3000 })
-        hangup()
-      } else if (pc.connectionState === 'disconnected') {
-        hangup()
+    connection.onconnectionstatechange = () => {
+      if (pc !== connection || !isCurrentSession(callId, targetPeerId)) return
+      if (connection.connectionState === 'connected') {
+        clearConnectTimer()
+        clearRecoveryState()
+        connectionStatus.value = 'connected'
+      } else if (connection.connectionState === 'failed' || connection.connectionState === 'disconnected') {
+        beginRecovery(callId, targetPeerId)
       }
     }
 
-    return pc
+    return connection
   }
 
   async function flushIceCandidates() {
@@ -94,76 +215,128 @@ export const useCallStore = defineStore('call', () => {
 
   async function startCall(chatId, nickname, callMedia = 'audio') {
     if (state.value !== 'idle') return
+    const callId = crypto.randomUUID()
+    currentCallId = callId
+    isInitiator = true
     media.value = callMedia === 'video' ? 'video' : 'audio'
     peerId.value = chatId
     peerNickname.value = nickname || chatId
     state.value = 'calling'
 
-    callingTimer = setTimeout(() => {
-      if (state.value === 'calling') {
-        hangup()
-        Notify.create({ type: 'warning', message: '呼叫超时，对方未接听' })
-      }
-    }, 30000)
-
     try {
-      localStream.value = await navigator.mediaDevices.getUserMedia(mediaConstraints(isVideo(), facingMode))
+      const stream = await navigator.mediaDevices.getUserMedia(mediaConstraints(isVideo(), facingMode))
+      // 权限弹窗期间用户可能已挂断，不能让迟到的 getUserMedia 复活旧通话。
+      if (!isCurrentSession(callId, chatId) || state.value !== 'calling') {
+        stream.getTracks().forEach(t => t.stop())
+        return
+      }
+      localStream.value = stream
+      bindTrackEndHandlers(stream, callId, chatId)
       const iceConfig = await getTurnConfig()
-      createPC(iceConfig)
+      if (!isCurrentSession(callId, chatId) || state.value !== 'calling') return
+      const connection = createPC(iceConfig, callId, chatId)
+      connectionStatus.value = 'connecting'
       localStream.value.getTracks().forEach(track => pc.addTrack(track, localStream.value))
-      const offer = await pc.createOffer()
-      await pc.setLocalDescription(offer)
+      const offer = await connection.createOffer()
+      await connection.setLocalDescription(offer)
+      if (pc !== connection || !isCurrentSession(callId, chatId) || state.value !== 'calling') return
       // 信令携带 media 类型，被叫端据此决定是否开启摄像头
-      send('call_offer', { to: chatId, sdp: offer, media: media.value })
+      if (!send('call_offer', { to: chatId, call_id: callId, sdp: offer, media: media.value })) {
+        throw new Error('信令连接已断开')
+      }
+      callingTimer = setTimeout(() => {
+        if (state.value === 'calling' && currentCallId === callId) {
+          hangup()
+          Notify.create({ type: 'warning', message: '呼叫超时，对方未接听' })
+        }
+      }, CALL_TIMEOUT_MS)
     } catch (e) {
       console.error('[call] startCall:', e)
-      cleanup()
-      Notify.create({ type: 'negative', message: deviceErrorMessage(e, isVideo()) })
+      if (currentCallId === callId) {
+        const video = isVideo()
+        cleanup()
+        const message = e.message === '信令连接已断开' ? e.message : deviceErrorMessage(e, video)
+        Notify.create({ type: 'negative', message })
+      }
     }
   }
 
-  function handleIncomingOffer(fromId, sdp, callMedia) {
+  function handleIncomingOffer(fromId, callId, sdp, callMedia) {
+    if (!CALL_ID_PATTERN.test(callId || '') || !fromId || !sdp) return
     if (state.value !== 'idle') {
-      send('call_reject', { to: fromId, reason: 'busy' })
-      return
+      // 同一双方同时互拨时按 call_id 确定性保留较小者，双方会得出相同结论。
+      if (state.value === 'calling' && fromId === peerId.value && callId < currentCallId) {
+        cleanup()
+      } else {
+        send('call_reject', { to: fromId, call_id: callId, reason: fromId === peerId.value ? 'glare' : 'busy' })
+        return
+      }
     }
+    currentCallId = callId
+    isInitiator = false
     media.value = callMedia === 'video' ? 'video' : 'audio'
     peerId.value = fromId
     peerNickname.value = fromId
     pendingOffer = sdp
     state.value = 'ringing'
+    incomingTimer = setTimeout(() => {
+      if (state.value === 'ringing' && currentCallId === callId) {
+        send('call_reject', { to: fromId, call_id: callId, reason: 'timeout' })
+        cleanup()
+      }
+    }, INCOMING_TIMEOUT_MS)
   }
 
   async function answerCall() {
     if (state.value !== 'ringing' || !pendingOffer) return
+    const callId = currentCallId
+    const fromId = peerId.value
+    const offer = pendingOffer
     try {
-      localStream.value = await navigator.mediaDevices.getUserMedia(mediaConstraints(isVideo(), facingMode))
+      const stream = await navigator.mediaDevices.getUserMedia(mediaConstraints(isVideo(), facingMode))
+      if (!isCurrentSession(callId, fromId) || state.value !== 'ringing') {
+        stream.getTracks().forEach(t => t.stop())
+        return
+      }
+      localStream.value = stream
+      bindTrackEndHandlers(stream, callId, fromId)
       const iceConfig = await getTurnConfig()
-      createPC(iceConfig)
+      if (!isCurrentSession(callId, fromId) || state.value !== 'ringing') return
+      const connection = createPC(iceConfig, callId, fromId)
+      connectionStatus.value = 'connecting'
       localStream.value.getTracks().forEach(track => pc.addTrack(track, localStream.value))
-      await pc.setRemoteDescription(pendingOffer)
+      await connection.setRemoteDescription(offer)
       await flushIceCandidates()
-      const answer = await pc.createAnswer()
-      await pc.setLocalDescription(answer)
-      send('call_answer', { to: peerId.value, sdp: answer })
+      const answer = await connection.createAnswer()
+      await connection.setLocalDescription(answer)
+      if (pc !== connection || !isCurrentSession(callId, fromId) || state.value !== 'ringing') return
+      if (!send('call_answer', { to: fromId, call_id: callId, sdp: answer })) {
+        throw new Error('信令连接已断开')
+      }
       state.value = 'active'
       pendingOffer = null
+      if (incomingTimer) { clearTimeout(incomingTimer); incomingTimer = null }
+      startConnectTimeout(callId, fromId)
     } catch (e) {
       console.error('[call] answerCall:', e)
-      send('call_reject', { to: peerId.value, reason: 'device_error' })
-      cleanup()
-      Notify.create({ type: 'negative', message: deviceErrorMessage(e, isVideo()) })
+      if (currentCallId === callId) {
+        const video = isVideo()
+        send('call_reject', { to: fromId, call_id: callId, reason: 'device_error' })
+        cleanup()
+        const message = e.message === '信令连接已断开' ? e.message : deviceErrorMessage(e, video)
+        Notify.create({ type: 'negative', message })
+      }
     }
   }
 
   function rejectCall() {
-    send('call_reject', { to: peerId.value, reason: 'rejected' })
+    send('call_reject', { to: peerId.value, call_id: currentCallId, reason: 'rejected' })
     cleanup()
   }
 
   function hangup() {
     if (state.value !== 'idle') {
-      send('call_hangup', { to: peerId.value })
+      send('call_hangup', { to: peerId.value, call_id: currentCallId })
     }
     cleanup()
   }
@@ -186,22 +359,27 @@ export const useCallStore = defineStore('call', () => {
   async function switchCamera() {
     if (!isVideo() || !localStream.value || !pc) return
     const next = facingMode === 'user' ? 'environment' : 'user'
+    let tmp = null
     try {
-      const tmp = await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...VIDEO_CONSTRAINTS, facingMode: next } })
+      tmp = await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...VIDEO_CONSTRAINTS, facingMode: next } })
       const newTrack = tmp.getVideoTracks()[0]
       if (!newTrack) return
       newTrack.enabled = cameraOn.value
       const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video')
-      if (sender) await sender.replaceTrack(newTrack)
+      if (!sender) throw new Error('video sender not found')
+      await sender.replaceTrack(newTrack)
       // 同步本地预览流：移除旧轨、加入新轨
       const oldTrack = localStream.value.getVideoTracks()[0]
       if (oldTrack) {
+        oldTrack.onended = null
         localStream.value.removeTrack(oldTrack)
         oldTrack.stop()
       }
       localStream.value.addTrack(newTrack)
+      bindTrackEndHandlers(new MediaStream([newTrack]), currentCallId, peerId.value)
       facingMode = next
     } catch (e) {
+      tmp?.getTracks().forEach(t => t.stop())
       console.warn('[call] switchCamera:', e)
       Notify.create({ type: 'warning', message: '切换摄像头失败' })
     }
@@ -212,8 +390,14 @@ export const useCallStore = defineStore('call', () => {
       clearTimeout(callingTimer)
       callingTimer = null
     }
+    if (incomingTimer) {
+      clearTimeout(incomingTimer)
+      incomingTimer = null
+    }
+    clearConnectTimer()
+    clearRecoveryState()
     if (localStream.value) {
-      localStream.value.getTracks().forEach(t => t.stop())
+      localStream.value.getTracks().forEach(t => { t.onended = null; t.stop() })
       localStream.value = null
     }
     if (pc) {
@@ -223,8 +407,14 @@ export const useCallStore = defineStore('call', () => {
     remoteStream.value = null
     pendingOffer = null
     iceCandidateBuffer = []
+    currentCallId = ''
+    isInitiator = false
+    restartInFlight = false
+    awaitingRestartAnswer = false
+    lastRestartAttempt = 0
     facingMode = 'user'
     cameraOn.value = true
+    connectionStatus.value = 'idle'
     media.value = 'audio'
     state.value = 'idle'
     peerId.value = ''
@@ -233,26 +423,78 @@ export const useCallStore = defineStore('call', () => {
 
   // WS handlers
   function onCallOffer(payload) {
-    handleIncomingOffer(payload.from, payload.sdp, payload.media)
+    if (!payload) return
+    handleIncomingOffer(payload.from, payload.call_id, payload.sdp, payload.media)
   }
 
   async function onCallAnswer(payload) {
-    if (!pc) return
-    await pc.setRemoteDescription(payload.sdp)
-    await flushIceCandidates()
-    state.value = 'active'
+    if (!payload || state.value !== 'calling' || !pc ||
+        !isCurrentSession(payload.call_id, payload.from) || !payload.sdp) return
+    const connection = pc
+    try {
+      await connection.setRemoteDescription(payload.sdp)
+      if (pc !== connection || !isCurrentSession(payload.call_id, payload.from)) return
+      await flushIceCandidates()
+      state.value = 'active'
+      if (callingTimer) { clearTimeout(callingTimer); callingTimer = null }
+      startConnectTimeout(payload.call_id, payload.from)
+    } catch (e) {
+      console.error('[call] apply answer:', e)
+      if (pc === connection && isCurrentSession(payload.call_id, payload.from)) {
+        Notify.create({ type: 'negative', message: '无法建立通话连接，请重试' })
+        hangup()
+      }
+    }
   }
 
   async function onCallIce(payload) {
-    if (!payload.ice || !payload.ice.candidate) return
+    if (!payload?.ice?.candidate || !isCurrentSession(payload.call_id, payload.from)) return
     if (pc?.remoteDescription) {
       try { await pc.addIceCandidate(payload.ice) } catch {}
-    } else {
+    } else if (iceCandidateBuffer.length < MAX_BUFFERED_ICE) {
       iceCandidateBuffer.push(payload.ice)
     }
   }
 
-  function onCallHangup() {
+  async function onCallRestartOffer(payload) {
+    if (!payload?.sdp || isInitiator || !pc || state.value !== 'active' ||
+        !isCurrentSession(payload.call_id, payload.from)) return
+    const connection = pc
+    beginRecovery(payload.call_id, payload.from)
+    try {
+      await connection.setRemoteDescription(payload.sdp)
+      await flushIceCandidates()
+      const answer = await connection.createAnswer()
+      await connection.setLocalDescription(answer)
+      if (pc === connection && isCurrentSession(payload.call_id, payload.from)) {
+        send('call_restart_answer', { to: payload.from, call_id: payload.call_id, sdp: answer })
+      }
+    } catch (e) {
+      console.warn('[call] ICE restart answer:', e)
+    }
+  }
+
+  function onCallRestartRequest(payload) {
+    if (!payload || !isInitiator || state.value !== 'active' || !isCurrentSession(payload.call_id, payload.from)) return
+    if (connectionStatus.value !== 'reconnecting') beginRecovery(payload.call_id, payload.from)
+    else attemptIceRestart(payload.call_id, payload.from)
+  }
+
+  async function onCallRestartAnswer(payload) {
+    if (!payload?.sdp || !isInitiator || !pc || state.value !== 'active' ||
+        !isCurrentSession(payload.call_id, payload.from)) return
+    const connection = pc
+    try {
+      await connection.setRemoteDescription(payload.sdp)
+      awaitingRestartAnswer = false
+      await flushIceCandidates()
+    } catch (e) {
+      console.warn('[call] apply ICE restart answer:', e)
+    }
+  }
+
+  function onCallHangup(payload) {
+    if (!payload || !isCurrentSession(payload.call_id, payload.from)) return
     if (state.value === 'active') {
       Notify.create({ type: 'info', message: '通话已结束', timeout: 2000 })
     }
@@ -260,13 +502,17 @@ export const useCallStore = defineStore('call', () => {
   }
 
   function onCallReject(payload) {
-    if (state.value !== 'calling') { cleanup(); return }
+    if (!payload || state.value !== 'calling' || !isCurrentSession(payload.call_id, payload.from)) return
     const reason = payload?.reason
     let message
     if (reason === 'busy') {
       message = '对方正在通话中，请稍后再试'
     } else if (reason === 'device_error') {
       message = '对方设备无法接听通话（麦克风或权限问题）'
+    } else if (reason === 'timeout') {
+      message = '对方未接听'
+    } else if (reason === 'glare') {
+      message = '正在处理双方同时发起的呼叫'
     } else {
       message = '对方已拒绝通话'
     }
@@ -280,17 +526,24 @@ export const useCallStore = defineStore('call', () => {
     on('call_ice', onCallIce)
     on('call_hangup', onCallHangup)
     on('call_reject', onCallReject)
+    on('call_restart_offer', onCallRestartOffer)
+    on('call_restart_answer', onCallRestartAnswer)
+    on('call_restart_request', onCallRestartRequest)
     return () => {
       off('call_offer', onCallOffer)
       off('call_answer', onCallAnswer)
       off('call_ice', onCallIce)
       off('call_hangup', onCallHangup)
       off('call_reject', onCallReject)
+      off('call_restart_offer', onCallRestartOffer)
+      off('call_restart_answer', onCallRestartAnswer)
+      off('call_restart_request', onCallRestartRequest)
     }
   }
 
   return {
     state, media, peerId, peerNickname, remoteStream, localStream, cameraOn,
+    connectionStatus, reconnectSeconds,
     startCall, answerCall, rejectCall, hangup,
     setMuted, setCameraEnabled, switchCamera, startListening,
   }

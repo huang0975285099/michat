@@ -86,11 +86,18 @@ const visible = computed(
 
 const peerName = computed(() => callStore.peerNickname || callStore.peerId);
 const showPlaceholder = computed(
-    () => callStore.state === "calling" || !callStore.remoteStream
+    () => callStore.state === "calling" ||
+        callStore.connectionStatus !== "connected" ||
+        !callStore.remoteStream
 );
-const statusText = computed(() =>
-    callStore.state === "calling" ? `正在呼叫 ${peerName.value}...` : "等待对方画面..."
-);
+const statusText = computed(() => {
+    if (callStore.connectionStatus === "reconnecting") {
+        return `网络中断，正在恢复（${callStore.reconnectSeconds}秒）`;
+    }
+    if (callStore.state === "calling") return `正在呼叫 ${peerName.value}...`;
+    if (callStore.connectionStatus === "connecting") return "正在建立安全连接...";
+    return "等待对方画面...";
+});
 
 watch(
     () => callStore.remoteStream,
@@ -117,16 +124,18 @@ watch(visible, async (v) => {
 });
 
 watch(
-    () => callStore.state,
-    (s) => {
-        if (s === "active") {
-            duration.value = 0;
+    () => [callStore.state, callStore.connectionStatus],
+    ([s, connection]) => {
+        if (s === "active" && connection === "connected") {
+            clearInterval(timer);
             timer = setInterval(() => { duration.value++; }, 1000);
         } else {
             clearInterval(timer);
             timer = null;
-            duration.value = 0;
-            muted.value = false;
+            if (s !== "active") {
+                duration.value = 0;
+                muted.value = false;
+            }
         }
     }
 );

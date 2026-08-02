@@ -47,7 +47,7 @@
         <q-page-container>
             <router-view v-slot="{ Component }">
                 <keep-alive :include="['ChatsPage', 'FriendsPage', 'GamesPage', 'ProfilePage']">
-                    <component :is="Component" />
+                    <component :is="Component" :key="$route.path" />
                 </keep-alive>
             </router-view>
         </q-page-container>

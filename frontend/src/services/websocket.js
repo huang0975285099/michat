@@ -219,8 +219,14 @@ export function send(type, payload) {
     console.warn('[ws] not connected or auth pending, message dropped')
     return false
   }
-  socket.send(JSON.stringify({ type, payload }))
-  return true
+  try {
+    socket.send(JSON.stringify({ type, payload }))
+    return true
+  } catch (e) {
+    console.error('[ws] send failed', e)
+    wsConnected.value = false
+    return false
+  }
 }
 
 function flushPendingQueue() {

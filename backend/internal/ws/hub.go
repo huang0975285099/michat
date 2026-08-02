@@ -520,7 +520,8 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 		h.handleFileSimpleRelay(c, msg.Type, msg.Payload)
 	case "call_offer":
 		h.handleCallOffer(c, msg.Payload)
-	case "call_answer", "call_ice", "call_hangup", "call_reject":
+	case "call_answer", "call_ice", "call_hangup", "call_reject",
+		"call_restart_request", "call_restart_offer", "call_restart_answer":
 		h.handleCallRelay(c, msg.Type, msg.Payload)
 	case "game_invite", "game_accept", "game_reject", "game_ready",
 		"game_move", "game_bomb", "game_powerup", "game_death", "game_resign":
@@ -1026,11 +1027,13 @@ func (h *Hub) handleFileSimpleRelay(from *Client, msgType string, payload json.R
 // handleCallOffer 转发通话邀请（含好友校验）
 func (h *Hub) handleCallOffer(from *Client, payload json.RawMessage) {
 	var p struct {
-		To    string          `json:"to"`
-		SDP   json.RawMessage `json:"sdp"`
-		Media string          `json:"media"` // audio | video（缺省按 audio 处理）
+		To     string          `json:"to"`
+		CallID string          `json:"call_id"`
+		SDP    json.RawMessage `json:"sdp"`
+		Media  string          `json:"media"` // audio | video（缺省按 audio 处理）
 	}
-	if err := json.Unmarshal(payload, &p); err != nil || !chatIDRe.MatchString(p.To) {
+	if err := json.Unmarshal(payload, &p); err != nil ||
+		!chatIDRe.MatchString(p.To) || !transferIDRe.MatchString(p.CallID) || len(p.SDP) == 0 {
 		log.Printf("[ws] invalid call_offer from %s", from.ChatID)
 		return
 	}
@@ -1049,9 +1052,10 @@ func (h *Hub) handleCallOffer(from *Client, payload json.RawMessage) {
 	fwd, _ := json.Marshal(Message{
 		Type: "call_offer",
 		Payload: mustMarshal(map[string]any{
-			"from":  from.ChatID,
-			"sdp":   p.SDP,
-			"media": media,
+			"from":    from.ChatID,
+			"call_id": p.CallID,
+			"sdp":     p.SDP,
+			"media":   media,
 		}),
 	})
 
@@ -1069,21 +1073,48 @@ func (h *Hub) handleCallOffer(from *Client, payload json.RawMessage) {
 // handleCallRelay 转发 call_answer / call_ice / call_hangup / call_reject
 func (h *Hub) handleCallRelay(from *Client, msgType string, payload json.RawMessage) {
 	var p struct {
-		To  string          `json:"to"`
-		SDP json.RawMessage `json:"sdp,omitempty"`
-		ICE json.RawMessage `json:"ice,omitempty"`
+		To     string          `json:"to"`
+		CallID string          `json:"call_id"`
+		SDP    json.RawMessage `json:"sdp,omitempty"`
+		ICE    json.RawMessage `json:"ice,omitempty"`
+		Reason string          `json:"reason,omitempty"`
 	}
-	if err := json.Unmarshal(payload, &p); err != nil || !chatIDRe.MatchString(p.To) {
+	if err := json.Unmarshal(payload, &p); err != nil ||
+		!chatIDRe.MatchString(p.To) || !transferIDRe.MatchString(p.CallID) {
 		log.Printf("[ws] invalid %s from %s", msgType, from.ChatID)
 		return
 	}
+	if (msgType == "call_answer" || msgType == "call_restart_offer" || msgType == "call_restart_answer") && len(p.SDP) == 0 {
+		log.Printf("[ws] missing SDP in %s from %s", msgType, from.ChatID)
+		return
+	}
+	if msgType == "call_ice" && len(p.ICE) == 0 {
+		log.Printf("[ws] missing ICE in call_ice from %s", from.ChatID)
+		return
+	}
 
-	inner := map[string]any{"from": from.ChatID}
+	// 后续信令同样必须发生在好友之间，不能只保护 offer。客户端还会用 call_id 和
+	// 当前对端做会话级校验，形成服务端授权 + 客户端状态绑定的双重防线。
+	ctx := context.Background()
+	if ok, err := h.friendSvc.AreFriends(ctx, from.UserID, p.To); err != nil || !ok {
+		log.Printf("[ws] %s: %s not friends with %s", msgType, from.ChatID, p.To)
+		return
+	}
+
+	inner := map[string]any{"from": from.ChatID, "call_id": p.CallID}
 	if len(p.SDP) > 0 {
 		inner["sdp"] = p.SDP
 	}
 	if len(p.ICE) > 0 {
 		inner["ice"] = p.ICE
+	}
+	if msgType == "call_reject" {
+		switch p.Reason {
+		case "busy", "device_error", "rejected", "timeout", "glare":
+			inner["reason"] = p.Reason
+		default:
+			inner["reason"] = "rejected"
+		}
 	}
 
 	fwd, _ := json.Marshal(Message{

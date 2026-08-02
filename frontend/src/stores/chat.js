@@ -342,7 +342,7 @@ async function dbStartBurnCountdown(msgId, readReceivedAt, burnAt) {
   })
 }
 
-async function dbUpdateMessageTs(msgId, ts) {
+async function dbUpdateMessageDelivery(msgId, status, ts) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite')
@@ -350,7 +350,11 @@ async function dbUpdateMessageTs(msgId, ts) {
     const req = store.get(msgId)
     req.onsuccess = (e) => {
       const record = e.target.result
-      if (record) { record.ts = ts; store.put(record) }
+      if (record) {
+        record.status = status
+        if (typeof ts === 'number') record.ts = ts
+        store.put(record)
+      }
     }
     tx.oncomplete = () => resolve()
     tx.onerror = (e) => reject(e.target.error)
@@ -439,6 +443,10 @@ export const useChatStore = defineStore('chat', () => {
   // fileTransfers: { [transferId]: { direction, status, progress, filename, ... } }
   const fileTransfers = ref({})
 
+  // 等待服务器 ACK 的文字消息。ACK 超时只改变本地展示状态，不自动重发，避免重复消息。
+  const ackTimers = new Map()
+  const MESSAGE_ACK_TIMEOUT_MS = 15000
+
   // 消息加密密钥（用于加密 IndexedDB 存储）
   let messageEncryptKey = null
   // 单例化首次密钥初始化：并发调用共享同一个 Promise，避免各自生成不同的密钥。
@@ -500,7 +508,8 @@ export const useChatStore = defineStore('chat', () => {
         read: msg.read || false,
         receiptSent: msg.receiptSent || false,
         burnAfterRead: msg.burnAfterRead || false,
-        burnAt: msg.burnAt || null
+        burnAt: msg.burnAt || null,
+        status: msg.status || (msg.mine ? 'sent' : undefined)
       })
     } catch (e) {
       // DB 写入失败：保留内存中的消息（用户仍可见），仅刷新后丢失。
@@ -537,7 +546,7 @@ export const useChatStore = defineStore('chat', () => {
             const meta = JSON.parse(decryptedText)
             return { ...m, text: null, objectUrl: existingUrls[m.id] || null, ...meta }
           }
-          return { ...m, text: decryptedText }
+          return { ...m, text: decryptedText, status: m.mine ? (m.status === 'pending' ? 'failed' : (m.status || 'sent')) : undefined }
         } catch (e) {
           console.warn('[chat] decrypt message failed:', m.id, e)
           return { ...m, text: '[解密失败]' }
@@ -605,7 +614,7 @@ export const useChatStore = defineStore('chat', () => {
             const meta = JSON.parse(decryptedText)
             grouped[cid].push({ ...m, text: null, objectUrl: existingUrls[m.id] || null, ...meta })
           } else {
-            grouped[cid].push({ ...m, text: decryptedText })
+            grouped[cid].push({ ...m, text: decryptedText, status: m.mine ? (m.status === 'pending' ? 'failed' : (m.status || 'sent')) : undefined })
           }
         } catch (e) {
           console.warn('[chat] decrypt message failed:', m.id, e)
@@ -664,6 +673,20 @@ export const useChatStore = defineStore('chat', () => {
   async function sendMessage(toChatId, recipientPubKey, text, burnAfterRead = false) {
     const msgId = genMsgId()
     const encrypted = await encryptMessage(text, recipientPubKey)
+
+    // 先建立本地 pending 记录，确保极速 ACK 到达时一定能找到对应消息。
+    await addMessage(toChatId, {
+      id: msgId,
+      from: 'me',
+      text,
+      ts: Date.now(),
+      mine: true,
+      read: false,
+      status: 'pending',
+      burnAfterRead,
+      burnAt: null
+    })
+
     const ok = send('message', {
       to: toChatId,
       msg_id: msgId,
@@ -672,18 +695,23 @@ export const useChatStore = defineStore('chat', () => {
       ciphertext: encrypted.ciphertext,
       burn_after_read: burnAfterRead
     })
-    if (ok) {
-      await addMessage(toChatId, {
-        id: msgId,
-        from: 'me',
-        text,
-        ts: Date.now(),
-        mine: true,
-        burnAfterRead: burnAfterRead,
-        burnAt: null  // 阅读后才设置删除时间
-      })
+    if (!ok) {
+      const msg = messages.value[toChatId]?.find(m => m.id === msgId)
+      if (msg) msg.status = 'failed'
+      await dbUpdateMessageDelivery(msgId, 'failed').catch(() => {})
+      return false
     }
-    return ok
+
+    const timer = setTimeout(() => {
+      ackTimers.delete(msgId)
+      const msg = messages.value[toChatId]?.find(m => m.id === msgId)
+      if (msg?.status === 'pending') {
+        msg.status = 'failed'
+        dbUpdateMessageDelivery(msgId, 'failed').catch(() => {})
+      }
+    }, MESSAGE_ACK_TIMEOUT_MS)
+    ackTimers.set(msgId, timer)
+    return true
   }
 
   // ── 文件传输 ──────────────────────────────────────────────────
@@ -969,6 +997,11 @@ export const useChatStore = defineStore('chat', () => {
       await waitForFileAccept(transferId, 30000)
       fileTransfers.value[transferId].status = 'transferring'
 
+      // 必须在发送第一块前监听完成回执。接收端收到最后一块就会立即解密并发送
+      // file_done；若发送完所有块后才监听，极速回执会被 WebSocket 层丢弃。
+      const doneResultPromise = waitForFileDone(transferId, 120000)
+        .then(ts => ({ ok: true, ts }), error => ({ ok: false, error }))
+
       // 逐块发送
       for (let i = 0; i < chunks.length; i++) {
         if (fileTransfers.value[transferId]?.status === 'error') throw new Error('传输已中断')
@@ -985,12 +1018,16 @@ export const useChatStore = defineStore('chat', () => {
       }
 
       // 发送完成信号
-      send('file_complete', { to: toChatId, transfer_id: transferId })
+      if (!send('file_complete', { to: toChatId, transfer_id: transferId })) {
+        throw new Error('网络中断，文件完成信号发送失败')
+      }
       fileTransfers.value[transferId].progress = 100
 
       // 等待接收端确认收齐并解密成功；超时或收到 file_error 则按失败处理
       // 返回的 ts 来自接收端，两端显示一致
-      const doneTs = await waitForFileDone(transferId, 30000)
+      const doneResult = await doneResultPromise
+      if (!doneResult.ok) throw doneResult.error
+      const doneTs = doneResult.ts
       fileTransfers.value[transferId].status = 'done'
       scheduleTransferCleanup(transferId, 1000)
 
@@ -1176,11 +1213,16 @@ function validateMsgId(msgId) {
 
       const msgId = payload.msg_id
       const ts = payload.ts
+      const timer = ackTimers.get(msgId)
+      if (timer) {
+        clearTimeout(timer)
+        ackTimers.delete(msgId)
+      }
       for (const chatId in messages.value) {
         const msg = messages.value[chatId].find(m => m.id === msgId)
-        if (msg) { msg.ts = ts; break }
+        if (msg) { msg.ts = ts; msg.status = 'sent'; break }
       }
-      await dbUpdateMessageTs(msgId, ts)
+      await dbUpdateMessageDelivery(msgId, 'sent', ts)
     }
 
     async function onReadReceipt(payload) {
@@ -1319,6 +1361,8 @@ function validateMsgId(msgId) {
   })
 
   async function clearAll() {
+    for (const timer of ackTimers.values()) clearTimeout(timer)
+    ackTimers.clear()
     // 释放所有内存中的文件 blob URL（deleteDatabase 会清空文件体存储）
     for (const cid in messages.value) {
       for (const m of messages.value[cid]) releaseFileObjectUrl(m)
@@ -1401,6 +1445,12 @@ function validateMsgId(msgId) {
       if (chatId !== fromChatId) continue
       for (const m of messages.value[chatId]) {
         if (!(m.mine && idSet.has(m.id))) continue
+        const timer = ackTimers.get(m.id)
+        if (timer) {
+          clearTimeout(timer)
+          ackTimers.delete(m.id)
+        }
+        m.status = 'sent'
         m.read = true
         // 阅后即焚消息：仅在「首次」收到回执时启动销毁倒计时。
         // 服务器的 getReadReceipts 每次都会返回同一批已读 ID，若不加守卫，
@@ -1418,6 +1468,7 @@ function validateMsgId(msgId) {
     // 避免 DB 记录停留在 read=true 但 readReceivedAt/burnAt 为空导致永不删除。
     const burnAt = readReceivedAt + BURN_AFTER_READ_DELAY
     await Promise.all(msgIds.map(id => dbStartBurnCountdown(id, readReceivedAt, burnAt).catch(() => {})))
+    await Promise.all(msgIds.map(id => dbUpdateMessageDelivery(id, 'sent').catch(() => {})))
   }
 
   // ── 定时删除过期消息 ────────────────────────────────────────

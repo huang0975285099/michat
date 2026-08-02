@@ -120,10 +120,18 @@
             <div class="text-caption q-mt-xs text-blue-2 row items-center q-gutter-xs">
               <span>{{ formatTime(msg.ts) }}</span>
               <div>
-                <span v-if="msg.read" class="read-status">✔✔</span>
-                <span v-else class="read-status">✔</span>
-                <q-tooltip v-if="msg.read">对方已读</q-tooltip>
-                <q-tooltip v-else>对方未读</q-tooltip>
+                <q-icon v-if="msg.status === 'pending'" name="schedule" size="13px">
+                  <q-tooltip>正在发送</q-tooltip>
+                </q-icon>
+                <q-icon v-else-if="msg.status === 'failed'" name="error_outline" size="14px" color="negative">
+                  <q-tooltip>服务器未确认，请检查网络后重发</q-tooltip>
+                </q-icon>
+                <template v-else>
+                  <span v-if="msg.read" class="read-status">✔✔</span>
+                  <span v-else class="read-status">✔</span>
+                  <q-tooltip v-if="msg.read">对方已读</q-tooltip>
+                  <q-tooltip v-else>服务器已接收，对方未读</q-tooltip>
+                </template>
               </div>
               <q-icon v-if="msg.burnAfterRead" name="local_fire_department" size="14px" color="orange">
                 <q-tooltip v-if="msg.burnAt">{{ formatBurnCountdown(msg.burnAt) }}</q-tooltip>
@@ -566,10 +574,6 @@ async function doSendFile(file) {
     $q.notify({ type: 'warning', message: '无法获取对方公钥，请刷新重试' })
     return
   }
-  if (!friendOnline.value) {
-    $q.notify({ type: 'warning', message: '对方不在线，无法发送文件' })
-    return
-  }
   try {
     await chatStore.sendFile(friendChatId, friendPubKey.value, file, burnMode.value)
   } catch (e) {
@@ -580,7 +584,9 @@ async function doSendFile(file) {
 // 消息最大长度限制（防止 DoS）
 const MAX_MESSAGE_LENGTH = 10000
 
-async function sendMsg() {
+async function sendMsg(event) {
+  // 中文等输入法按 Enter 确认候选词时不能触发发送。
+  if (event?.isComposing || event?.keyCode === 229) return
   const text = inputText.value.trim()
   if (!text) return
   // 安全检查：消息长度限制
@@ -601,7 +607,7 @@ async function sendMsg() {
       inputText.value = text
     }
   } catch (e) {
-    $q.notify({ type: 'negative', message: '加密失败：' + e.message })
+    $q.notify({ type: 'negative', message: '消息发送失败：' + e.message })
     inputText.value = text
   } finally {
     sending.value = false
