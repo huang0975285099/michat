@@ -1,6 +1,6 @@
 {
   "name": "e2eeyunmi",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": true,
   "dependencies": {
     "@capacitor/android": "^8.0.0",
