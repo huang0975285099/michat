@@ -19,40 +19,6 @@
                 </q-card>
             </div>
 
-            <!-- 九州征途（SLG） -->
-            <!-- <div class="col-6 col-sm-4 col-md-3">
-                <q-card class="game-card cursor-pointer" @click="enterSlg">
-                    <q-card-section class="text-center q-pa-lg">
-                        <div style="font-size: 52px">🏯</div>
-                        <div class="text-subtitle1 text-bold q-mt-sm">九州征途</div>
-                        <div class="text-caption text-grey-6">攻城略地·经营领土</div>
-                    </q-card-section>
-                    <q-separator />
-                    <q-card-actions align="center" class="q-py-sm">
-                        <q-chip dense color="brown" text-color="white" icon="castle" label="沙盘" />
-                        <q-chip dense color="purple" text-color="white" icon="psychology" label="策略" />
-                        <q-chip v-if="slgFull" dense color="negative" text-color="white" icon="block" label="已满" />
-                    </q-card-actions>
-                </q-card>
-            </div> -->
-
-            <!-- 门派 PK（梦幻西游风） -->
-            <!-- <div class="col-6 col-sm-4 col-md-3">
-                <q-card class="game-card cursor-pointer" @click="router.push('/games/menpai')">
-                    <q-card-section class="text-center q-pa-lg">
-                        <div style="font-size: 52px">⚔️</div>
-                        <div class="text-subtitle1 text-bold q-mt-sm">门派 PK</div>
-                        <div class="text-caption text-grey-6">梦幻西游风·7 门派·回合制</div>
-                    </q-card-section>
-                    <q-separator />
-                    <q-card-actions align="center" class="q-py-sm">
-                        <q-chip dense color="positive" text-color="white" icon="people" label="1v1" />
-                        <q-chip dense color="deep-orange" text-color="white" icon="auto_awesome" label="回合" />
-                        <q-chip dense color="purple" text-color="white" icon="psychology" label="策略" />
-                    </q-card-actions>
-                </q-card>
-            </div> -->
-
             <!-- Placeholder cards -->
             <div class="col-6 col-sm-4 col-md-3">
                 <q-card class="game-card game-card--soon">
@@ -68,24 +34,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { slgApi } from 'src/services/api'
 
 defineOptions({ name: 'GamesPage' })
 const router = useRouter()
-const slgFull = ref(false)
-
-onMounted(async () => {
-    try {
-        const { data } = await slgApi.getStatus()
-        slgFull.value = !!data.full
-    } catch { /* 忽略，不影响入口展示 */ }
-})
-
-function enterSlg() {
-    router.push('/games/slg')
-}
 </script>
 
 <style scoped>
