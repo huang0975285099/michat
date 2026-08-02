@@ -24,6 +24,7 @@ export const PVP_TIERS = [
 // 积分流水类型 → 展示文案（无 remark 时回退）
 export const TX_TYPE_LABEL = {
   pve_reward: 'PvE 奖励',
+  pvp_stake: 'PvP 质押',
   pvp_win: 'PvP 赢局',
   pvp_loss: 'PvP 输局',
   pvp_fee: 'PvP 手续费',

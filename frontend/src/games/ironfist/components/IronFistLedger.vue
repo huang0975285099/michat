@@ -34,6 +34,7 @@
                 <div class="tx-main">
                     <div class="tx-label">{{ txLabel(t) }}</div>
                     <div class="tx-time">{{ fmtTime(t.created_at) }}</div>
+                    <div v-if="t.ref_id" class="tx-ref">来源 {{ t.ref_id }}</div>
                 </div>
                 <div class="tx-right">
                     <div
@@ -129,6 +130,15 @@ onMounted(async () => {
     font-size: 11px;
     color: rgba(255, 255, 255, 0.4);
     margin-top: 2px;
+}
+.tx-ref {
+    max-width: 210px;
+    margin-top: 2px;
+    overflow: hidden;
+    color: rgba(255, 255, 255, 0.32);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .tx-right {
     text-align: right;

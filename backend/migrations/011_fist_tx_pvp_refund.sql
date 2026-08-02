@@ -8,6 +8,7 @@ USE e2eechat;
 
 ALTER TABLE fist_transactions MODIFY COLUMN type ENUM(
   'pve_reward',
+  'pvp_stake',
   'pvp_win',
   'pvp_loss',
   'pvp_refund',

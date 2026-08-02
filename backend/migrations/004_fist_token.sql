@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS fist_transactions (
   balance_after  BIGINT          NOT NULL,             -- 本次变动后的余额快照
   type           ENUM(
                    'pve_reward',      -- PvE 胜局奖励
+                   'pvp_stake',       -- PvP 入场质押
                    'pvp_win',         -- PvP 赢局到手金额
                    'pvp_loss',        -- PvP 输局扣款
                    'pvp_refund',      -- PvP 取消/平局/超时退款

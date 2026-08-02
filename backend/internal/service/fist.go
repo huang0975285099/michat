@@ -119,9 +119,9 @@ func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistA
 		INSERT INTO pve_daily_progress (user_id, date, wins_count, earned_today)
 		VALUES (?, UTC_DATE(), 1, ?)
 		ON DUPLICATE KEY UPDATE
-		  wins_count   = IF(wins_count < ?, wins_count + 1, wins_count),
-		  earned_today = IF(wins_count < ?, earned_today + ?, earned_today)
-	`, userID, PvERewardAmount, PvEDailyMaxWins, PvEDailyMaxWins, PvERewardAmount)
+		  earned_today = IF(wins_count < ?, earned_today + ?, earned_today),
+		  wins_count   = IF(wins_count < ?, wins_count + 1, wins_count)
+	`, userID, PvERewardAmount, PvEDailyMaxWins, PvERewardAmount, PvEDailyMaxWins)
 	if err != nil {
 		return nil, err
 	}
@@ -155,9 +155,9 @@ func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistA
 	// 写流水记录（balance_after = 已更新的余额）
 	remark := fmt.Sprintf("第%d场PvE胜局（今日）", view.TodayWins)
 	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO fist_transactions (user_id, amount, balance_after, type, remark)
-		VALUES (?, ?, ?, 'pve_reward', ?)
-	`, userID, PvERewardAmount, view.Balance, remark); err != nil {
+		INSERT INTO fist_transactions (user_id, amount, balance_after, type, ref_id, remark)
+		VALUES (?, ?, ?, 'pve_reward', ?, ?)
+	`, userID, PvERewardAmount, view.Balance, fmt.Sprintf("ironfist_match:%d", matchID), remark); err != nil {
 		return nil, err
 	}
 
@@ -185,9 +185,9 @@ func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistA
 		view.BonusAwarded = true
 		view.BonusAmount = PvEDailyBonusAmount
 		if _, err = tx.ExecContext(ctx, `
-			INSERT INTO fist_transactions (user_id, amount, balance_after, type, remark)
-			VALUES (?, ?, ?, 'pve_reward', ?)
-		`, userID, PvEDailyBonusAmount, view.Balance, "每日满10场额外奖励"); err != nil {
+			INSERT INTO fist_transactions (user_id, amount, balance_after, type, ref_id, remark)
+			VALUES (?, ?, ?, 'pve_reward', ?, ?)
+		`, userID, PvEDailyBonusAmount, view.Balance, fmt.Sprintf("ironfist_match:%d", matchID), "每日满10场额外奖励"); err != nil {
 			return nil, err
 		}
 	}

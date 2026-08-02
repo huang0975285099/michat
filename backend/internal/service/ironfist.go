@@ -694,7 +694,7 @@ func (s *IronFistService) enqueuePVPOnce(ctx context.Context, userID uint64, cha
 			return nil, err
 		}
 		// B 的质押扣款流水
-		if err = s.writeFistTx(ctx, tx, userID, -stake, "pvp_loss",
+		if err = s.writeFistTx(ctx, tx, userID, -stake, "pvp_stake", pvpRoomRef(roomID),
 			fmt.Sprintf("PVP 质押（%s场，对手：%s）", tier, aChatID)); err != nil {
 			return nil, err
 		}
@@ -728,16 +728,8 @@ func (s *IronFistService) enqueuePVPOnce(ctx context.Context, userID uint64, cha
 		return nil, err
 	}
 
-	// 4. 未命中撮合：作为玩家 A 创建新房间
-	if _, err = tx.ExecContext(ctx,
-		`UPDATE fist_accounts SET balance = balance - ? WHERE user_id = ?`,
-		stake, userID); err != nil {
-		return nil, err
-	}
-	if err = s.writeFistTx(ctx, tx, userID, -stake, "pvp_loss",
-		fmt.Sprintf("PVP 质押（%s场，等待匹配）", tier)); err != nil {
-		return nil, err
-	}
+	// 4. 未命中撮合：作为玩家 A 创建新房间。先取得 room_id，再写质押流水，
+	// 使每条积分变动都能通过 ref_id 精确追溯到房间；全部仍在同一事务内。
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO ironfist_pvp_rooms
 		  (tier, stake_amount, player_a_user_id, player_a_chat_id, status)
@@ -746,13 +738,26 @@ func (s *IronFistService) enqueuePVPOnce(ctx context.Context, userID uint64, cha
 	if err != nil {
 		return nil, err
 	}
-	rid, _ := res.LastInsertId()
+	rid, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	roomID = uint64(rid)
+	if _, err = tx.ExecContext(ctx,
+		`UPDATE fist_accounts SET balance = balance - ? WHERE user_id = ?`,
+		stake, userID); err != nil {
+		return nil, err
+	}
+	if err = s.writeFistTx(ctx, tx, userID, -stake, "pvp_stake", pvpRoomRef(roomID),
+		fmt.Sprintf("PVP 质押（%s场，等待匹配）", tier)); err != nil {
+		return nil, err
+	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &PVPMatchResult{
 		Status: "queued",
-		RoomID: uint64(rid),
+		RoomID: roomID,
 		Tier:   tier,
 		Stake:  stake,
 	}, nil
@@ -877,7 +882,7 @@ func (s *IronFistService) CancelPVPQueue(ctx context.Context, chatID string) (ui
 		stake, aUserID); err != nil {
 		return 0, err
 	}
-	if err = s.writeFistTx(ctx, tx, aUserID, stake, "pvp_refund",
+	if err = s.writeFistTx(ctx, tx, aUserID, stake, "pvp_refund", pvpRoomRef(roomID),
 		fmt.Sprintf("PVP 取消匹配（%s场，全额退回）", tier)); err != nil {
 		return 0, err
 	}
@@ -963,7 +968,7 @@ func (s *IronFistService) SweepTimeoutPVPQueues(ctx context.Context) (int, error
 			tx.Rollback()
 			return swept, err
 		}
-		if err = s.writeFistTx(ctx, tx, p.aUserID, p.stake, "pvp_refund",
+		if err = s.writeFistTx(ctx, tx, p.aUserID, p.stake, "pvp_refund", pvpRoomRef(p.roomID),
 			fmt.Sprintf("PVP 匹配超时（%s场，全额退回）", p.tier)); err != nil {
 			tx.Rollback()
 			return swept, err
@@ -1074,7 +1079,7 @@ func (s *IronFistService) SweepTimeoutPVPMatched(ctx context.Context) (int, erro
 			tx.Rollback()
 			return swept, err
 		}
-		if err = s.writeFistTx(ctx, tx, p.aUserID, refundA, "pvp_refund",
+		if err = s.writeFistTx(ctx, tx, p.aUserID, refundA, "pvp_refund", pvpRoomRef(p.roomID),
 			fmt.Sprintf("PVP 对局超时未结算（%s场，平局退回）", p.tier)); err != nil {
 			tx.Rollback()
 			return swept, err
@@ -1085,7 +1090,7 @@ func (s *IronFistService) SweepTimeoutPVPMatched(ctx context.Context) (int, erro
 			tx.Rollback()
 			return swept, err
 		}
-		if err = s.writeFistTx(ctx, tx, p.bUserID, refundB, "pvp_refund",
+		if err = s.writeFistTx(ctx, tx, p.bUserID, refundB, "pvp_refund", pvpRoomRef(p.roomID),
 			fmt.Sprintf("PVP 对局超时未结算（%s场，平局退回）", p.tier)); err != nil {
 			tx.Rollback()
 			return swept, err
@@ -1234,7 +1239,7 @@ func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID ui
 			out.WinnerAmount, out.WinnerAmount, aUserID); err != nil {
 			return nil, err
 		}
-		if err = s.writeFistTx(ctx, tx, aUserID, out.WinnerAmount, "pvp_win",
+		if err = s.writeFistTx(ctx, tx, aUserID, out.WinnerAmount, "pvp_win", pvpRoomRef(roomID),
 			fmt.Sprintf("PVP 胜利奖励（%s场，对手：%s）", tierStr, bChatID)); err != nil {
 			return nil, err
 		}
@@ -1245,7 +1250,7 @@ func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID ui
 			out.WinnerAmount, out.WinnerAmount, bUserID); err != nil {
 			return nil, err
 		}
-		if err = s.writeFistTx(ctx, tx, bUserID, out.WinnerAmount, "pvp_win",
+		if err = s.writeFistTx(ctx, tx, bUserID, out.WinnerAmount, "pvp_win", pvpRoomRef(roomID),
 			fmt.Sprintf("PVP 胜利奖励（%s场，对手：%s）", tierStr, aChatID)); err != nil {
 			return nil, err
 		}
@@ -1264,7 +1269,7 @@ func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID ui
 			out.RefundA, aUserID); err != nil {
 			return nil, err
 		}
-		if err = s.writeFistTx(ctx, tx, aUserID, out.RefundA, "pvp_refund",
+		if err = s.writeFistTx(ctx, tx, aUserID, out.RefundA, "pvp_refund", pvpRoomRef(roomID),
 			fmt.Sprintf("PVP 平局退回（%s场，对手：%s）", tierStr, bChatID)); err != nil {
 			return nil, err
 		}
@@ -1273,7 +1278,7 @@ func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID ui
 			out.RefundB, bUserID); err != nil {
 			return nil, err
 		}
-		if err = s.writeFistTx(ctx, tx, bUserID, out.RefundB, "pvp_refund",
+		if err = s.writeFistTx(ctx, tx, bUserID, out.RefundB, "pvp_refund", pvpRoomRef(roomID),
 			fmt.Sprintf("PVP 平局退回（%s场，对手：%s）", tierStr, aChatID)); err != nil {
 			return nil, err
 		}
@@ -1452,8 +1457,12 @@ func (s *IronFistService) ensureFistAccountTx(ctx context.Context, tx *sql.Tx, u
 	return err
 }
 
-// writeFistTx 在事务内写一条 fist_transactions 流水
-func (s *IronFistService) writeFistTx(ctx context.Context, tx *sql.Tx, userID uint64, amount int64, txType, remark string) error {
+func pvpRoomRef(roomID uint64) string {
+	return fmt.Sprintf("ironfist_pvp_room:%d", roomID)
+}
+
+// writeFistTx 在事务内写一条带来源引用的 fist_transactions 流水。
+func (s *IronFistService) writeFistTx(ctx context.Context, tx *sql.Tx, userID uint64, amount int64, txType, refID, remark string) error {
 	var balanceAfter int64
 	if err := tx.QueryRowContext(ctx,
 		`SELECT balance FROM fist_accounts WHERE user_id = ?`, userID).
@@ -1461,8 +1470,8 @@ func (s *IronFistService) writeFistTx(ctx context.Context, tx *sql.Tx, userID ui
 		return err
 	}
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO fist_transactions (user_id, amount, balance_after, type, remark)
-		VALUES (?, ?, ?, ?, ?)
-	`, userID, amount, balanceAfter, txType, remark)
+		INSERT INTO fist_transactions (user_id, amount, balance_after, type, ref_id, remark)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, userID, amount, balanceAfter, txType, refID, remark)
 	return err
 }
