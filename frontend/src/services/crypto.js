@@ -1,19 +1,19 @@
 /**
- * 加密服务
- * - X25519 密钥对生成（用 ECDH P-256 代替，因为 Web Crypto API 原生不支持 X25519，
- *   而是支持 ECDH with P-256 / P-384。为兼容性使用 P-256，安全等级足够 MVP）
- * - AES-256-GCM 加解密
- * - IndexedDB 私钥持久化
- * - 安全改进：私钥默认加密存储，使用设备密钥保护
+ * Encryption service
+ * - X25519 key pair generation (replaced with ECDH P-256 as the Web Crypto API does not support X25519 natively,
+ * Instead, ECDH with P-256/P-384 is supported. Uses P-256 for compatibility, safety level sufficient MVP)
+ * - AES-256-GCM encryption and decryption
+ * - IndexedDB private key persistence
+ * - Security improvements: Private keys are stored encrypted by default and protected with device keys
  */
 
 const DB_NAME = 'e2eechat'
-const DB_VERSION = 2  // 升级版本以支持设备密钥存储
+const DB_VERSION = 2  //Upgrade version to support device key storage
 const STORE_NAME = 'identity'
-const DEVICE_KEY_STORE = 'device_key'  // 设备密钥存储
+const DEVICE_KEY_STORE = 'device_key'  //Device key storage
 const KEY_RECORD_ID = 'keypair'
 
-// ── IndexedDB 辅助 ──────────────────────────────────────────────
+// ── IndexedDB Auxiliary ───────────────────────────────────────────
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -23,7 +23,7 @@ function openDB() {
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME, { keyPath: 'id' })
       }
-      // 添加设备密钥存储
+      // Add device key storage
       if (!db.objectStoreNames.contains(DEVICE_KEY_STORE)) {
         db.createObjectStore(DEVICE_KEY_STORE, { keyPath: 'id' })
       }
@@ -63,19 +63,19 @@ async function dbDelete(key, storeName = STORE_NAME) {
   })
 }
 
-// ── 设备密钥（用于加密私钥）──────────────────────────────────────
+// ──Device key (used to encrypt the private key)────────────────────────────────────
 
 /**
- * 生成或加载设备密钥
- * CryptoKey 对象直接存入 IndexedDB（Structured Clone），raw bytes 永不落盘。
- * 旧格式（raw bytes）在首次读取时自动迁移。
+ * Generate or load device keys
+ * The CryptoKey object is directly stored in IndexedDB (Structured Clone), and the raw bytes are never dropped.
+ * The old format (raw bytes) is automatically migrated the first time it is read.
  */
 async function getOrCreateDeviceKey() {
   const record = await dbGet('device_encrypt_key', DEVICE_KEY_STORE)
   if (record) {
-    // 新格式：CryptoKey 对象直接存储
+    // New format: CryptoKey objects stored directly
     if (record.cryptoKey) return record.cryptoKey
-    // 旧格式：raw bytes → 迁移
+    // Old format: raw bytes → migrate
     if (record.key) {
       const key = await crypto.subtle.importKey(
         'raw',
@@ -89,7 +89,7 @@ async function getOrCreateDeviceKey() {
     }
   }
 
-  // 生成新的 non-extractable 密钥，直接存 CryptoKey 对象
+  // Generate new non-extractable keys and store them directly in CryptoKey objects
   const key = await crypto.subtle.generateKey(
     { name: 'AES-GCM', length: 256 },
     false,
@@ -99,7 +99,7 @@ async function getOrCreateDeviceKey() {
   return key
 }
 
-// ── Base64 工具 ──────────────────────────────────────────────────
+// ──Base64 Tools───────────────────────────────────────────────
 
 export function bufToB64(buf) {
   const bytes = new Uint8Array(buf)
@@ -118,20 +118,20 @@ export function b64ToBuf(b64) {
   return buf.buffer
 }
 
-// ── 密钥对管理 ──────────────────────────────────────────────────
+// ──Key pair management───────────────────────────────────────────────
 
 /**
- * 生成 ECDH P-256 密钥对，私钥加密后存入 IndexedDB，返回公钥的 Base64
- * 安全改进：私钥使用设备密钥加密存储，防止明文泄露
+ * Generate an ECDH P-256 key pair, encrypt the private key and store it in IndexedDB, and return the Base64 of the public key.
+ * Security improvements: Private keys are encrypted and stored using device keys to prevent plaintext leakage
  */
 export async function generateAndStoreKeyPair() {
   const keyPair = await crypto.subtle.generateKey(
     { name: 'ECDH', namedCurve: 'P-256' },
-    true, // extractable（用于导出备份）
+    true, //extractable (for exporting backups)
     ['deriveKey', 'deriveBits']
   )
 
-  // 导出公钥（SPKI 格式）和私钥（PKCS8 格式）
+  // Export public key (SPKI format) and private key (PKCS8 format)
   const [pubKeyBuf, privKeyBuf] = await Promise.all([
     crypto.subtle.exportKey('spki', keyPair.publicKey),
     crypto.subtle.exportKey('pkcs8', keyPair.privateKey)
@@ -139,7 +139,7 @@ export async function generateAndStoreKeyPair() {
 
   const pubKeyB64 = bufToB64(pubKeyBuf)
 
-  // 安全改进：使用设备密钥加密私钥
+  // Security improvement: Use device key to encrypt private keys
   const deviceKey = await getOrCreateDeviceKey()
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const encryptedPrivKey = await crypto.subtle.encrypt(
@@ -148,23 +148,23 @@ export async function generateAndStoreKeyPair() {
     privKeyBuf
   )
 
-  // 存储 CryptoKey 对象（用于日常操作）和加密的私钥备份
+  // Stores CryptoKey objects (used for daily operations) and encrypted private key backups
   await dbPut({
     id: KEY_RECORD_ID,
     publicKey: keyPair.publicKey,
-    privateKey: keyPair.privateKey,  // CryptoKey 对象，IndexedDB 可存储
+    privateKey: keyPair.privateKey,  //CryptoKey object, IndexedDB can store
     pubKeyB64,
-    encryptedPrivateKey: bufToB64(encryptedPrivKey),  // 加密后的私钥
-    deviceKeyIv: bufToB64(iv),  // 加密 IV
-    hasDeviceEncryption: true  // 标记使用设备密钥加密
+    encryptedPrivateKey: bufToB64(encryptedPrivKey),  //Encrypted private key
+    deviceKeyIv: bufToB64(iv),  //Encryption IV
+    hasDeviceEncryption: true  //Tags are encrypted using device keys
   })
 
   return pubKeyB64
 }
 
 /**
- * 从 IndexedDB 加载密钥对
- * 安全改进：支持设备密钥加密的私钥解密
+ * Load key pair from IndexedDB
+ * Security improvement: support for private key decryption of device key encryption
  */
 export async function loadKeyPair() {
   const record = await dbGet(KEY_RECORD_ID)
@@ -172,7 +172,7 @@ export async function loadKeyPair() {
 
   const keys = { id: KEY_RECORD_ID, pubKeyB64: record.pubKeyB64 }
 
-  // 总是导入公钥（无论是否加密模式）
+  // Always import public keys (regardless of encryption mode or not)
   if (record.pubKeyB64) {
     const pubKeyBuf = b64ToBuf(record.pubKeyB64)
     keys.publicKey = await crypto.subtle.importKey(
@@ -183,20 +183,20 @@ export async function loadKeyPair() {
     )
   }
 
-  // 如果是安全码加密模式且已解锁，使用缓存的私钥
+  // If it is security code encryption mode and unlocked, use the cached private key
   if (record.hasSecurityCode && decryptedPrivateKeyCache) {
     keys.privateKey = decryptedPrivateKeyCache
     keys.privKeyB64 = null
     return keys
   }
 
-  // 如果 IndexedDB 中有 CryptoKey 对象，直接使用（日常操作最快）
+  // If there is a CryptoKey object in IndexedDB, use it directly (the fastest for daily operations)
   if (record.privateKey) {
     keys.privateKey = record.privateKey
     return keys
   }
 
-  // 需要从加密存储解密私钥
+  // Need to decrypt private key from encrypted storage
   if (record.hasDeviceEncryption && record.encryptedPrivateKey && record.deviceKeyIv) {
     try {
       const deviceKey = await getOrCreateDeviceKey()
@@ -216,7 +216,7 @@ export async function loadKeyPair() {
         ['deriveKey', 'deriveBits']
       )
 
-      // 缓存 CryptoKey 对象以便后续快速访问
+      // Cache CryptoKey objects for quick subsequent access
       await dbPut({
         ...record,
         privateKey: keys.privateKey
@@ -225,12 +225,12 @@ export async function loadKeyPair() {
       return keys
     } catch (e) {
       console.error('[crypto] decrypt private key failed:', e)
-      // 解密失败，可能是设备密钥丢失
+      // Decryption failed, possibly because the device key is lost
       throw new Error('Failed to decrypt private key. Device key may be corrupted.')
     }
   }
 
-  // 兼容旧数据：从 Base64 重新导入私钥（旧版本明文存储）
+  // Compatible with old data: Re-import private keys from Base64 (old version is stored in clear text)
   if (record.privKeyB64) {
     const privKeyBuf = b64ToBuf(record.privKeyB64)
     keys.privateKey = await crypto.subtle.importKey(
@@ -245,8 +245,8 @@ export async function loadKeyPair() {
 }
 
 /**
- * 删除本地密钥（注销身份）
- * 同时删除设备密钥
+ * Delete local key (log out)
+ * Also delete the device key
  */
 export async function clearKeyPair() {
   await dbDelete(KEY_RECORD_ID)
@@ -254,11 +254,11 @@ export async function clearKeyPair() {
 }
 
 /**
- * 导出私钥为 Base64 文本（供用户备份）
- * 在安全码模式下需要已解锁状态
+ * Export the private key as Base64 text (for user backup)
+ * Requires unlocked status in security code mode
  */
 export async function exportPrivateKey() {
-  // 已解锁的加密模式
+  // Unlocked encryption mode
   if (decryptedPrivateKeyCache) {
     const buf = await crypto.subtle.exportKey('pkcs8', decryptedPrivateKeyCache)
     return bufToB64(buf)
@@ -271,13 +271,13 @@ export async function exportPrivateKey() {
     throw new Error('locked, please unlock first')
   }
 
-  // 从 CryptoKey 导出
+  // Export from CryptoKey
   if (record.privateKey) {
     const buf = await crypto.subtle.exportKey('pkcs8', record.privateKey)
     return bufToB64(buf)
   }
 
-  // 从加密存储解密后导出
+  // Export after decryption from encrypted storage
   if (record.hasDeviceEncryption && record.encryptedPrivateKey && record.deviceKeyIv) {
     const deviceKey = await getOrCreateDeviceKey()
     const encryptedBuf = b64ToBuf(record.encryptedPrivateKey)
@@ -291,14 +291,14 @@ export async function exportPrivateKey() {
     return bufToB64(privKeyBuf)
   }
 
-  // 兼容旧数据
+  // Compatible with old data
   return record.privKeyB64
 }
 
 /**
- * 从 Base64 私钥恢复身份（导入到 IndexedDB）
- * 安全改进：私钥使用设备密钥加密存储
- * 公钥可从私钥自动推导，无需用户提供
+ * Identity recovery from Base64 private key (import into IndexedDB)
+ * Security improvement: Private keys are stored encrypted using the device key
+ * The public key can be automatically derived from the private key without the need for user provision
  */
 export async function importPrivateKey(privKeyB64) {
   const privKeyBuf = b64ToBuf(privKeyB64)
@@ -310,10 +310,10 @@ export async function importPrivateKey(privKeyB64) {
     ['deriveKey', 'deriveBits']
   )
 
-  // 导出公钥（从私钥推导 SPKI 格式）
+  // Export public key (derive SPKI format from private key)
   const privKeyJwk = await crypto.subtle.exportKey('jwk', privateKey)
-  // ECDH P-256 私钥 JWK 包含 crv, d, key_ops, ext, kty, x, y
-  // 用 x, y 构建公钥
+  // ECDH P-256 private key JWK contains crv, d, key_ops, ext, kty, x, y
+  // Construct the public key using x, y
   const pubKeyJwk = {
     kty: privKeyJwk.kty,
     crv: privKeyJwk.crv,
@@ -332,7 +332,7 @@ export async function importPrivateKey(privKeyB64) {
 
   const pubKeyB64 = bufToB64(await crypto.subtle.exportKey('spki', publicKey))
 
-  // 安全改进：使用设备密钥加密私钥存储
+  // Security improvement: Use device key to encrypt private key storage
   const deviceKey = await getOrCreateDeviceKey()
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const encryptedPrivKey = await crypto.subtle.encrypt(
@@ -344,7 +344,7 @@ export async function importPrivateKey(privKeyB64) {
   await dbPut({
     id: KEY_RECORD_ID,
     publicKey,
-    privateKey,  // CryptoKey 对象
+    privateKey,  //CryptoKey object
     pubKeyB64,
     encryptedPrivateKey: bufToB64(encryptedPrivKey),
     deviceKeyIv: bufToB64(iv),
@@ -353,12 +353,12 @@ export async function importPrivateKey(privKeyB64) {
   return pubKeyB64
 }
 
-// ── 挑战签名 ──────────────────────────────────────────────────────
+// ── Challenge signature ──────────────────────────────────────────────────
 
 /**
- * 用 ECDH P-256 私钥对挑战码签名（以 ECDSA 方式重新导入同一私钥材料）
- * @param {string} nonce - 服务端返回的挑战码字符串
- * @returns {string} Base64 签名（IEEE P1363 格式，64字节）
+ * Sign the challenge code with the ECDH P-256 private key (re-import the same private key material in ECDSA mode)
+ * @param {string} nonce - the challenge code string returned by the server
+ * @returns {string} Base64 signature (IEEE P1363 format, 64 bytes)
  */
 export async function signChallenge(nonce) {
   const record = await loadKeyPair()
@@ -378,23 +378,23 @@ export async function signChallenge(nonce) {
   return bufToB64(sigBuf)
 }
 
-// ── 消息加密 ──────────────────────────────────────────────────────
+// ── Message encryption ─────────────────────────────────────────────────
 
 /**
- * 加密消息
- * @param {string} plaintext - 明文
- * @param {string} recipientPubKeyB64 - 接收方公钥（Base64 SPKI）
+ * Encrypted message
+ * @param {string} plaintext - plain text
+ * @param {string} recipientPubKeyB64 - recipient public key (Base64 SPKI)
  * @returns {{ ephemeralPubKey: string, iv: string, ciphertext: string }}
  */
 export async function encryptMessage(plaintext, recipientPubKeyB64) {
-  // 1. 生成临时密钥对
+  // 1. Generate a temporary key pair
   const ephemeralKeyPair = await crypto.subtle.generateKey(
     { name: 'ECDH', namedCurve: 'P-256' },
     true,
     ['deriveKey', 'deriveBits']
   )
 
-  // 2. 导入接收方公钥
+  // 2. Import the recipient’s public key
   const recipientPubKey = await crypto.subtle.importKey(
     'spki',
     b64ToBuf(recipientPubKeyB64),
@@ -403,7 +403,7 @@ export async function encryptMessage(plaintext, recipientPubKeyB64) {
     []
   )
 
-  // 3. ECDH 派生共享密钥 → AES-256-GCM
+  // 3. ECDH derived shared key → AES-256-GCM
   const sharedKey = await crypto.subtle.deriveKey(
     { name: 'ECDH', public: recipientPubKey },
     ephemeralKeyPair.privateKey,
@@ -412,7 +412,7 @@ export async function encryptMessage(plaintext, recipientPubKeyB64) {
     ['encrypt']
   )
 
-  // 4. AES-256-GCM 加密
+  // 4. AES-256-GCM encryption
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const encoded = new TextEncoder().encode(plaintext)
   const ciphertextBuf = await crypto.subtle.encrypt(
@@ -421,7 +421,7 @@ export async function encryptMessage(plaintext, recipientPubKeyB64) {
     encoded
   )
 
-  // 5. 导出临时公钥
+  // 5. Export temporary public key
   const ephPubBuf = await crypto.subtle.exportKey('spki', ephemeralKeyPair.publicKey)
 
   return {
@@ -432,15 +432,15 @@ export async function encryptMessage(plaintext, recipientPubKeyB64) {
 }
 
 /**
- * 解密消息
+ * Decrypt message
  * @param {{ ephemeralPubKey: string, iv: string, ciphertext: string }} payload
- * @returns {string} 明文
+ * @returns {string} plain text
  */
 export async function decryptMessage(payload) {
   const record = await loadKeyPair()
   if (!record) throw new Error('no private key')
 
-  // 1. 导入发送方临时公钥
+  // 1. Import the sender’s temporary public key
   const ephPubKey = await crypto.subtle.importKey(
     'spki',
     b64ToBuf(payload.ephemeralPubKey),
@@ -449,7 +449,7 @@ export async function decryptMessage(payload) {
     []
   )
 
-  // 2. ECDH 派生共享密钥
+  // 2. ECDH derives shared key
   const sharedKey = await crypto.subtle.deriveKey(
     { name: 'ECDH', public: ephPubKey },
     record.privateKey,
@@ -458,7 +458,7 @@ export async function decryptMessage(payload) {
     ['decrypt']
   )
 
-  // 3. AES-256-GCM 解密
+  // 3. AES-256-GCM decryption
   const plainBuf = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: b64ToBuf(payload.iv) },
     sharedKey,
@@ -468,17 +468,17 @@ export async function decryptMessage(payload) {
   return new TextDecoder().decode(plainBuf)
 }
 
-// ── 安全码锁定（Phase 3）─────────────────────────────────────────
+// ── Security Code Lock (Phase 3)───────────────────────────────────────
 
 const STORE_LOCK = 'lock_config'
 
-// 内存变量（不持久化）
-let decryptedPrivateKeyCache = null  // 解锁后的私钥
+// Memory variables (not persisted)
+let decryptedPrivateKeyCache = null  //Unlocked private key
 
-// ── 派生加密密钥 ─────────────────────────────────────────────────
+// ── Derive the encryption key ─────────────────────────────────────────────
 
 /**
- * 用 PBKDF2 从安全码派生 AES-256-GCM 加密密钥
+ * Deriving AES-256-GCM encryption keys from security codes using PBKDF2
  */
 async function deriveKeyFromCode(code, salt) {
   const codeKeyMaterial = await crypto.subtle.importKey(
@@ -503,31 +503,31 @@ async function deriveKeyFromCode(code, salt) {
   )
 }
 
-// ── 设置安全码（加密私钥）────────────────────────────────────────
+// ──Set security code (encrypted private key)──────────────────────────────────────
 
 /**
- * 设置安全码，将 IndexedDB 中的私钥加密存储
- * @param {string} code - 6 位数字安全码
+ * Set a security code to encrypt and store the private key in IndexedDB
+ * @param {string} code - 6-digit security code
  */
 export async function setupSecurityCode(code) {
-  // 校验格式
+  // Check format
   if (!/^\d{6}$/.test(code)) {
-    throw new Error('安全码必须为 6 位纯数字')
+    throw new Error('The security code must be 6 pure digits')
   }
 
-  // 加载现有私钥
+  // Load existing private key
   const record = await loadKeyPair()
   if (!record) {
     throw new Error('no key pair found')
   }
 
-  // 1. 生成盐值
+  // 1. Generate salt value
   const salt = crypto.getRandomValues(new Uint8Array(16))
 
-  // 2. 派生加密密钥
+  // 2. Derive encryption keys
   const encryptionKey = await deriveKeyFromCode(code, salt)
 
-  // 3. 加密私钥（PKCS8 格式）
+  // 3. Encrypted private key (PKCS8 format)
   const privKeyBuf = record.privKeyB64 ? b64ToBuf(record.privKeyB64)
     : await crypto.subtle.exportKey('pkcs8', record.privateKey)
   const iv = crypto.getRandomValues(new Uint8Array(12))
@@ -537,7 +537,7 @@ export async function setupSecurityCode(code) {
     privKeyBuf
   )
 
-  // 4. 存储加密后的私钥 + 盐值 + IV
+  // 4. Store the encrypted private key + salt value + IV
   await dbPut({
     id: KEY_RECORD_ID,
     encryptedPrivateKey: bufToB64(encryptedPrivateKey),
@@ -548,18 +548,18 @@ export async function setupSecurityCode(code) {
     updatedAt: Date.now()
   })
 
-  // 5. 清除内存缓存
+  // 5. Clear memory cache
   decryptedPrivateKeyCache = null
 
   return true
 }
 
-// ── 验证安全码（通过尝试解密）────────────────────────────────────
+// ──Verify security code (by trying to decrypt)───────────────────────────────────
 
 /**
- * 验证安全码是否正确（通过尝试解密私钥）
- * @param {string} code - 6 位数字安全码
- * @returns {boolean} 是否成功
+ * Verify that the security code is correct (by trying to decrypt the private key)
+ * @param {string} code - 6-digit security code
+ * @returns {boolean} whether successful
  */
 export async function verifySecurityCode(code) {
   const record = await dbGet(KEY_RECORD_ID)
@@ -571,23 +571,23 @@ export async function verifySecurityCode(code) {
   const encryptionKey = await deriveKeyFromCode(code, salt)
 
   try {
-    // 尝试解密私钥
+    // Try to decrypt the private key
     const privateKeyBuf = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: b64ToBuf(record.iv) },
       encryptionKey,
       b64ToBuf(record.encryptedPrivateKey)
     )
 
-    // 解密成功，导入私钥
+    // Decryption successful, import private key
     const privateKey = await crypto.subtle.importKey(
       'pkcs8',
       privateKeyBuf,
       { name: 'ECDH', namedCurve: 'P-256' },
-      true,  // extractable: true，允许导出用于备份
+      true,  //extractable: true, allows exporting for backup
       ['deriveKey', 'deriveBits']
     )
 
-    // 缓存解密后的私钥
+    // Cache decrypted private key
     decryptedPrivateKeyCache = privateKey
 
     return true
@@ -596,10 +596,10 @@ export async function verifySecurityCode(code) {
   }
 }
 
-// ── 获取解密后的私钥 ─────────────────────────────────────────────
+// ── Obtain the decrypted private key ──────────────────────────────────────────
 
 /**
- * 获取当前缓存的私钥（需先解锁）
+ * Get the currently cached private key (needs to be unlocked first)
  * @returns {CryptoKey|null}
  */
 export function getCachedPrivateKey() {
@@ -607,61 +607,61 @@ export function getCachedPrivateKey() {
 }
 
 /**
- * 检查是否已解锁
+ * Check if it is unlocked
  */
 export function isUnlocked() {
   return decryptedPrivateKeyCache !== null
 }
 
 /**
- * 检查是否设置了安全码
+ * Check if security code is set
  */
 export async function hasSecurityCode() {
   const record = await dbGet(KEY_RECORD_ID)
   return !!(record && record.hasSecurityCode)
 }
 
-// ── 锁定 / 解锁 ──────────────────────────────────────────────────
+// ──Lock/Unlock ──────────────────────────────────────────────
 
 /**
- * 立即锁定（清除内存中的私钥缓存）
+ * Lock now (clear private key cache in memory)
  */
 export function lock() {
   decryptedPrivateKeyCache = null
 }
 
 /**
- * 解锁（用安全码解密私钥）
+ * Unlock (decrypt private key with security code)
  */
 export async function unlock(code) {
   const success = await verifySecurityCode(code)
   if (success) {
-    // 重置活动计时器
+    // Reset activity timer
     resetActivityTimer()
   }
   return success
 }
 
-// ── 关闭安全码（恢复明文存储）────────────────────────────────────
+// ── Turn off security code (restore plain text storage)──────────────────────────────────
 
 /**
- * 关闭安全码功能（需用正确安全码先解锁，然后恢复明文存储）
+ * Turn off the security code function (you need to use the correct security code to unlock first, and then restore plain text storage)
  */
 export async function disableSecurityCode(code) {
-  // 先验证安全码
+  // Verify security code first
   const verified = await verifySecurityCode(code)
   if (!verified) {
-    throw new Error('安全码错误')
+    throw new Error('Security code error')
   }
 
-  // 从缓存获取私钥
+  // Get private key from cache
   if (!decryptedPrivateKeyCache) {
     throw new Error('private key not in memory')
   }
 
   const record = await dbGet(KEY_RECORD_ID)
 
-  // 恢复无安全码模式：仅存 CryptoKey 对象，不存 raw bytes（防止明文落盘）
+  // Restore no security code mode: only CryptoKey objects are saved, no raw bytes are saved (to prevent clear text from being written to disk)
   await dbPut({
     id: KEY_RECORD_ID,
     privateKey: decryptedPrivateKeyCache,
@@ -670,20 +670,20 @@ export async function disableSecurityCode(code) {
     updatedAt: Date.now()
   })
 
-  // 清除缓存
+  // clear cache
   decryptedPrivateKeyCache = null
 
   return true
 }
 
-// ── 超时自动锁定 ─────────────────────────────────────────────────
+// ── Automatically lock after timeout ──────────────────────────────────────────────
 
-const DEFAULT_TIMEOUT_HOURS = 4  // 默认 4 小时
+const DEFAULT_TIMEOUT_HOURS = 4  //Default 4 hours
 let autoLockTimer = null
 let lastActivity = Date.now()
 
 /**
- * 加载超时配置
+ * Load timeout configuration
  */
 export async function loadLockConfig() {
   const config = await dbGet(STORE_LOCK)
@@ -691,38 +691,38 @@ export async function loadLockConfig() {
 }
 
 /**
- * 保存超时配置
+ * Save timeout configuration
  */
 export async function saveLockConfig(timeoutHours) {
   await dbPut({ id: STORE_LOCK, timeoutHours })
 }
 
 /**
- * 重置活动计时器
+ * Reset activity timer
  */
 function resetActivityTimer() {
   lastActivity = Date.now()
 }
 
 /**
- * 启动自动锁定检测
+ * Enable automatic lock detection
  */
 export function startAutoLock(onLock) {
-  // 清除旧的
+  // clear old
   if (autoLockTimer) clearInterval(autoLockTimer)
 
-  // 监听用户活动
+  // Monitor user activity
   const events = ['click', 'keydown', 'touchstart', 'mousemove', 'scroll']
   const handler = () => { lastActivity = Date.now() }
   events.forEach(e => document.addEventListener(e, handler, { passive: true }))
 
-  // 每分钟检测一次
+  // Check every minute
   autoLockTimer = setInterval(async () => {
-    // 检查是否已设置安全码
+    // Check if the security code has been set
     const hasCode = await hasSecurityCode()
     if (!hasCode) return
 
-    // 检查是否已锁定
+    // Check if it is locked
     if (!decryptedPrivateKeyCache) return
 
     const elapsed = Date.now() - lastActivity
@@ -735,17 +735,17 @@ export function startAutoLock(onLock) {
     }
   }, 60000)
 
-  // 返回清理函数
+  // Return cleaning function
   return () => {
     events.forEach(e => document.removeEventListener(e, handler))
     if (autoLockTimer) clearInterval(autoLockTimer)
   }
 }
 
-// ── 文件加解密（P2P 文件传输）────────────────────────────────────
+// ──File encryption and decryption (P2P file transfer)───────────────────────────────────
 
 /**
- * 加密文件（整体加密，供 P2P 传输使用）
+ * Encrypted files (entirely encrypted for P2P transfers)
  * @param {ArrayBuffer} fileBuffer
  * @param {string} recipientPubKeyB64
  * @returns {{ ephemeralPubKey: string, iv: string, ciphertext: ArrayBuffer }}
@@ -789,7 +789,7 @@ export async function encryptFile(fileBuffer, recipientPubKeyB64) {
 }
 
 /**
- * 解密文件
+ * Decrypt files
  * @param {{ ephemeralPubKey: string, iv: string, ciphertext: ArrayBuffer }} payload
  * @returns {ArrayBuffer}
  */
@@ -820,17 +820,17 @@ export async function decryptFile(payload) {
   )
 }
 
-// ── 导出私钥（兼容安全码模式）────────────────────────────────────
+// ──Export private key (compatible with security code mode)───────────────────────────────────
 
 /**
- * 导出私钥（需在解锁状态下）
+ * Export private key (need to be in unlocked state)
  */
 export async function exportPrivateKeyWithCode() {
   if (decryptedPrivateKeyCache) {
     const buf = await crypto.subtle.exportKey('pkcs8', decryptedPrivateKeyCache)
     return bufToB64(buf)
   }
-  // 回退到明文模式
+  // Fallback to clear text mode
   const record = await loadKeyPair()
   if (!record) throw new Error('no key pair found')
   return record.privKeyB64 || bufToB64(await crypto.subtle.exportKey('pkcs8', record.privateKey))

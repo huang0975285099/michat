@@ -1,18 +1,18 @@
-// 铁拳 - 三期 3D 战斗渲染器（Babylon.js，方案B）
-// 工厂返回控制器：{ setCharge, playRound, resize, dispose, ready }。
-// 渲染无关引擎(IronFistGame)与 HUD 不变；本控制器只消费每回合结算结果 + 蓄力态。
-// 见 docs/ironfist.md 第十三/二十二节。
+// Tekken - Phase 3 3D combat renderer (Babylon.js, Option B)
+// The factory returns the controller: { setCharge, playRound, resize, dispose, ready }.
+// The rendering-independent engine (IronFistGame) and HUD remain unchanged; this controller only consumes the settlement result + charging state of each round.
+// See docs/ironfist.md Section 13/22.
 
 import * as BABYLON from '@babylonjs/core'
-import '@babylonjs/loaders/glTF'  // 注册 glTF/glb 加载器（副作用 import）
+import '@babylonjs/loaders/glTF'  //Register glTF/glb loader (side-effect import)
 import { Fighter3D, PAL_ME_3D, PAL_OPP_3D } from './Fighter3D.js'
 
-// glb 放在 public/ 下。用 BASE_URL 拼接以兼容两种部署：
-// 网页端 BASE_URL='/' → '/games/ironfist/'；Electron BASE_URL='./' → './games/ironfist/'
-// （Electron 用 file:// 加载，绝对路径 '/games' 会指向磁盘根而加载失败）
+// glb is placed under public/. Splice with BASE_URL to be compatible with both deployments:
+// Web BASE_URL='/' → '/games/ironfist/'; Electron BASE_URL='./' → './games/ironfist/'
+// (Electron is loaded using file://, the absolute path '/games' will point to the root of the disk and the loading will fail)
 const GLB_ROOT = import.meta.env.BASE_URL + 'games/ironfist/'
-const GLB_FILE = 'fighter.glb'       // 我方模型（Vanguard）
-const GLB_FILE_OPP = 'fighter.glb'  // 对手模型（Mutant）；缺省则回退用 fighter.glb
+const GLB_FILE = 'fighter.glb'       //Our model (Vanguard)
+const GLB_FILE_OPP = 'fighter.glb'  //Opponent model (Mutant); default falls back to fighter.glb
 
 const CRIT_THRESHOLD = 18
 
@@ -21,29 +21,29 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
   const scene = new BABYLON.Scene(engine)
   scene.clearColor = new BABYLON.Color4(0.05, 0.04, 0.10, 1)
 
-  // 机位：正面略俯，支持拖拽旋转 / 滚轮缩放（带限位，避免转到台底或拉太远）
+  // Camera position: Slightly tilted from the front, supports drag rotation/wheel zoom (with limiter to avoid turning to the bottom of the stage or pulling too far)
   const cam = new BABYLON.ArcRotateCamera('cam', -Math.PI / 2, 1.15, 7.8, new BABYLON.Vector3(0, 1.15, 0), scene)
   cam.fov = 0.8
   cam.minZ = 0.1
   cam.attachControl(canvas, true)
-  cam.lowerBetaLimit = 0.6        // 最高俯角（不飞到正上方看秃头）
-  cam.upperBetaLimit = 1.46       // 最低视角（不钻到台面下）
-  cam.lowerRadiusLimit = 5.5      // 最近（不穿进角色）
-  cam.upperRadiusLimit = 10       // 最远
-  cam.wheelDeltaPercentage = 0.01 // 滚轮缩放手感
-  cam.panningSensibility = 0      // 禁用平移：只转不挪，镜头始终对着擂台中心
+  cam.lowerBetaLimit = 0.6        //The highest angle of depression (do not fly directly above to see the bald head)
+  cam.upperBetaLimit = 1.46       //Lowest viewing angle (without getting under the table)
+  cam.lowerRadiusLimit = 5.5      //Recently (without entering the character)
+  cam.upperRadiusLimit = 10       //farthest
+  cam.wheelDeltaPercentage = 0.01 //Scroll wheel zoom feel
+  cam.panningSensibility = 0      //Disable panning: only turn but not move, the camera is always facing the center of the ring
   cam.angularSensibilityX = 1400
   cam.angularSensibilityY = 1400
 
-  // 环境光照(IBL / studio.hdr)按需求停用——仅靠下方灯光照明。
+  // Ambient lighting (IBL/studio.hdr) is deactivated on demand - only illuminated by the light below.
 
-  // 灯光：半球补光 + 上方主光 + 正面中性补光 + 蓝/红边缘光（呼应参考图左蓝右红）
+  // Lighting: hemispheric fill light + upper main light + front neutral fill light + blue/red edge light (echoing the blue on the left and red on the right in the reference picture)
   const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene)
-  hemi.intensity = 2  // 无 IBL，整体补光提回（人物为主角，提亮）
+  hemi.intensity = 2  //No IBL, overall fill light is restored (the character is the protagonist, brightened)
   hemi.groundColor = new BABYLON.Color3(0.14, 0.14, 0.24)
   const dir = new BABYLON.DirectionalLight('dir', new BABYLON.Vector3(-0.2, -0.95, 0.35), scene)
   dir.intensity = 2
-  // 正面补光：相机一侧(−z)一盏中性灯，专打角色朝镜头的那面，解决"太暗看不清"
+  // Frontal fill light: A neutral light on the side of the camera (−z), focusing on the side of the character facing the camera to solve the problem of "too dark to see clearly"
   const fill = new BABYLON.PointLight('pFill', new BABYLON.Vector3(0, 2.6, -4.8), scene)
   fill.diffuse = new BABYLON.Color3(1.0, 0.97, 0.92); fill.intensity = 24; fill.range = 20
   // fill.diffuse = new BABYLON.Color3(1.0, 0.97, 0.92); fill.intensity = 36; fill.range = 20
@@ -52,11 +52,11 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
   const red = new BABYLON.PointLight('pRed', new BABYLON.Vector3(3.4, 2.2, -2.2), scene)
   red.diffuse = new BABYLON.Color3(1.0, 0.35, 0.32); red.intensity = 13
 
-  // ── 后期 ───────────────────────────────────────────────
-  // GlowLayer：让 emissive 物体（蓄力光环、命中火花、擂台环、受击高亮）真正"发光"溢出
+  // ──Later period────────────────────────────────────────────
+  // GlowLayer: Make emissive objects (charged halo, hit spark, ring ring, hit highlight) truly "glow" overflow
   const glow = new BABYLON.GlowLayer('glow', scene, { blurKernelSize: 32 })
   glow.intensity = 0.55
-  // 渲染管线：Bloom 整体辉光 + FXAA 抗锯齿 + ACES 色调映射 + 暗角，氛围/质感一次到位
+  // Rendering pipeline: Bloom overall glow + FXAA anti-aliasing + ACES tone mapping + vignetting, atmosphere/texture is in place at once
   const pipe = new BABYLON.DefaultRenderingPipeline('pipe', true, scene, [cam])
   pipe.fxaaEnabled = true
   pipe.bloomEnabled = true
@@ -73,15 +73,15 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
   pipe.imageProcessing.vignetteWeight = 1.8
   pipe.imageProcessing.vignetteColor = new BABYLON.Color4(0, 0, 0, 0)
 
-  // 擂台：暗色侧壁(柱体) + 金色科技顶面(程序贴图，自发光不泛白) + 金色霓虹边环
+  // Arena: dark side walls (cylinder) + golden technology top (programmed map, self-illuminating without whitening) + golden neon edge ring
   const plat = BABYLON.MeshBuilder.CreateCylinder('plat', { diameter: 5.4, height: 0.3, tessellation: 56 }, scene)
   const pm = new BABYLON.StandardMaterial('pm', scene)
   pm.diffuseColor = new BABYLON.Color3(0.10, 0.07, 0.035)
   pm.emissiveColor = new BABYLON.Color3(0.04, 0.028, 0.012)
-  pm.specularColor = new BABYLON.Color3(0.05, 0.04, 0.02)  // 压掉白高光，避免被强灯打爆
+  pm.specularColor = new BABYLON.Color3(0.05, 0.04, 0.02)  //Suppress the white highlights to avoid being blown away by strong lights
   plat.material = pm; plat.position.y = -0.15
 
-  // 金色冠军赛顶面（程序生成：同心金环 + 辐射科技线 + 中心五角星徽记）
+  // Golden Championship top surface (procedurally generated: concentric golden rings + radiating technology lines + central five-pointed star emblem)
   function _star(c, cx, cy, ro, ri, n) {
     c.beginPath()
     for (let i = 0; i < n * 2; i++) {
@@ -100,41 +100,41 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     bg.addColorStop(0, '#2c1e0b'); bg.addColorStop(0.7, '#1a1208'); bg.addColorStop(1, '#0d0904')
     c.fillStyle = bg; c.fillRect(0, 0, s, s)
     c.translate(R, R)
-    for (let i = 0; i < 5; i++) {            // 同心金环
+    for (let i = 0; i < 5; i++) {            //Concentric golden rings
       c.strokeStyle = 'rgba(255,194,77,' + (0.45 + i * 0.1) + ')'
       c.lineWidth = i === 4 ? 11 : 4
       c.beginPath(); c.arc(0, 0, R * (0.22 + i * 0.16), 0, 7); c.stroke()
     }
-    c.strokeStyle = 'rgba(255,138,61,0.38)'; c.lineWidth = 3   // 辐射科技线
+    c.strokeStyle = 'rgba(255,138,61,0.38)'; c.lineWidth = 3   //Radiation Technology Line
     for (let i = 0; i < 16; i++) {
       const a = i / 16 * Math.PI * 2
       c.beginPath(); c.moveTo(Math.cos(a) * R * 0.40, Math.sin(a) * R * 0.40); c.lineTo(Math.cos(a) * R * 0.84, Math.sin(a) * R * 0.84); c.stroke()
     }
-    // 中心徽记：暗圆底 + 金环 + 金色五角星
+    // Central emblem: dark round base + gold ring + golden five-pointed star
     c.fillStyle = 'rgba(18,12,6,0.96)'; c.beginPath(); c.arc(0, 0, R * 0.18, 0, 7); c.fill()
     c.strokeStyle = 'rgba(255,194,77,0.9)'; c.lineWidth = 5; c.beginPath(); c.arc(0, 0, R * 0.18, 0, 7); c.stroke()
     c.fillStyle = 'rgba(255,212,125,1)'; _star(c, 0, 0, R * 0.12, R * 0.05, 5)
-    // 整体压暗：金台是背景、别抢角色（叠一层半透明黑）
+    // Overall darkening: the golden stage is the background, don’t steal the role (overlay a layer of translucent black)
     // c.fillStyle = 'rgba(0,0,0,0.5)'; c.fillRect(-R, -R, s, s)
     t.update()
     return t
   }
   const platTop = BABYLON.MeshBuilder.CreateDisc('platTop', { radius: 2.68, tessellation: 64 }, scene)
-  platTop.rotation.x = -Math.PI / 2          // 立面 → 朝上
-  platTop.position.y = 0.012                  // 紧贴柱顶、压在边环之下，防 z-fighting
+  platTop.rotation.x = -Math.PI / 2          //facade → upward
+  platTop.position.y = 0.012                  //Close to the top of the column and pressed under the edge ring to prevent z-fighting
   const ptm = new BABYLON.StandardMaterial('ptm', scene)
   ptm.emissiveTexture = _platTopTex(); ptm.disableLighting = true
   ptm.specularColor = new BABYLON.Color3(0, 0, 0); ptm.backFaceCulling = false
   platTop.material = ptm; platTop.isPickable = false
 
-  // 金色霓虹边环
+  // gold neon edge ring
   const ring = BABYLON.MeshBuilder.CreateTorus('ring', { diameter: 5.2, thickness: 0.08, tessellation: 56 }, scene)
   const rm = new BABYLON.StandardMaterial('rm', scene)
   rm.emissiveColor = new BABYLON.Color3(1.0, 0.62, 0.18); rm.disableLighting = true
   ring.material = rm; ring.position.y = 0.02
 
-  // ── 环境层：星空穹顶 / 反光地面 / 能量网格 / 浮尘 / 光柱（全部程序生成，无额外贴图文件）──
-  // 软粒子贴图：中心实、边缘透的径向渐变，用于浮尘与（必要时）火花
+  // ──Environmental layer: starry sky dome/reflective ground/energy grid/floating dust/light beam (all procedurally generated, no additional texture files)──
+  // Soft particle map: radial gradient with solid center and transparent edges, for dust and (if necessary) sparks
   function _softTex(name) {
     const t = new BABYLON.DynamicTexture(name, 64, scene, false)
     const c = t.getContext()
@@ -147,7 +147,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     return t
   }
 
-  // 1) 渐变星空穹顶：顶暗→地平线偏紫，撒星点；infiniteDistance 跟随相机当天空盒用
+  // 1) Gradient starry sky dome: the top is dark → the horizon is purple, and star points are scattered; infiniteDistance follows the camera and is used as a sky box
   function _skyTex() {
     const s = 512
     const t = new BABYLON.DynamicTexture('sky', { width: s, height: s }, scene, true)
@@ -155,7 +155,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     const g = c.createLinearGradient(0, 0, 0, s)
     g.addColorStop(0, '#05030d'); g.addColorStop(0.55, '#0a0820'); g.addColorStop(1, '#160b2c')
     c.fillStyle = g; c.fillRect(0, 0, s, s)
-    // 星云团：几坨柔光色斑，给纯渐变天空加远景层次
+    // Nebula cluster: several soft light color spots, adding distant layers to the pure gradient sky
     for (const [col, al] of [['#3a1d6e', 0.20], ['#1d3a6e', 0.17], ['#6e1d52', 0.15], ['#24306e', 0.13]]) {
       const bx = Math.random() * s, by = Math.random() * s * 0.75, br = 120 + Math.random() * 140
       const rg = c.createRadialGradient(bx, by, 0, bx, by, br)
@@ -174,15 +174,15 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
   const skyM = new BABYLON.StandardMaterial('skyM', scene)
   skyM.emissiveTexture = _skyTex(); skyM.disableLighting = true; skyM.backFaceCulling = false
   sky.material = skyM; sky.infiniteDistance = true; sky.isPickable = false
-  skyM.fogEnabled = false  // 天空不吃雾（否则星空被雾洗白）
-  glow.addExcludedMesh(sky)  // 不让整穹顶进辉光（只想要星点微亮，不要全屏发灰）
+  skyM.fogEnabled = false  //The sky does not eat fog (otherwise the starry sky will be washed white by fog)
+  glow.addExcludedMesh(sky)  //Prevent the entire dome from entering the glow (just want the star points to be slightly bright, not the entire screen to be gray)
 
-  // 纵深雾：远处地面/网格往暗里融，画面有"无限延伸"的深度；密度低到几乎不碰中央角色
+  // Depth fog: The ground/grid in the distance melts into darkness, and the picture has an "infinitely extending" depth; the density is so low that the central character is barely touched
   scene.fogMode = BABYLON.Scene.FOGMODE_EXP2
   scene.fogColor = new BABYLON.Color3(0.03, 0.025, 0.06)
   scene.fogDensity = 0.024
 
-  // 2) 反光金属地面：暗光泽 PBR 接住蓝/红点光，让擂台落在空间里而非浮在黑底
+  // 2) Reflective metal floor: Dark gloss PBR catches the blue/red dot light, allowing the ring to fall in space instead of floating on the black bottom
   const floor = BABYLON.MeshBuilder.CreateGround('floor', { width: 40, height: 40 }, scene)
   floor.position.y = -0.32
   const fm = new BABYLON.PBRMaterial('fm', scene)
@@ -190,7 +190,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
   fm.metallic = 0.85; fm.roughness = 0.38; fm.environmentIntensity = 0.55
   floor.material = fm; floor.isPickable = false
 
-  // 3) 地面能量网格：从擂台向外辐射的同心环+射线，边缘径向淡出，带呼吸脉冲
+  // 3) Ground energy grid: concentric rings + rays radiating outward from the arena, radially fading out at the edges, with breathing pulses
   function _gridTex() {
     const s = 1024
     const t = new BABYLON.DynamicTexture('grid', { width: s, height: s }, scene, true)
@@ -199,7 +199,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     c.strokeStyle = 'rgba(120,150,240,0.8)'; c.lineWidth = 2
     for (let r = 70; r < s / 2; r += 72) { c.beginPath(); c.arc(0, 0, r, 0, 7); c.stroke() }
     for (let i = 0; i < 24; i++) { const a = i / 24 * Math.PI * 2; c.beginPath(); c.moveTo(0, 0); c.lineTo(Math.cos(a) * s / 2, Math.sin(a) * s / 2); c.stroke() }
-    // 径向遮罩：中心实、边缘透，做成圆形软淡出（避免方形硬边）
+    // Radial mask: solid center, transparent edges, made into a round soft fade (avoid square hard edges)
     c.globalCompositeOperation = 'destination-in'
     const g = c.createRadialGradient(0, 0, s * 0.1, 0, 0, s * 0.5)
     g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)')
@@ -216,7 +216,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
   gm.backFaceCulling = false
   gridDisc.material = gm; gridDisc.isPickable = false
 
-  // 5) 空气浮尘：缓慢上升的发光微粒，给空间体积感与生命力
+  // 5) Airborne dust: slowly rising luminous particles give the space a sense of volume and vitality
   const motes = new BABYLON.ParticleSystem('motes', 220, scene)
   motes.particleTexture = _softTex('mote')
   motes.emitter = new BABYLON.Vector3(0, 1.0, 0)
@@ -236,7 +236,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
   motes.updateSpeed = 0.01
   motes.start()
 
-  // 6) 地面薄雾：擂台底部贴地的彩色雾气，大而软、缓慢流动
+  // 6) Ground mist: The colored mist at the bottom of the arena is large, soft and flowing slowly.
   const mist = new BABYLON.ParticleSystem('mist', 60, scene)
   mist.particleTexture = _softTex('mist')
   mist.emitter = new BABYLON.Vector3(0, -0.15, 0)
@@ -255,7 +255,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
   mist.updateSpeed = 0.008
   mist.start()
 
-  // 7) 环绕能量火花：几颗发光粒子绕擂台公转 + 上下浮动，增加动态
+  // 7) Surrounding energy sparks: Several luminous particles revolve around the ring + float up and down to increase dynamics
   const sparkM = new BABYLON.StandardMaterial('sparkM', scene)
   sparkM.emissiveColor = new BABYLON.Color3(0.6, 0.85, 1.0); sparkM.disableLighting = true; sparkM.fogEnabled = false
   const sparks = []
@@ -265,7 +265,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     sparks.push({ mesh: s, a: (i / 6) * Math.PI * 2, r: 2.9 + (i % 2) * 0.35, h: 0.9 + (i % 3) * 0.45, sp: 0.00045 + i * 0.00004 })
   }
 
-  // 网格+霓虹环呼吸脉冲 + 火花公转（合并到一个观察者）
+  // Grid + Neon Ring Breathing Pulse + Spark Revolution (merged into one observer)
   const _pulseT0 = performance.now()
   scene.onBeforeRenderObservable.add(() => {
     const now = performance.now() - _pulseT0
@@ -279,23 +279,23 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     }
   })
 
-  // 8) 看台建筑：lathe 旋转阶梯剖面 → 环绕擂台的体育馆碗状看台（暗色 + 冷色台阶边线，不与金台抢眼）
+  // 8) Grandstand building: lathe spiral staircase section → bowl-shaped grandstand of the stadium surrounding the ring (dark color + cold color step edge, not eye-catching with the golden stage)
   // {
   //   const prof = [new BABYLON.Vector3(6.8, -0.35, 0)]
   //   for (let i = 0; i < 6; i++) {
   //     const r0 = 7.0 + i * 1.45, y0 = -0.1 + i * 0.6
-  //     prof.push(new BABYLON.Vector3(r0, y0, 0))            // 台阶踏面内沿
-  //     prof.push(new BABYLON.Vector3(r0 + 1.25, y0, 0))     // 踏面外沿
-  //     prof.push(new BABYLON.Vector3(r0 + 1.25, y0 + 0.6, 0)) // 竖起的踢面
+  // prof.push(new BABYLON.Vector3(r0, y0, 0)) // Inner edge of step tread
+  // prof.push(new BABYLON.Vector3(r0 + 1.25, y0, 0)) // outer edge of tread
+  // prof.push(new BABYLON.Vector3(r0 + 1.25, y0 + 0.6, 0)) // Erected riser
   //   }
-  //   prof.push(new BABYLON.Vector3(16.6, 3.7, 0))           // 顶圈收口
+  // prof.push(new BABYLON.Vector3(16.6, 3.7, 0)) // Top ring closing
   //   const stands = BABYLON.MeshBuilder.CreateLathe('stands', { shape: prof, tessellation: 72, sideOrientation: BABYLON.Mesh.DOUBLESIDE }, scene)
   //   const sm = new BABYLON.StandardMaterial('standsMat', scene)
   //   sm.diffuseColor = new BABYLON.Color3(0.05, 0.055, 0.085)
   //   sm.specularColor = new BABYLON.Color3(0.02, 0.02, 0.03)
   //   sm.emissiveColor = new BABYLON.Color3(0.015, 0.018, 0.03)
   //   stands.material = sm; stands.isPickable = false
-  //   // 各层踏面前沿冷色霓虹边线：定义看台层次（暗，避免与金台争抢）
+  // //Cold neon edge lines at the front of each floor: define the level of the stands (dark to avoid competing with the golden platform)
   //   const edgeMat = new BABYLON.StandardMaterial('standEdge', scene)
   //   edgeMat.emissiveColor = new BABYLON.Color3(0.16, 0.30, 0.6); edgeMat.disableLighting = true
   //   for (let i = 0; i < 6; i++) {
@@ -306,20 +306,20 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
   //   }
   // }
 
-  // 9) 观众席：环绕擂台、逐层升高的人群光点（thin instances → 上千个点仅 1 个 draw call）
-  //    暖白/蓝/红混色 + 亮度随机，远处被纵深雾吃掉融入暗场，像体育馆里的观众灯海。
+  // 9) Auditorium: Crowd light spots that surround the ring and rise layer by layer (thin instances → thousands of points, only 1 draw call)
+  // Warm white/blue/red mixed color + random brightness, the distance is eaten away by deep fog and blends into the dark field, like a sea of lights from the audience in a stadium.
   const crowd = BABYLON.MeshBuilder.CreateBox('crowd', { size: 0.12 }, scene)
   const crowdMat = new BABYLON.StandardMaterial('crowdMat', scene)
   crowdMat.emissiveColor = new BABYLON.Color3(1, 1, 1); crowdMat.disableLighting = true
   crowd.material = crowdMat; crowd.isPickable = false
-  crowd.alwaysSelectAsActiveMesh = true   // 防止 thin instance 被整体视锥剔除
-  glow.addExcludedMesh(crowd)             // 不进 GlowLayer（仍吃管线 Bloom，足够闪烁）
+  crowd.alwaysSelectAsActiveMesh = true   //Prevent thin instances from being culled by the entire frustum
+  glow.addExcludedMesh(crowd)             //Not entering GlowLayer (still eating pipeline Bloom, enough to flicker)
   {
     const mats = [], cols = [], tmp = BABYLON.Matrix.Identity()
     const palette = [[1.0, 0.86, 0.6], [0.4, 0.62, 1.0], [1.0, 0.45, 0.4], [0.82, 0.82, 0.95]]
     for (let tier = 0; tier < 6; tier++) {
-      const radius = 8.0 + tier * 1.45      // 逐层外扩
-      const y = 0.15 + tier * 0.6           // 逐层升高（看台坡度）
+      const radius = 8.0 + tier * 1.45      //Expansion layer by layer
+      const y = 0.15 + tier * 0.6           //Increasing level by level (grandstand slope)
       const n = Math.max(40, Math.floor(2 * Math.PI * radius / 0.42))
       for (let j = 0; j < n; j++) {
         const ang = (j / n) * Math.PI * 2 + (Math.random() - 0.5) * 0.06
@@ -333,7 +333,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     crowd.thinInstanceSetBuffer('matrix', new Float32Array(mats), 16)
     crowd.thinInstanceSetBuffer('color', new Float32Array(cols), 4)
   }
-  // 观众灯海整体的轻微明暗呼吸（单值，开销极小）
+  // The overall light and dark breathing of the audience's sea of lights (single value, minimal overhead)
   const _crowdT0 = performance.now()
   scene.onBeforeRenderObservable.add(() => {
     const k = 0.9 + 0.1 * Math.sin((performance.now() - _crowdT0) * 0.0016)
@@ -343,19 +343,19 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
   const me = new Fighter3D(scene, 'me', PAL_ME_3D, +1)
   const opp = new Fighter3D(scene, 'opp', PAL_OPP_3D, -1)
 
-  // 脚下阵营光圈：跟随各自斗士、轻微呼吸脉动，强化站位（蓝=我方 / 红=对手）
+  // Camp aperture under your feet: Follow your respective fighters, breathe slightly, and strengthen your position (blue = our side / red = opponent)
   function _footRingTex() {
     const s = 256, R = s / 2
     const t = new BABYLON.DynamicTexture('footRing', s, scene, false)
     const c = t.getContext(); c.translate(R, R)
     const g = c.createRadialGradient(0, 0, 0, 0, 0, R)
-    g.addColorStop(0, 'rgba(255,255,255,0.16)')   // 中心淡填充
+    g.addColorStop(0, 'rgba(255,255,255,0.16)')   //center light fill
     g.addColorStop(0.74, 'rgba(255,255,255,0.04)')
-    g.addColorStop(0.84, 'rgba(255,255,255,0.95)') // 亮环带
+    g.addColorStop(0.84, 'rgba(255,255,255,0.95)') //bright ring
     g.addColorStop(0.93, 'rgba(255,255,255,0.85)')
     g.addColorStop(1, 'rgba(255,255,255,0)')
     c.fillStyle = g; c.beginPath(); c.arc(0, 0, R, 0, 7); c.fill()
-    c.strokeStyle = 'rgba(255,255,255,1)'; c.lineWidth = s * 0.05   // 实描边，定义清晰
+    c.strokeStyle = 'rgba(255,255,255,1)'; c.lineWidth = s * 0.05   //Real stroke, clear definition
     c.beginPath(); c.arc(0, 0, R * 0.87, 0, 7); c.stroke()
     t.hasAlpha = true; t.update()
     return t
@@ -370,7 +370,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     m.alphaMode = BABYLON.Engine.ALPHA_ADD
     d.material = m; return d
   }
-  // 阵营色主通道提到 >1：叠在亮金台面上仍能压住金色、并触发 bloom 发光（不会被洗成灰）
+  // The camp color main channel mentioned >1: stacked on a bright gold table can still suppress the gold and trigger bloom (it will not be washed into gray)
   const meFoot = _footRing(new BABYLON.Color3(0.22, 0.6, 2.1))
   const oppFoot = _footRing(new BABYLON.Color3(2.1, 0.28, 0.22))
   scene.onBeforeRenderObservable.add(() => {
@@ -391,14 +391,14 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     },
   }
 
-  // 节拍（回合窗口≈2200ms）
-  const HITSTOP_MS = 95    // 顿帧时长
-  const RESET_MS = 2000    // 回到 idle（窗口内、避免拦腰打断出招）
-  const DRAW_CUE_MS = 1100 // 判定平局：收招对峙演出的起手时刻（≈末回合拳打实之后）
-  const REACH = 0.95       // 单方进攻：冲到离对手这么近
-  const CENTER_GAP = 0.6   // 双方对攻：各自离场地中心这么远（防穿模）
+  // Beat (round window ≈ 2200ms)
+  const HITSTOP_MS = 95    //Frame duration
+  const RESET_MS = 2000    //Return to idle (in the window, avoid blocking and interrupting moves)
+  const DRAW_CUE_MS = 1100 //Determining a draw: the starting moment of the confrontation performance (≈after the last round of punching)
+  const REACH = 0.95       //Unilateral attack: rush so close to the opponent
+  const CENTER_GAP = 0.6   //Both sides attack: each is so far away from the center of the field (to prevent mold penetration)
 
-  // 攻击方前冲到对手身边再出拳（仅模型路径在 Fighter3D.lunge 内生效）
+  // The attacker rushes forward to the opponent and punches (only the model path takes effect in Fighter3D.lunge)
   function _approach(r) {
     const meAdv = r.playerAction === 'attack'
     const oppAdv = r.opponentAction === 'attack'
@@ -413,12 +413,12 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     opp.playAction(r.opponentAction)
     _approach(r)
 
-    // 倒地看血量，不只看结果字串：游戏结束时 HP≤0 即倒下（含"双双空血却判平局"）
+    // Check the blood volume when you fall to the ground, not just the result string: when the game ends, if HP ≤ 0, you will fall down (including "both are empty of blood, but the result is a draw")
     const ended = !!r.gameResult
     const meKO = ended && (r.gameResult === 'lose' || r.gameResult === 'doubleLose' || r.playerHP <= 0)
     const oppKO = ended && (r.gameResult === 'win' || r.gameResult === 'doubleLose' || r.opponentHP <= 0)
 
-    // 命中/终局都挪到拳头"打实"的时刻统一触发（按动画时长动态算），才对得上
+    // It is appropriate to move the hits/finals to the moment when the fist "hits the ground" and trigger them uniformly (calculated dynamically based on the animation duration)
     if (r.playerDmg > 0 || r.opponentDmg > 0 || meKO || oppKO) {
       setTimeout(() => _impact(r, meKO, oppKO), me.attackContactMs())
     }
@@ -426,14 +426,14 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     if (!r.gameResult) {
       setTimeout(() => { me.resetToIdle(); opp.resetToIdle() }, RESET_MS)
     } else if (!meKO && !oppKO) {
-      // 判定平局（超时/回合上限，双方仍有血）：无人倒地，收招后走"对峙判和"演出
+      // Determine a draw (timeout/round limit, both sides still have blood): No one is down, withdraw your moves and perform a "confrontation and draw" performance
       setTimeout(_drawStandoff, DRAW_CUE_MS)
     }
   }
 
-  // 命中瞬间：致命一击直接倒地（不被受击动画打断），否则普通受击；叠加顿帧/震屏/推镜/火花/飘字
+  // Moment of hit: After a fatal blow, you will fall to the ground directly (not interrupted by the hit animation), otherwise you will be hit normally; superimposed frame/shock/scroller/sparks/floating characters
   function _impact(r, meKO, oppKO) {
-    onImpact?.(r)  // 通知外层 HUD：拳头此刻打实，扣血/头像抖动与命中特效同帧呈现
+    onImpact?.(r)  //Notify the outer HUD: The fist is hitting hard at this moment, and the blood deduction/avatar shake and hit special effects are presented in the same frame
     if (meKO) me.knockout()
     else if (r.playerDmg > 0) me.reactHit()
     if (oppKO) opp.knockout()
@@ -444,12 +444,12 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     if (r.opponentDmg > 0) _impactFx(opp, me, r.opponentDmg)
     _dmgText(r)
 
-    // 终局：K.O.（单杀，推近倒地方）/ DOUBLE K.O.（同归于尽，拉远冷场）横幅 + 专属镜头，
-    // 优先于普通命中/暴击演出（终结一击不再走震屏/推镜，交给终局镜头统一收尾）。
+    // Ending: K.O. (single kill, push closer and fall to the ground) / DOUBLE K.O. (die together, pull away the cold scene) banner + exclusive lens,
+    // Priority is given to ordinary hit/crit performance (the final blow will no longer shake the screen/push camera, and will be handed over to the final shot for unified ending).
     if (meKO || oppKO) { _finale(meKO, oppKO); return }
 
     if (big) {
-      // 暴击专属演出：子弹时间 + 全屏顿亮 + 推近受击者的特写镜头
+      // Exclusive performance for critical strikes: bullet time + full screen highlight + close-up of the victim
       me.slowMo(0.2, 430); opp.slowMo(0.2, 430)
       _critFlash()
       const victim = meKO ? me : oppKO ? opp : (r.playerDmg >= r.opponentDmg ? me : opp)
@@ -461,8 +461,8 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     }
   }
 
-  // 暴击特写：快速推近受击者(降 radius + target 平移到其身上)，短暂定格后回弹；
-  // 自带轻微抖动，替代普通命中的震屏/推镜。临时放宽 lowerRadiusLimit 以便贴近。
+  // Critical hit close-up: quickly push the victim closer (reduce radius + target and move to him), freeze briefly and then rebound;
+  // It comes with slight jitter, which replaces the screen shake/push lens of ordinary hits. Temporarily relax lowerRadiusLimit to make it closer.
   function _critCinematic(victim) {
     const baseR = cam.radius, baseLower = cam.lowerRadiusLimit
     const baseTarget = cam.target.clone()
@@ -479,31 +479,31 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
       }
       const k = t < inMs ? t / inMs : t < inMs + hold ? 1 : 1 - (t - inMs - hold) / outMs
       const e = k * k * (3 - 2 * k)  // smoothstep
-      const j = (t > inMs && t < inMs + hold) ? 0.05 : 0  // 定格期轻微抖动
+      const j = (t > inMs && t < inMs + hold) ? 0.05 : 0  //Slight jitter during freezing period
       cam.radius = baseR + (zoomR - baseR) * e
       cam.target.x = baseTarget.x + (focus.x - baseTarget.x) * e + (Math.random() - 0.5) * j
       cam.target.y = baseTarget.y + (focus.y - baseTarget.y) * e + (Math.random() - 0.5) * j
     })
   }
 
-  // ── 终局演出 ──────────────────────────────────────────
-  // 单杀：K.O. 横幅 + 推近倒地方；双杀：DOUBLE K.O. 横幅 + 拉远全景 + 抽色冷场。
+  // ──Final performance──────────────────────────────────────
+  // Single kill: K.O. banner + push closer and fall to the ground; double kill: DOUBLE K.O. banner + zoom out panorama + draw color to silence.
   function _finale(meKO, oppKO) {
     const draw = meKO && oppKO
-    _critFlash()                                    // 先接一记白闪，托住终结一击
-    me.slowMo(0.16, draw ? 1100 : 900)              // 拉长的子弹时间收尾
+    _critFlash()                                    //Receive a white flash first, then support the finishing blow
+    me.slowMo(0.16, draw ? 1100 : 900)              //Extended bullet time ending
     opp.slowMo(0.16, draw ? 1100 : 900)
     if (draw) {
       _banner('DOUBLE K.O.', 'double')
-      _koZoomOut()                                  // 缓慢拉远，交代双双倒地
-      setTimeout(_drainColor, 220)                  // 白闪落幕后再抽色——没有赢家
+      _koZoomOut()                                  //Slowly zoom out and tell them both to fall to the ground
+      setTimeout(_drainColor, 220)                  //After the white flash is over, there will be a color draw - there is no winner
     } else {
       _banner('K.O.', 'single')
-      _koCinematic(meKO ? me : opp)                 // 推近被击倒的一方
+      _koCinematic(meKO ? me : opp)                 //Push the downed party closer
     }
   }
 
-  // 终局横幅：居中大字，弹入过冲→短停→淡出；billboard 始终朝相机。
+  // Ending banner: large characters in the center, bounce into overshoot → short pause → fade out; billboard always faces the camera.
   function _banner(text, kind = 'single') {
     const W = 1024, H = 340
     const dt = new BABYLON.DynamicTexture('koBanner', { width: W, height: H }, scene, false)
@@ -516,17 +516,17 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     ctx.font = `900 italic ${size}px "Arial Black", Arial, sans-serif`
     ctx.lineWidth = 24; ctx.strokeStyle = '#000'; ctx.strokeText(text, cx, cy)
     if (kind === 'double') {
-      // 左蓝→右红：呼应擂台两侧阵营色，点出"同归于尽"
+      // Left blue → right red: echoes the colors of the camps on both sides of the arena, pointing out "die together"
       const g = ctx.createLinearGradient(cx - 420, 0, cx + 420, 0)
       g.addColorStop(0, '#5cb3ff'); g.addColorStop(0.5, '#ffffff'); g.addColorStop(1, '#ff5a52')
       ctx.fillStyle = g
     } else if (kind === 'time') {
-      // 冷钢银：判定平局用中性色，区别于炽热的 K.O./DOUBLE K.O.
+      // Cold Steel Silver: A neutral color used to determine a tie, different from the fiery K.O./DOUBLE K.O.
       const g = ctx.createLinearGradient(0, cy - 110, 0, cy + 110)
       g.addColorStop(0, '#f2f6ff'); g.addColorStop(1, '#9fb2c8')
       ctx.fillStyle = g
     } else {
-      const g = ctx.createLinearGradient(0, cy - 120, 0, cy + 120)   // 金色渐变
+      const g = ctx.createLinearGradient(0, cy - 120, 0, cy + 120)   //golden gradient
       g.addColorStop(0, '#fff4c2'); g.addColorStop(1, '#ffb020')
       ctx.fillStyle = g
     }
@@ -541,21 +541,21 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     const plane = BABYLON.MeshBuilder.CreatePlane('koBannerP', { width: w, height: h }, scene)
     plane.material = mat; plane.position.set(0, 2.35, 0)
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL; plane.isPickable = false
-    glow.addExcludedMesh(plane)   // 靠管线 Bloom 已够亮，避免 GlowLayer 把字糊开
+    glow.addExcludedMesh(plane)   //Bloom is bright enough through the pipeline to prevent GlowLayer from blurring the words.
     const start = performance.now(), dur = kind === 'time' ? 1900 : 2600
     const obs = scene.onBeforeRenderObservable.add(() => {
       const t = performance.now() - start
       if (t >= dur) { plane.dispose(); mat.dispose(); dt.dispose(); scene.onBeforeRenderObservable.remove(obs); return }
       const k = t / dur
-      const s = k < 0.10 ? (k / 0.10) * 1.22                    // 弹入过冲 0→1.22→1
+      const s = k < 0.10 ? (k / 0.10) * 1.22                    //Bounce overshoot 0→1.22→1
         : k < 0.20 ? 1.22 - 0.22 * ((k - 0.10) / 0.10)
           : 1
       plane.scaling.set(s, s, s)
-      mat.alpha = k > 0.82 ? (1 - (k - 0.82) / 0.18) : 1        // 尾段淡出
+      mat.alpha = k > 0.82 ? (1 - (k - 0.82) / 0.18) : 1        //end fade out
     })
   }
 
-  // 单杀特写：快速推近倒地一方，长停后缓慢回弹（临时放宽近距限位以便贴近）。
+  // Close-up of a single kill: quickly push closer to the downed party, then slowly rebound after a long pause (temporarily relax the close range limit to get closer).
   function _koCinematic(victim) {
     const baseR = cam.radius, baseLower = cam.lowerRadiusLimit
     const baseTarget = cam.target.clone()
@@ -578,7 +578,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     })
   }
 
-  // 双杀全景：缓慢拉远看双双倒地，短停后回弹（临时放宽远距限位）。
+  // Double kill panorama: Slowly zoom out to see both players fall to the ground, then rebound after a short pause (temporarily relax the long-distance limit).
   function _koZoomOut() {
     const baseR = cam.radius, baseUpper = cam.upperRadiusLimit
     const baseTarget = cam.target.clone()
@@ -600,7 +600,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     })
   }
 
-  // 双杀冷场：短暂抽掉画面饱和度 + 压低曝光，尾段回暖——"没有赢家"的冷感。
+  // Double kill cold scene: briefly remove the saturation of the picture + lower the exposure, and then pick up the heat at the end - the cold feeling of "no winner".
   function _drainColor() {
     const ip = pipe.imageProcessing
     const prevEnabled = ip.colorCurvesEnabled, prevCurves = ip.colorCurves
@@ -616,20 +616,20 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
       }
       const k = t / dur
       const drain = k < 0.12 ? k / 0.12 : k < 0.78 ? 1 : 1 - (k - 0.78) / 0.22
-      cc.globalSaturation = -78 * drain   // 0=原色 → -78≈大幅去饱和
+      cc.globalSaturation = -78 * drain   //0=Primary color → -78≈Significant desaturation
       ip.exposure = baseExp * (1 - 0.16 * drain)
     })
   }
 
-  // 判定平局（超时/回合上限，双方仍有血）：无人倒地——双方收势举防对峙，
-  // TIME OVER 银字横幅，镜头回正到对称双人构图（势均力敌、由钟声判和的收束感）。
+  // Determined to be a draw (timeout/upper limit of round, both sides still have blood): No one is down - both sides retreat and defend themselves against each other,
+  // TIME OVER silver banner, the camera returns to a symmetrical composition of two people (evenly matched, with a sense of closure judged by the sound of the bell).
   function _drawStandoff() {
-    me.playAction('defend'); opp.playAction('defend')   // 收招举防，随后各自自动回 idle
+    me.playAction('defend'); opp.playAction('defend')   //Take action and defend, then each of them will automatically return to idle.
     _banner('TIME OVER', 'time')
     _drawTwoShot()
   }
 
-  // 判定平局镜头：回正到对称中心、轻微拉远的双人平衡构图，短停后回弹。
+  // The shot that determines the tie: a balanced composition of two people returning to the center of symmetry, slightly zoomed out, and then rebounding after a short pause.
   function _drawTwoShot() {
     const baseR = cam.radius, baseUpper = cam.upperRadiusLimit
     const baseTarget = cam.target.clone(), baseBeta = cam.beta
@@ -652,7 +652,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     })
   }
 
-  // 命中镜头震屏
+  // Hit shot shakes screen
   function _shake(r) {
     const big = Math.max(r.playerDmg, r.opponentDmg) >= CRIT_THRESHOLD
     const amp = big ? 0.18 : 0.10
@@ -667,7 +667,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     })
   }
 
-  // 命中快速推镜（fov 短促下压再回弹，给一拳"凑近"的冲击）
+  // Hit and quickly push the mirror (fov presses down briefly and then rebounds, giving the punch a "closer" impact)
   function _zoomPunch(r) {
     const big = Math.max(r.playerDmg, r.opponentDmg) >= CRIT_THRESHOLD
     const dip = big ? 0.10 : 0.06
@@ -677,12 +677,12 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
       const t = performance.now() - start
       if (t >= dur) { cam.fov = base; scene.onBeforeRenderObservable.remove(obs); return }
       const k = t / dur
-      const e = k < 0.35 ? (k / 0.35) : (1 - (k - 0.35) / 0.65) // 先压后弹
+      const e = k < 0.35 ? (k / 0.35) : (1 - (k - 0.35) / 0.65) //Press first and then bounce
       cam.fov = base - dip * e
     })
   }
 
-  // 命中特效共享贴图：火花点（软）+ 冲击波环（一次创建反复用，避免每拳新建贴图）
+  // Shared textures for hit effects: spark point (soft) + shock wave ring (create once and use repeatedly to avoid creating new textures for each punch)
   const _fxSpark = _softTex('fxSpark')
   const _fxRing = (() => {
     const s = 128
@@ -696,16 +696,16 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     return t
   })()
 
-  // 命中特效：核心热闪 + 冲击波环 + 火花迸射三层叠加；暴击更大更金
+  // Hit special effects: three layers of core heat flash + shock wave ring + spark burst; critical hits are bigger and more golden
   function _impactFx(victim, other, dmg = 0) {
     const crit = dmg >= CRIT_THRESHOLD
-    // 用两人实时位置：落在被击者(victim)朝向对手(other)的那一面——出拳/对攻/反击都对得上
+    // Use the real-time position of two people: fall on the side of the victim facing the opponent (other) - punching/attacking/counterattacking are all suitable.
     const vx = victim.root ? victim.root.position.x : victim.home.x
     const ox = other.root ? other.root.position.x : other.home.x
     const dir = Math.sign(ox - vx) || victim.faceSign
     const pos = new BABYLON.Vector3(vx + dir * 0.35, 1.15, 0.18)
 
-    // ① 核心热闪：接触点一团高亮快速膨胀淡出
+    // ① Core heat flash: a ball of highlights at the contact point rapidly expands and fades out
     const sp = BABYLON.MeshBuilder.CreateSphere('imp', { diameter: crit ? 0.30 : 0.22, segments: 8 }, scene)
     const m = new BABYLON.StandardMaterial('impM', scene)
     m.emissiveColor = crit ? new BABYLON.Color3(1, 0.78, 0.3) : new BABYLON.Color3(1, 0.9, 0.6)
@@ -724,7 +724,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     _sparkBurst(pos, crit, dir)
   }
 
-  // ② 冲击波：朝相机的发光环急速扩张淡出（ease-out 收尾），暴击更大
+  // ② Shock wave: Rapidly expands and fades out towards the camera's luminous ring (ease-out ending), with a greater critical hit
   function _shockwave(pos, crit) {
     const plane = BABYLON.MeshBuilder.CreatePlane('sw', { size: 1 }, scene)
     plane.position.copyFrom(pos); plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL
@@ -744,7 +744,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     })
   }
 
-  // ③ 火花迸射：一次性发射一簇拉伸粒子，朝被击方向外侧扇开后受重力下坠
+  // ③ Spark Burst: Launch a cluster of stretched particles at once, fan out towards the direction of being hit and then fall down due to gravity.
   function _sparkBurst(pos, crit, dirSign) {
     const ps = new BABYLON.ParticleSystem('spk', 48, scene)
     ps.particleTexture = _fxSpark
@@ -754,7 +754,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     ps.color1 = col; ps.color2 = col; ps.colorDead = new BABYLON.Color4(1, 0.4, 0.12, 0)
     ps.minSize = 0.04; ps.maxSize = crit ? 0.16 : 0.11
     ps.minLifeTime = 0.12; ps.maxLifeTime = crit ? 0.42 : 0.30
-    ps.emitRate = 0; ps.manualEmitCount = crit ? 32 : 18   // 一次性爆发
+    ps.emitRate = 0; ps.manualEmitCount = crit ? 32 : 18   //one-time outbreak
     ps.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD
     ps.direction1 = new BABYLON.Vector3(dirSign * 0.3 - 1, -1, -1)
     ps.direction2 = new BABYLON.Vector3(dirSign * 0.3 + 1, 1.2, 1)
@@ -766,7 +766,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     setTimeout(() => ps.dispose(), 700)
   }
 
-  // 暴击全屏顿亮：曝光瞬间提亮再回落，强化"一记重拳"的闪光
+  // Critical hit full screen brighten: the exposure instantly brightens and then falls back, strengthening the "punch" flash
   function _critFlash() {
     const base = pipe.imageProcessing.exposure
     const t0 = performance.now(), dur = 180
@@ -778,7 +778,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     })
   }
 
-  // 伤害飘字（用 DynamicTexture 贴在朝向相机的平面上）
+  // Damage floating word (pasted on the plane facing the camera using DynamicTexture)
   function _dmgText(r) {
     if (r.opponentDmg > 0) _float(new BABYLON.Vector3(opp.home.x, 2.4, 0), r.opponentDmg)
     if (r.playerDmg > 0) _float(new BABYLON.Vector3(me.home.x, 2.4, 0), r.playerDmg)
@@ -792,11 +792,11 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     ctx.clearRect(0, 0, W, H)
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
     if (crit) {
-      // CRITICAL! 横幅
+      // CRITICAL! Banner
       ctx.font = 'bold italic 66px Arial'
       ctx.lineWidth = 10; ctx.strokeStyle = '#5a1500'; ctx.strokeText('CRITICAL!', W / 2, 60)
       ctx.fillStyle = '#ff7a1a'; ctx.fillText('CRITICAL!', W / 2, 60)
-      // 伤害数字（大、金）
+      // Damage number (big, gold)
       ctx.font = 'bold 140px Arial'
       ctx.lineWidth = 13; ctx.strokeStyle = '#000'; ctx.strokeText('-' + dmg, W / 2, 178)
       ctx.fillStyle = '#ffd34d'; ctx.fillText('-' + dmg, W / 2, 178)
@@ -820,7 +820,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
       const k = t / dur
       plane.position.y = y0 + k * rise
       mat.alpha = k > 0.7 ? (1 - (k - 0.7) / 0.3) : 1
-      if (crit) {  // 弹入：0→1.2 过冲再回落到 1
+      if (crit) {  //Bounce: 0→1.2 overshoot and then fall back to 1
         const s = k < 0.15 ? (k / 0.15) * 1.2 : k < 0.3 ? 1.2 - 0.2 * ((k - 0.15) / 0.15) : 1
         plane.scaling.setAll(s)
       }
@@ -829,8 +829,8 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
 
   engine.runRenderLoop(() => scene.render())
 
-  // me=fighter.glb(Vanguard)，opp=fighter2.glb(Mutant)，各自独立骨骼/动画；
-  // 对手模型缺省则回退到 fighter.glb；连第一个都没有则双方用占位斗士。
+  // me=fighter.glb(Vanguard), opp=fighter2.glb(Mutant), each has independent skeleton/animation;
+  // The opponent model will fall back to fighter.glb by default; if there is not even the first one, both sides will use placeholder fighters.
   BABYLON.SceneLoader.ImportMeshAsync('', GLB_ROOT, GLB_FILE, scene)
     .then((res1) => {
       me.useModel(res1)

@@ -21,8 +21,8 @@ func NewMessagesHandler(readSvc *service.MessageReadService) *MessagesHandler {
 }
 
 // GET /api/friends/:peerId/read-receipts
-// 返回好友 peerId 已读的、由当前用户发送的消息 ID 列表
-// 用于补偿发送方离线时错过的已读回执
+// Returns the list of message IDs sent by the current user that have been read by friend peerId
+// Used to compensate for missed read receipts when the sender is offline
 func (h *MessagesHandler) GetReadReceipts(c *gin.Context) {
 	myChatID := c.GetString(middleware.CtxChatID)
 	peerChatID := c.Param("peerId")
@@ -44,7 +44,7 @@ func (h *MessagesHandler) GetReadReceipts(c *gin.Context) {
 	if receipts == nil {
 		receipts = []service.ReadReceipt{}
 	}
-	// msg_ids 保留一个发布周期，兼容尚未升级到权威 read_at 协议的客户端。
+	// msg_ids are retained for a release cycle and are compatible with clients that have not yet upgraded to the authoritative read_at protocol.
 	ids := make([]string, 0, len(receipts))
 	for _, receipt := range receipts {
 		ids = append(ids, receipt.MsgID)

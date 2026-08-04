@@ -19,7 +19,7 @@
                     icon="lock"
                     @click="doLockNow"
                 >
-                    <q-tooltip>立即锁定</q-tooltip>
+                    <q-tooltip>{{ t("header.lockNow") }}</q-tooltip>
                 </q-btn>
                 <q-btn
                     v-if="!wsConnected"
@@ -31,7 +31,7 @@
                     :disable="refreshing"
                     @click="doRefresh"
                 >
-                    <q-tooltip>刷新连接</q-tooltip>
+                    <q-tooltip>{{ t("header.refresh") }}</q-tooltip>
                 </q-btn>
             </q-toolbar>
             <div
@@ -40,7 +40,7 @@
                 style="letter-spacing: 0.5px"
             >
                 <q-icon name="wifi_off" size="14px" class="q-mr-xs" />
-                网络已断开，正在重新连接...
+                {{ t("header.disconnected") }}
             </div>
         </q-header>
 
@@ -62,7 +62,7 @@
                 <q-tab
                     name="chats"
                     icon="chat"
-                    label="聊天"
+                    :label="t('nav.chats')"
                     @click="router.push('/chats')"
                 >
                     <q-badge
@@ -76,7 +76,7 @@
                 <q-tab
                     name="friends"
                     icon="people"
-                    label="好友"
+                    :label="t('nav.friends')"
                     @click="router.push('/friends')"
                 >
                     <q-badge
@@ -90,36 +90,36 @@
                 <q-tab
                     name="games"
                     icon="sports_esports"
-                    label="链游"
+                    :label="t('nav.games')"
                     @click="router.push('/games')"
                 />
                 <q-tab
                     name="profile"
                     icon="person"
-                    label="我"
+                    :label="t('nav.profile')"
                     @click="router.push('/profile')"
                 />
             </q-tabs>
         </q-footer>
 
-        <!-- 安全码锁定界面 -->
+        <!-- Security code lock interface -->
         <lock-screen />
-        <!-- 通话组件 -->
+        <!-- call component -->
         <call-bar />
         <video-call-view />
         <incoming-call-dialog />
-        <!-- 游戏邀请弹窗 -->
+        <!-- Game invitation pop-up window -->
         <incoming-game-dialog />
 
-        <!-- 强制更新：当前版本低于 min_supported 时阻断使用 -->
+        <!-- Forced update: blocked when the current version is lower than min_supported -->
         <q-dialog v-model="forceUpdate" persistent no-esc-dismiss no-backdrop-dismiss>
             <q-card style="min-width: 300px; max-width: 360px">
                 <q-card-section class="row items-center q-gutter-sm">
                     <q-icon name="system_update" color="primary" size="28px" />
-                    <div class="text-h6">需要更新</div>
+                    <div class="text-h6">{{ t("update.required") }}</div>
                 </q-card-section>
                 <q-card-section class="text-body2 text-grey-8 q-pt-none">
-                    当前版本（v{{ appVersion }}）过低，无法继续使用，请更新到最新版本。
+                    {{ t("update.requiredMessage", { version: appVersion }) }}
                     <div v-if="forceUpdateNotes" class="text-caption text-grey q-mt-sm">
                         {{ forceUpdateNotes }}
                     </div>
@@ -128,7 +128,7 @@
                     <q-btn
                         unelevated
                         color="primary"
-                        label="立即更新"
+                        :label="t('update.updateNow')"
                         :loading="forceUpdating"
                         @click="doForceUpdate"
                     />
@@ -160,6 +160,9 @@ import VideoCallView from "src/components/VideoCallView.vue";
 import IncomingCallDialog from "src/components/IncomingCallDialog.vue";
 import IncomingGameDialog from "src/components/IncomingGameDialog.vue";
 import { useGameStore } from "src/stores/game";
+import { useI18n } from "src/i18n";
+
+const { t } = useI18n();
 
 const route = useRoute();
 const router = useRouter();
@@ -173,10 +176,10 @@ function pathToTab(path) {
     return "chats";
 }
 
-// 首页和游戏对战页不显示导航栏（对战页需全屏）
+// The home page and game battle page do not display the navigation bar (the battle page needs to be full screen)
 const showNav = computed(() => {
     if (route.path === "/") return false;
-    if (route.path.startsWith("/games/")) return false; // /games/bomberman 等对战页全屏
+    if (route.path.startsWith("/games/")) return false; ///games/bomberman and other battle pages are full screen
     return identity.isReady;
 });
 
@@ -192,34 +195,34 @@ function onFriendRequestGlobal() {
     notifyNewMessage();
 }
 
-// 强制更新：当前版本低于后端 min_supported 时阻断使用
-const appVersion = APP_VERSION || "未知";
+// Forced update: Block use when the current version is lower than the backend min_supported
+const appVersion = APP_VERSION || "unknown";
 const forceUpdate = ref(false);
 const forceUpdateNotes = ref("");
 let forceUpdateUrl = "";
 
 const FORCE_UPDATE_TRIED_KEY = "force_update_tried";
 async function checkForceUpdate() {
-    if (!APP_VERSION) return; // 版本未注入（异常）时不强制，避免误锁
+    if (!APP_VERSION) return; //The version is not forced when it is not injected (exception) to avoid accidental locking.
     try {
         const info = await fetchVersionInfo();
         forceUpdateUrl = info.url || "";
         forceUpdateNotes.value = info.notes || "";
         if (info.min_supported && cmpVersion(APP_VERSION, info.min_supported) < 0) {
-            // 防死循环：若本会话已强刷过、但版本仍未变（新版本未部署 / 配置错误），
-            // 则不再强制，避免把用户永久锁死
+            // Anti-dead loop: If this session has been forcibly refreshed but the version has not changed (the new version has not been deployed/is configured incorrectly),
+            // It is no longer mandatory to avoid permanently locking the user.
             if (sessionStorage.getItem(FORCE_UPDATE_TRIED_KEY) === APP_VERSION) {
                 console.warn(
-                    "[version] 已尝试强制更新但版本仍为 " + APP_VERSION +
-                    "，低于 min_supported " + info.min_supported +
-                    "：新版本可能尚未部署，已跳过强制以防死循环",
+                    "[version] Tried force update but version is still " + APP_VERSION +
+                    "，lower than min_supported " + info.min_supported +
+                    "：The new version may not be deployed yet，Force skipped to prevent infinite loop",
                 );
                 return;
             }
             forceUpdate.value = true;
         }
     } catch {
-        // 拉取失败则不强制，避免网络问题误锁用户
+        // If the pull fails, it will not be forced to avoid accidentally locking the user due to network problems.
     }
 }
 
@@ -228,16 +231,16 @@ async function doForceUpdate() {
     if (forceUpdating.value) return;
     forceUpdating.value = true;
     if (isNativeClient()) {
-        // 原生端（桌面/安卓）只能下载新安装包更新，刷新打包进二进制的旧版本无意义
+        // The native side (desktop/Android) can only download new installation package updates, and it is meaningless to refresh the old version packaged into the binary.
         if (forceUpdateUrl) window.open(forceUpdateUrl, "_blank");
         forceUpdating.value = false;
         return;
     }
-    // 记录本次强刷来源版本：刷新后若版本未变则不再强制（见 checkForceUpdate）
+    // Record the source version of this forced flash: if the version remains unchanged after the refresh, it will no longer be forced (see checkForceUpdate)
     try {
         sessionStorage.setItem(FORCE_UPDATE_TRIED_KEY, APP_VERSION);
     } catch {
-        // sessionStorage 不可用时忽略
+        // Ignored when sessionStorage is unavailable
     }
     await forceRefresh();
 }
@@ -249,15 +252,15 @@ onMounted(() => {
     on("friend_request", onFriendRequestGlobal);
     initNotifications();
     checkForceUpdate();
-    // 启动时若已是解锁态，补解密上次锁定期间暂存的密文
+    // If it is already unlocked at startup, the ciphertext temporarily stored during the last lock period will be decrypted.
     if (!identity.isLocked) chatStore.processPendingMessages();
-    // 阅后即焚定时删除检查挂在应用级生命周期，确保用户离开具体聊天页后
-    // 倒计时仍能继续推进并按时删除（原挂在 ChatPage 会在离开时被清除）
+    // The scheduled deletion check is hung in the application-level life cycle to ensure that users leave the specific chat page after reading.
+    // The countdown can still continue to advance and be deleted on time (the original ChatPage will be cleared when leaving)
     chatStore.startBurnTimer();
     chatStore.checkExpiredMessages();
 });
 
-// 解锁后（锁定 → 解锁）补解密锁定期间暂存的消息
+// After unlocking (lock → unlock), the messages temporarily stored during the lock period will be decrypted.
 watch(
     () => identity.isLocked,
     (locked, wasLocked) => {
@@ -285,7 +288,7 @@ watch(wsConnected, (connected) => {
     if (!connected) {
         everDisconnected = true;
     } else if (everDisconnected) {
-        Notify.create({ type: "positive", message: "已重新连接", timeout: 2000 });
+        Notify.create({ type: "positive", message: t("header.reconnected"), timeout: 2000 });
     }
 });
 
@@ -293,7 +296,7 @@ const canGoBack = computed(() => route.path.startsWith("/chat/"));
 
 function doLockNow() {
     identity.lockNow();
-    Notify.create({ type: "info", message: "已锁定", timeout: 2000 });
+    Notify.create({ type: "info", message: t("header.locked"), timeout: 2000 });
 }
 
 const refreshing = ref(false);
@@ -304,12 +307,12 @@ function doRefresh() {
 }
 
 const pageTitle = computed(() => {
-    if (route.path === "/") return "云密";
-    if (route.path.startsWith("/chat/")) return route.query.nickname || "聊天";
-    if (route.path === "/friends") return "好友";
-    if (route.path === "/games") return "区块链游戏";
-    if (route.path === "/profile") return "我的资料";
-    return "云密";
+    if (route.path === "/") return t("header.app");
+    if (route.path.startsWith("/chat/")) return route.query.nickname || t("header.chat");
+    if (route.path === "/friends") return t("header.friends");
+    if (route.path === "/games") return t("header.games");
+    if (route.path === "/profile") return t("header.profile");
+    return t("header.app");
 });
 </script>
 

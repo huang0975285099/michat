@@ -13,23 +13,23 @@ export const useIdentityStore = defineStore('identity', () => {
   const serverReady = ref(false)
   const isAdmin = ref(false)
 
-  // 安全码锁定状态
-  const isLocked = ref(false)        // 当前是否锁定
-  const hasCode = ref(false)         // 是否设置了安全码
-  const lockTimeout = ref(1/6)       // 超时时间（小时），默认 10 分钟
-  let autoLockCleanup = null         // 自动锁定清理函数
+  // Security code locked status
+  const isLocked = ref(false)        //Is it currently locked?
+  const hasCode = ref(false)         //Is a security code set?
+  const lockTimeout = ref(1/6)       //Timeout (hours), default 10 minutes
+  let autoLockCleanup = null         //Automatic lock cleaning function
 
   const isReady = computed(() => !!chatId.value && hasPrivateKey.value && serverReady.value)
 
-  // 好友公钥缓存
+  // Friend public key cache
   const friendPubKeys = ref({})
-  // 好友昵称缓存 { chatId -> nickname }
+  // Friend nickname cache { chatId -> nickname }
   const friendNames = ref({})
-  // 待处理的好友申请数
+  // Number of friend requests pending
   const pendingRequestCount = ref(0)
 
   /**
-   * 触发锁定
+   * trigger lock
    */
   function onLocked() {
     isLocked.value = true
@@ -37,7 +37,7 @@ export const useIdentityStore = defineStore('identity', () => {
   }
 
   /**
-   * 从本地存储和 IndexedDB 恢复状态
+   * Restore state from local storage and IndexedDB
    */
   async function load() {
     const token = localStorage.getItem('session_token')
@@ -52,13 +52,13 @@ export const useIdentityStore = defineStore('identity', () => {
     chatId.value = storedChatId
     nickname.value = localStorage.getItem('nickname') || ''
 
-    // 检查是否设置了安全码
+    // Check if security code is set
     hasCode.value = await hasSecurityCode()
 
     if (hasCode.value) {
-      // 有安全码：检查是否有私钥缓存（刷新后缓存丢失）
+      // There is a security code: check if there is a private key cache (the cache is lost after refreshing)
       if (isUnlocked()) {
-        // 有缓存：已解锁状态
+        // With cache: unlocked status
         hasPrivateKey.value = true
         serverReady.value = true
         isLocked.value = false
@@ -67,7 +67,7 @@ export const useIdentityStore = defineStore('identity', () => {
         autoLockCleanup = startAutoLock(onLocked)
         await loadFriendPubKeys()
       } else {
-        // 无缓存：需要重新解锁
+        // No cache: need to re-unlock
         hasPrivateKey.value = true
         serverReady.value = true
         isLocked.value = true
@@ -77,7 +77,7 @@ export const useIdentityStore = defineStore('identity', () => {
       return
     }
 
-    // 无安全码：明文模式，直接加载
+    // No security code: plain text mode, direct loading
     const kp = await loadKeyPair()
     hasPrivateKey.value = !!kp
 
@@ -99,18 +99,18 @@ export const useIdentityStore = defineStore('identity', () => {
   }
 
   /**
-   * 解锁（输入安全码）
+   * Unlock (enter security code)
    */
   async function unlockWithCode(code) {
     const success = await unlock(code)
     if (success) {
       isLocked.value = false
       serverReady.value = true
-      // 标记当前会话已解锁（刷新不丢失）
+      // Mark the current session as unlocked (not lost on refresh)
       sessionStorage.setItem('sec_code_unlocked', '1')
       await connect()
       await loadFriendPubKeys()
-      // 启动自动锁定（先清理旧的）
+      // Start auto-lock (clean old one first)
       if (autoLockCleanup) autoLockCleanup()
       autoLockCleanup = startAutoLock(onLocked)
     }
@@ -118,7 +118,7 @@ export const useIdentityStore = defineStore('identity', () => {
   }
 
   /**
-   * 立即锁定
+   * Lock now
    */
   function lockNow() {
     lock()
@@ -127,7 +127,7 @@ export const useIdentityStore = defineStore('identity', () => {
   }
 
   /**
-   * 设置安全码
+   * Set security code
    */
   async function enableSecurityCode(code, timeoutHours = 1) {
     await setupSecurityCode(code)
@@ -138,7 +138,7 @@ export const useIdentityStore = defineStore('identity', () => {
   }
 
   /**
-   * 关闭安全码
+   * Turn off security code
    */
   async function disableSecCode(code) {
     await disableSecurityCode(code)
@@ -154,7 +154,7 @@ export const useIdentityStore = defineStore('identity', () => {
   }
 
   /**
-   * 修改超时时间
+   * Modify timeout
    */
   async function setLockTimeout(hours) {
     lockTimeout.value = hours
@@ -162,7 +162,7 @@ export const useIdentityStore = defineStore('identity', () => {
   }
 
   /**
-   * 预加载好友公钥缓存
+   * Preload friend public key cache
    */
   async function loadFriendPubKeys() {
     try {
@@ -193,8 +193,8 @@ export const useIdentityStore = defineStore('identity', () => {
   }
 
   /**
-   * 全新初始化
-   * @param {string} inviteCode - 可选邀请码
+   * New initialization
+   * @param {string} inviteCode - optional invitation code
    */
   async function initialize(inviteCode = '') {
     const { data } = await identityApi.init(inviteCode)
@@ -210,13 +210,13 @@ export const useIdentityStore = defineStore('identity', () => {
     await identityApi.uploadPubkey(pubKeyB64)
     serverReady.value = true
     await connect()
-    registerPushToken() // 非阻塞，登录后上报极光 token
+    registerPushToken() //Non-blocking, Aurora token is reported after logging in
 
-    return data.inviter_chat_id // 返回邀请者 chat_id（如果有）
+    return data.inviter_chat_id //Returns the inviter chat_id (if any)
   }
 
   /**
-   * 重试上传公钥
+   * Retry uploading the public key
    */
   async function uploadPublicKey() {
     const kp = await loadKeyPair()
@@ -228,17 +228,17 @@ export const useIdentityStore = defineStore('identity', () => {
   }
 
   /**
-   * 导出私钥
+   * Export private key
    */
   async function exportKey() {
     return exportPrivateKey()
   }
 
   /**
-   * 清除本地身份（用户主动注销）
+   * Clear local identity (user actively logs out)
    */
   async function clear() {
-    // 清理自动锁定
+    // Clean auto lock
     if (autoLockCleanup) {
       autoLockCleanup()
       autoLockCleanup = null
@@ -247,7 +247,7 @@ export const useIdentityStore = defineStore('identity', () => {
     try {
       await deviceApi.remove()
     } catch {
-      // 忽略，本地数据照常清除
+      // Ignore, local data will be cleared as usual
     }
     try {
       await identityApi.deleteAccount()

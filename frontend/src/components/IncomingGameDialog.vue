@@ -5,18 +5,18 @@
                 <q-icon name="sports_esports" color="primary" size="52px" />
                 <div class="text-h6 q-mt-sm">{{ gameTitle }}</div>
                 <div class="text-subtitle2 text-grey-7 q-mt-xs">{{ displayName }}</div>
-                <div class="text-caption text-grey-5">邀请你一起来一局！</div>
+                <div class="text-caption text-grey-5">Invite you to play a game together！</div>
             </q-card-section>
             <q-card-actions align="around" class="q-pb-lg q-px-xl">
                 <div class="column items-center gap-xs">
                     <q-btn round color="negative" icon="close" size="lg"
                         @click="gameStore.rejectInvite()" />
-                    <div class="text-caption text-grey-6 q-mt-xs">拒绝</div>
+                    <div class="text-caption text-grey-6 q-mt-xs">reject</div>
                 </div>
                 <div class="column items-center gap-xs">
                     <q-btn round color="primary" icon="sports_esports" size="lg"
                         @click="gameStore.acceptInvite()" />
-                    <div class="text-caption text-grey-6 q-mt-xs">接受</div>
+                    <div class="text-caption text-grey-6 q-mt-xs">accept</div>
                 </div>
             </q-card-actions>
         </q-card>
@@ -33,8 +33,8 @@ const identity  = useIdentityStore()
 
 const show = computed(() => gameStore.state === 'invited')
 
-const GAME_TITLES = { bomberman: '炸弹人对战', ironfist: '铁拳对战' }
-const gameTitle = computed(() => GAME_TITLES[gameStore.game] || '游戏对战')
+const GAME_TITLES = { bomberman: 'Bomberman vs.', ironfist: 'Tekken battle' }
+const gameTitle = computed(() => GAME_TITLES[gameStore.game] || 'Game battle')
 
 // Show nickname from cache if available, otherwise chatId
 const displayName = computed(() =>

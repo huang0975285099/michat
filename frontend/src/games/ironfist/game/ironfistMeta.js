@@ -1,52 +1,52 @@
-// 铁拳大厅/账本/成就/记录视图共享的展示常量。
-// 与后端保持一致：成就见 model.AchievementDefinitions，流水类型见 004_fist_token.sql。
+// Display constants shared by Tekken Hall/Ledger/Achievements/Record Views.
+// Consistent with the backend: see model.AchievementDefinitions for achievements, and 004_fist_token.sql for pipeline types.
 
-// 成就定义（code 与后端一致）
+// Achievement definition (code is consistent with the backend)
 export const ACHIEVEMENTS = [
-  { code: 'first_battle', name: '初出茅庐', desc: '完成 1 场对战', icon: '🎯' },
-  { code: 'hundred_battles', name: '百战不殆', desc: '累计 100 场对战', icon: '💯' },
-  { code: 'win_streak_5', name: '连胜达人', desc: '连胜 5 场', icon: '🔥' },
-  { code: 'counter_master', name: '反击大师', desc: '单场反击成功 3 次', icon: '🔄' },
-  { code: 'low_hp_comeback', name: '残血翻盘', desc: 'HP < 10 时获胜', icon: '⚡' },
-  { code: 'high_hp_win', name: '稳操胜券', desc: 'HP > 90 时获胜', icon: '🛡️' },
+  { code: 'first_battle', name: 'fledgling', desc: 'Complete 1 battle', icon: '🎯' },
+  { code: 'hundred_battles', name: 'Fight a hundred battles without danger', desc: 'cumulative 100 battle', icon: '💯' },
+  { code: 'win_streak_5', name: 'Winning Streak Master', desc: 'winning streak 5 field', icon: '🔥' },
+  { code: 'counter_master', name: 'counter master', desc: 'Successful counterattack in a single game 3 times', icon: '🔄' },
+  { code: 'low_hp_comeback', name: 'Comeback with residual health', desc: 'HP < 10 win when', icon: '⚡' },
+  { code: 'high_hp_win', name: 'Guaranteed victory', desc: 'HP > 90 win when', icon: '🛡️' },
 ]
 
-// 成就 code → meta 快查（结果页解锁提示用）
+// Achievement code → meta quick check (used for unlocking prompts on the results page)
 export const ACHIEVEMENT_MAP = Object.fromEntries(ACHIEVEMENTS.map((a) => [a.code, a]))
 
-// PVP 房间档位（积分质押对战）
+// PVP room slots (points pledge battle)
 export const PVP_TIERS = [
-  { key: 'gold', name: '黄金场', desc: '入门竞技 · 轻松上分', icon: '🥇', stake: 100 },
-  { key: 'platinum', name: '铂金场', desc: '进阶博弈 · 高手过招', icon: '💠', stake: 1000 },
-  { key: 'diamond', name: '钻石场', desc: '巅峰对决 · 一掷千金', icon: '👑', stake: 10000 },
+  { key: 'gold', name: 'gold field', desc: 'Entry level sports · Score easily', icon: '🥇', stake: 100 },
+  { key: 'platinum', name: 'platinum field', desc: 'Advanced gaming · Masters compete with each other', icon: '💠', stake: 1000 },
+  { key: 'diamond', name: 'diamond field', desc: 'Peak showdown · Spend a fortune', icon: '👑', stake: 10000 },
 ]
 
-// 积分流水类型 → 展示文案（无 remark 时回退）
+// Points flow type → display copy (return when there is no remark)
 export const TX_TYPE_LABEL = {
-  pve_reward: 'PvE 奖励',
-  pvp_stake: 'PvP 质押',
-  pvp_win: 'PvP 赢局',
-  pvp_loss: 'PvP 输局',
-  pvp_fee: 'PvP 手续费',
-  tournament_entry: '锦标赛报名',
-  tournament_prize: '锦标赛奖励',
-  referral_reward: '邀请奖励',
-  staking_reward: '质押分红',
-  nft_mint: 'NFT 铸造',
-  withdraw: '提现',
-  deposit: '充值',
-  system_adjust: '系统调整',
+  pve_reward: 'PvE reward',
+  pvp_stake: 'PvP pledge',
+  pvp_win: 'PvP Win the game',
+  pvp_loss: 'PvP Lose the game',
+  pvp_fee: 'PvP handling fee',
+  tournament_entry: 'Tournament Registration',
+  tournament_prize: 'Tournament rewards',
+  referral_reward: 'Invitation rewards',
+  staking_reward: 'Pledge dividends',
+  nft_mint: 'NFT casting',
+  withdraw: 'Withdraw cash',
+  deposit: 'Recharge',
+  system_adjust: 'System adjustment',
 }
 
-// 对局结果 → 展示（逐局明细用）
+// Game results → display (for game-by-game details)
 export const MATCH_RESULT_META = {
-  win: { text: '胜利', icon: '🏆', tone: 'win' },
-  lose: { text: '失败', icon: '💀', tone: 'lose' },
-  draw: { text: '平局', icon: '🤝', tone: 'draw' },
-  doubleLose: { text: '双双力竭', icon: '💥', tone: 'draw' },
+  win: { text: 'victory', icon: '🏆', tone: 'win' },
+  lose: { text: 'failed', icon: '💀', tone: 'lose' },
+  draw: { text: 'draw', icon: '🤝', tone: 'draw' },
+  doubleLose: { text: 'Both exhausted', icon: '💥', tone: 'draw' },
 }
 
-// 时间戳 → M/D HH:mm
+// Timestamp → M/D HH:mm
 export function fmtTime(s) {
   if (!s) return ''
   const d = new Date(s)

@@ -1,8 +1,8 @@
 <template>
   <!--
-    三期 3D 战斗表现层（Babylon.js，方案B）。
-    与一/二期同一组 props（result / 蓄力态），可直接互换。
-    glb 缺省时自动用占位低多边形斗士；丢入 public/games/ironfist/fighter.glb 即升级为骨骼动画。
+    Phase III 3D Combat presentation layer（Babylon.js，PlanB）。
+    with one/The same group in the second phase props（result / Charged state），Directly interchangeable。
+    glb Automatically uses placeholder low polygon fighters by default；throw in public/games/ironfist/fighter.glb That is, upgrade to skeletal animation。
   -->
   <div ref="wrapRef" class="arena3d">
     <canvas ref="canvasRef" class="arena3d-canvas" />
@@ -17,11 +17,11 @@ const props = defineProps({
   result: { type: Object, default: null },
   playerCharged: { type: Boolean, default: false },
   opponentCharged: { type: Boolean, default: false },
-  playerEmoji: { type: String, default: '🥊' },     // 兼容接口（3D 不使用）
+  playerEmoji: { type: String, default: '🥊' },     //Compatible interface (not used by 3D)
   opponentEmoji: { type: String, default: '🤖' },
 })
 
-// 拳头打实那一刻由渲染器回调上来，转成事件让父级（IronFistPage）同步扣血/头像抖动
+// The moment the fist hits the ground, the renderer calls it back and turns it into an event, allowing the parent (IronFistPage) to simultaneously deduct blood/shake the avatar.
 const emit = defineEmits(['impact'])
 
 const wrapRef = ref(null)
@@ -41,7 +41,7 @@ onMounted(async () => {
     },
     onImpact: (r) => emit('impact', r),
   })
-  // 容器尺寸变化时重置引擎视口
+  // Reset engine viewport when container size changes
   ro = new ResizeObserver(() => ctrl?.resize())
   ro.observe(wrapRef.value)
 })

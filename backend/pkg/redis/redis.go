@@ -11,16 +11,16 @@ import (
 )
 
 const (
-	SessionTTL         = 30 * 24 * time.Hour // 30天
-	OnlineTTL          = 60 * time.Second    // 在线心跳 60s
-	OfflineMsgTTL      = 7 * 24 * time.Hour  // 离线消息 7天
-	ReauthChallengeTTL = 5 * time.Minute     // 挑战码有效期 5分钟
-	InviteCodeTTL      = 7 * 24 * time.Hour  // 邀请码有效期 7天
-	IronFistActionsTTL = 30 * time.Minute    // 铁拳对局 action 日志保留窗口（覆盖 60s 重连 + 极端情况）
+	SessionTTL         = 30 * 24 * time.Hour //30 days
+	OnlineTTL          = 60 * time.Second    //Online heartbeat 60s
+	OfflineMsgTTL      = 7 * 24 * time.Hour  //Offline messages 7 days
+	ReauthChallengeTTL = 5 * time.Minute     //The challenge code is valid for 5 minutes
+	InviteCodeTTL      = 7 * 24 * time.Hour  //The invitation code is valid for 7 days
+	IronFistActionsTTL = 30 * time.Minute    //Tekken game action log retention window (covers 60s reconnection + extreme situations)
 )
 
-// NewInMemory 启动一个进程内的内存 Redis（miniredis），返回连接它的 client。
-// 仅用于本地开发，免去安装 Redis。进程退出即数据全失，不要用于生产。
+// NewInMemory starts an in-process memory Redis (miniredis) and returns the client connected to it.
+// Only for local development, no need to install Redis. All data will be lost when the process exits, so do not use it for production.
 func NewInMemory() (*redis.Client, error) {
 	srv, err := miniredis.Run()
 	if err != nil {

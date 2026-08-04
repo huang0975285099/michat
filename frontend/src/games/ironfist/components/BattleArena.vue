@@ -1,24 +1,24 @@
 <template>
   <!--
-    2D-CSS 战斗表现层（一期）。
-    渲染接口 = props.result（每次结算变化时播放对战动画）+ 蓄力态。
-    后续二期可整体替换为 2.5D（billboard 精灵帧）或三期 3D（Babylon.js），
-    只要保持同一组 props，上层逻辑/HUD 完全不动。见 docs 第十二节动画路线。
+    2D-CSS Combat presentation layer（Phase I）。
+    Rendering interface = props.result（Play the battle animation every time the settlement changes）+ Charged state。
+    The next two phases can be replaced as a whole with 2.5D（billboard sprite frame）or three issues 3D（Babylon.js），
+    Just keep the same group props，Upper level logic/HUD Not moving at all。see docs Section 12 Animation Route。
   -->
   <div class="arena" :class="{ 'arena--shake': shaking }">
     <div class="arena-bg" />
     <div class="arena-floor" />
     <div class="arena-spot" />
 
-    <!-- 中线能量带 -->
+    <!-- midline energy zone -->
     <div class="arena-mid" />
 
-    <!-- 命中爆闪（双方都受伤时的正面对撞） -->
+    <!-- Hit flash (frontal collision when both sides are injured) -->
     <transition name="clash">
       <div v-if="clash" class="clash-burst" />
     </transition>
 
-    <!-- 对手（远景，上方） -->
+    <!-- Opponent (far view, above) -->
     <div class="fighter fighter--opponent" :class="oppClass">
       <div class="shadow" />
       <div v-if="opponentCharged" class="charge-aura">
@@ -34,7 +34,7 @@
       </transition>
     </div>
 
-    <!-- 玩家（近景，下方） -->
+    <!-- Players (closer shot, below) -->
     <div class="fighter fighter--player" :class="playerClass">
       <div class="shadow" />
       <div v-if="playerCharged" class="charge-aura">
@@ -51,7 +51,7 @@
     </div>
 
     <transition name="fade">
-      <div v-if="envFlash" class="env-warn">⚠ 环境伤害</div>
+      <div v-if="envFlash" class="env-warn">⚠ environmental damage</div>
     </transition>
   </div>
 </template>
@@ -60,14 +60,14 @@
 import { ref, watch } from 'vue'
 
 const props = defineProps({
-  result: { type: Object, default: null },   // 最近一次结算结果
+  result: { type: Object, default: null },   //Last settlement result
   playerCharged: { type: Boolean, default: false },
   opponentCharged: { type: Boolean, default: false },
   playerEmoji: { type: String, default: '🥊' },
   opponentEmoji: { type: String, default: '🤖' },
 })
 
-const CRIT_THRESHOLD = 18 // ≥ 此值视为暴击（蓄力/反击重击），放大表现
+const CRIT_THRESHOLD = 18 //≥ This value is regarded as a critical hit (charge/counterattack critical hit), amplifying performance
 
 const playerClass = ref('')
 const oppClass = ref('')
@@ -81,7 +81,7 @@ const shaking = ref(false)
 const envFlash = ref(false)
 const clash = ref(false)
 
-// 根据本方动作 + 受伤情况选择姿态
+// Choose a stance based on your own actions + injuries
 function poseFor(action, dmgTaken, dealtDmg) {
   if (action === 'attack') return 'pose-lunge'
   if (action === 'charge') return dmgTaken > 0 ? 'pose-stagger' : 'pose-charge'
@@ -94,7 +94,7 @@ watch(() => props.result, (r) => {
   playerClass.value = poseFor(r.playerAction, r.playerDmg, r.opponentDmg)
   oppClass.value = poseFor(r.opponentAction, r.opponentDmg, r.playerDmg)
 
-  // 受击晃动 + 伤害数字 + 命中火花
+  // Stagger on hit + Damage number + Hit spark
   setTimeout(() => {
     if (r.playerDmg > 0) {
       playerDmg.value = r.playerDmg
@@ -112,12 +112,12 @@ watch(() => props.result, (r) => {
       shaking.value = true
       setTimeout(() => { shaking.value = false }, 360)
     }
-    // 双方都受伤 → 正面对撞爆闪
+    // Both sides were injured → Head-on collision with flash
     if (r.playerDmg > 0 && r.opponentDmg > 0) {
       clash.value = true
       setTimeout(() => { clash.value = false }, 320)
     }
-    // 火花单独存活短一些
+    // Sparks survive shorter alone
     setTimeout(() => { playerHit.value = false; oppHit.value = false }, 420)
   }, 240)
 
@@ -126,7 +126,7 @@ watch(() => props.result, (r) => {
     setTimeout(() => { envFlash.value = false }, 1200)
   }
 
-  // 复位
+  // reset
   setTimeout(() => {
     playerClass.value = ''
     oppClass.value = ''
@@ -149,19 +149,19 @@ watch(() => props.result, (r) => {
 }
 .arena--shake { animation: shake 0.36s; }
 
-/* 背景：纵深渐变 + 顶光晕 */
+/* Background: depth gradient + top glow */
 .arena-bg {
   position: absolute; inset: 0;
   background:
     radial-gradient(ellipse at 50% 18%, rgba(150, 110, 245, 0.4), transparent 55%),
     linear-gradient(180deg, #322764 0%, #1d1740 50%, #0e0a1e 100%);
 }
-.arena-bg::after { /* 暗角 */
+.arena-bg::after { /* Vignetting */
   content: ''; position: absolute; inset: 0;
   background: radial-gradient(ellipse at 50% 50%, transparent 45%, rgba(0, 0, 0, 0.55) 100%);
 }
 
-/* 地面：透视光盘 */
+/* Ground: see-through disc */
 .arena-floor {
   position: absolute; left: 50%; bottom: 6%;
   width: 130%; height: 42%; transform: translateX(-50%);
@@ -170,7 +170,7 @@ watch(() => props.result, (r) => {
   border-radius: 50% 50% 0 0 / 100% 100% 0 0;
   filter: blur(0.5px);
 }
-/* 顶部聚光 */
+/* top spotlight */
 .arena-spot {
   position: absolute; left: 50%; top: -28%;
   width: 70%; height: 90%; transform: translateX(-50%);
@@ -186,7 +186,7 @@ watch(() => props.result, (r) => {
   box-shadow: 0 0 20px rgba(150, 120, 255, 0.7);
 }
 
-/* 选手 */
+/* player */
 .fighter {
   position: absolute; left: 50%;
   display: flex; align-items: center; justify-content: center;
@@ -202,7 +202,7 @@ watch(() => props.result, (r) => {
 }
 .fighter--opponent .avatar { transform: scale(0.8); }
 
-/* 地面投影 */
+/* ground projection */
 .shadow {
   position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%);
   width: 64px; height: 14px; border-radius: 50%;
@@ -213,7 +213,7 @@ watch(() => props.result, (r) => {
 }
 .fighter--opponent .shadow { width: 52px; }
 
-/* 姿态动画 */
+/* gesture animation */
 .pose-lunge.fighter--player   { transform: translateX(-50%) translateY(-50px) scale(1.1); }
 .pose-lunge.fighter--opponent { transform: translateX(-50%) translateY(50px) scale(0.92); }
 .pose-lunge .shadow { width: 40px; opacity: 0.5; }
@@ -225,7 +225,7 @@ watch(() => props.result, (r) => {
 .pose-stagger .avatar { animation: wobble 0.5s; filter: grayscale(0.6) brightness(0.8); }
 .is-hit .avatar { animation: hitFlash 0.34s; }
 
-/* 蓄力光环：旋转能量环 + 核心脉冲 */
+/* Charging Aura: Rotating Energy Ring + Core Pulse */
 .charge-aura {
   position: absolute; width: 104px; height: 104px;
   display: flex; align-items: center; justify-content: center;
@@ -246,7 +246,7 @@ watch(() => props.result, (r) => {
   animation: pulse 0.9s ease-in-out infinite;
 }
 
-/* 命中火花迸发 */
+/* hit sparks */
 .impact {
   position: absolute; width: 92px; height: 92px; border-radius: 50%;
   background:
@@ -254,7 +254,7 @@ watch(() => props.result, (r) => {
   animation: burst 0.42s ease-out forwards;
   pointer-events: none;
 }
-.impact::before, .impact::after { /* 星形迸射线 */
+.impact::before, .impact::after { /* starburst */
   content: ''; position: absolute; inset: 0;
   background:
     linear-gradient(0deg, transparent 46%, rgba(255, 255, 255, 0.9) 50%, transparent 54%),
@@ -268,7 +268,7 @@ watch(() => props.result, (r) => {
     radial-gradient(circle, rgba(255, 255, 255, 1) 0%, rgba(255, 120, 60, 0.85) 32%, transparent 64%);
 }
 
-/* 伤害数字 */
+/* damage numbers */
 .dmg-float {
   position: absolute; font-weight: 900; font-size: 32px;
   color: #ff5a5a; text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9), 0 0 14px rgba(255, 60, 60, 0.5);
@@ -287,7 +287,7 @@ watch(() => props.result, (r) => {
   color: #fff; text-align: center; margin-bottom: -2px;
 }
 
-/* 对撞爆闪 */
+/* Collision flash */
 .clash-burst {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
   width: 160px; height: 160px; border-radius: 50%;
@@ -299,7 +299,7 @@ watch(() => props.result, (r) => {
   text-shadow: 0 0 12px rgba(255, 0, 0, 0.6);
 }
 
-/* 过渡 */
+/* Transition */
 .float-enter-active { transition: all 0.7s ease-out; }
 .float-enter-from { opacity: 0; transform: translateY(10px) scale(0.6); }
 .float-leave-active { transition: opacity 0.3s; }

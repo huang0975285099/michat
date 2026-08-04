@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # ================================
-# E2EE Chat - Android APK 构建脚本
+# E2EE Chat - Android APK build script
 # ================================
-# 前置要求:
+# Prerequisites:
 #   - Node.js + pnpm
-#   - Android Studio (内置 JDK 21)
-#   - Android SDK (通过 Android Studio 安装)
+# - Android Studio (built-in JDK 21)
+# - Android SDK (installed via Android Studio)
 #
-# 默认路径（Windows）:
+# Default path (Windows):
 #   Android Studio: D:\Program Files\Android\Android Studio
 #   Android SDK:    %LOCALAPPDATA%\Android\Sdk
 
@@ -23,7 +23,7 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# Android Studio 内置 JDK 21 路径
+# Android Studio built-in JDK 21 path
 STUDIO_JBR_WIN="D:/Program Files/Android/Android Studio/jbr"
 STUDIO_JBR_WSL="/mnt/d/Program Files/Android/Android Studio/jbr"
 ANDROID_SDK_PATH="${LOCALAPPDATA}/Android/Sdk"
@@ -43,15 +43,15 @@ setup_env() {
         export JAVA_HOME
         jbr_found="path"
     else
-        log_error "未找到 JDK，请安装 Android Studio 或设置 JAVA_HOME"
+        log_error "not found JDK，Please install Android Studio or set JAVA_HOME"
         exit 1
     fi
 
     case "$jbr_found" in
-        win) log_info "使用 Android Studio JBR (Windows): $JAVA_HOME" ;;
-        wsl) log_info "使用 Android Studio JBR (WSL): $JAVA_HOME" ;;
-        env) log_info "使用系统 JAVA_HOME: $JAVA_HOME" ;;
-        path) log_info "从 java 命令推断 JAVA_HOME: $JAVA_HOME" ;;
+        win) log_info "Use Android Studio JBR (Windows): $JAVA_HOME" ;;
+        wsl) log_info "Use Android Studio JBR (WSL): $JAVA_HOME" ;;
+        env) log_info "Use the system JAVA_HOME: $JAVA_HOME" ;;
+        path) log_info "from java command inference JAVA_HOME: $JAVA_HOME" ;;
     esac
 
     if [ -z "$ANDROID_SDK_ROOT" ] && [ -z "$ANDROID_HOME" ]; then
@@ -65,32 +65,32 @@ setup_env() {
 }
 
 build_web() {
-    log_info "构建 Web 资源..."
+    log_info "build Web Resources..."
     pnpm install --frozen-lockfile 2>/dev/null || pnpm install
     npx quasar build -m capacitor -T android --skip-pkg
-    log_info "Web 资源构建完成"
+    log_info "Web Resource construction completed"
 }
 
 fix_agp_version() {
-    # Android Studio 最高支持 AGP 8.12.1，Capacitor 生成的是 8.13.0，需降级
+    # Android Studio supports up to AGP 8.12.1, Capacitor generates 8.13.0, which needs to be downgraded.
     local gradle_file="src-capacitor/android/build.gradle"
     if grep -q "gradle:8.13.0" "$gradle_file" 2>/dev/null; then
         sed -i 's/gradle:8\.13\.0/gradle:8.12.1/g' "$gradle_file"
-        log_info "已将 AGP 版本降级为 8.12.1（兼容当前 Android Studio）"
+        log_info "Already AGP version downgraded to 8.12.1（Compatible with current Android Studio）"
     fi
 }
 
 sync_android() {
-    log_info "同步到 Android 项目..."
+    log_info "Sync to Android Project..."
     cd src-capacitor
     npx cap sync android
     cd ..
     fix_agp_version
-    log_info "同步完成"
+    log_info "Synchronization completed"
 }
 
 build_apk() {
-    log_info "构建 Android Debug APK..."
+    log_info "build Android Debug APK..."
     cd src-capacitor/android
 
     if [ -f "gradlew.bat" ]; then
@@ -105,17 +105,17 @@ build_apk() {
         mkdir -p ../../dist
         OUTPUT_APK="../../dist/yunChat-$(date +%Y%m%d%H%M%S)-debug.apk"
         cp "$APK_PATH" "$OUTPUT_APK"
-        log_info "✓ APK 构建成功: $OUTPUT_APK"
+        log_info "✓ APK Build successful: $OUTPUT_APK"
         ls -lh "$OUTPUT_APK"
     else
-        log_error "APK 未找到，构建失败"
+        log_error "APK not found，Build failed"
         exit 1
     fi
     cd ../..
 }
 
 build_release_apk() {
-    log_info "构建 Android Release APK..."
+    log_info "build Android Release APK..."
     cd src-capacitor/android
 
     if [ -f "gradlew.bat" ]; then
@@ -134,10 +134,10 @@ build_release_apk() {
         OUTPUT_APK="../../dist/yunChat-$(date +%Y%m%d%H%M%S)-release.apk"
         cp "$APK_PATH" "$OUTPUT_APK"
         log_info "✓ Release APK: $OUTPUT_APK"
-        log_warn "APK 未签名，需签名后才能发布到 Play Store"
+        log_warn "APK unsigned，Requires signature before publishing to Play Store"
         ls -lh "$OUTPUT_APK"
     else
-        log_error "Release APK 未找到"
+        log_error "Release APK not found"
         exit 1
     fi
     cd ../..
@@ -147,13 +147,13 @@ open_studio() {
     local studio_win="D:/Program Files/Android/Android Studio/bin/studio64.exe"
     local studio_wsl="/mnt/d/Program Files/Android/Android Studio/bin/studio64.exe"
     if [ -f "$studio_win" ]; then
-        log_info "在 Android Studio 中打开项目..."
+        log_info "in Android Studio Open project in..."
         "$studio_win" "$(pwd)/src-capacitor/android" &
     elif [ -f "$studio_wsl" ]; then
-        log_info "在 Android Studio 中打开项目..."
+        log_info "in Android Studio Open project in..."
         "$studio_wsl" "$(pwd)/src-capacitor/android" &
     else
-        log_warn "请手动用 Android Studio 打开: $(pwd)/src-capacitor/android"
+        log_warn "Please use it manually Android Studio open: $(pwd)/src-capacitor/android"
     fi
 }
 
@@ -162,7 +162,7 @@ main() {
 
     echo ""
     echo "=========================================="
-    echo "  E2EE Chat (云密) - Android 应用构建"
+    echo "  E2EE Chat (Yunmi) - Android Application building"
     echo "=========================================="
     echo ""
 
@@ -192,24 +192,24 @@ main() {
             build_apk
             ;;
         *)
-            echo "用法: $0 [debug|release|sync|studio|apk-only]"
+            echo "Usage: $0 [debug|release|sync|studio|apk-only]"
             echo ""
-            echo "  debug     构建 Debug APK（默认）"
-            echo "  release   构建 Release APK（未签名）"
-            echo "  sync      仅同步 Web 资源到 Android 项目"
-            echo "  studio    同步后在 Android Studio 中打开"
-            echo "  apk-only  仅运行 Gradle 构建（跳过 Web 编译）"
+            echo "  debug     build Debug APK（Default）"
+            echo "  release   build Release APK（unsigned）"
+            echo "  sync      Sync only Web Resources arrive Android Project"
+            echo "  studio    After synchronization Android Studio Open in"
+            echo "  apk-only  only run Gradle build（skip Web compile）"
             exit 1
             ;;
     esac
 
     echo ""
     echo "=========================================="
-    echo "  构建完成！"
+    echo "  Build completed！"
     echo "=========================================="
     if [ "$MODE" = "debug" ] || [ "$MODE" = "apk-only" ]; then
         echo ""
-        echo "安装到设备: adb install dist/yunChat-*-debug.apk"
+        echo "Install to device: adb install dist/yunChat-*-debug.apk"
     fi
 }
 

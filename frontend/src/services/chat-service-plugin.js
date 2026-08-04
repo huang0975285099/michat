@@ -1,9 +1,9 @@
 import { registerPlugin } from '@capacitor/core'
 
 /**
- * ChatService — Capacitor 插件桥接
- * Android 端对应 ChatServicePlugin.java
- * Web/Electron 端提供空实现，不影响运行
+ * ChatService — Capacitor plug-in bridge
+ * Android side corresponds to ChatServicePlugin.java
+ * The Web/Electron side provides an empty implementation and does not affect the operation.
  */
 const ChatService = registerPlugin('ChatService', {
   web: () => ({

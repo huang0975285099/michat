@@ -35,8 +35,8 @@ func msgIDTimestamp(msgID string) (int64, bool) {
 	return ts, err == nil && ts > 0
 }
 
-// RecordMessage 记录服务器实际接受的消息归属。相同 ID 只允许属于同一对发送者/接收者，
-// 从而防止攻击者复用他人的 msg_id 伪造已读回执。
+// RecordMessage records the message attribution actually accepted by the server. The same ID is only allowed to belong to the same sender/receiver pair,
+// This prevents attackers from reusing other people's msg_id to forge read receipts.
 func (s *MessageReadService) RecordMessage(ctx context.Context, msgID, msgFrom, msgTo string) error {
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT IGNORE INTO message_deliveries (msg_id, msg_from, msg_to) VALUES (?, ?, ?)`,
@@ -57,7 +57,7 @@ func (s *MessageReadService) RecordMessage(ctx context.Context, msgID, msgFrom, 
 	return nil
 }
 
-// DeleteMessage 撤销尚未真正投递的消息归属（例如文件 offer 无法进入接收端缓冲）。
+// DeleteMessage revokes the ownership of a message that has not yet been actually delivered (for example, a file offer cannot enter the receiving end buffer).
 func (s *MessageReadService) DeleteMessage(ctx context.Context, msgID, msgFrom, msgTo string) error {
 	_, err := s.db.ExecContext(ctx, `
 		DELETE FROM message_deliveries
@@ -68,8 +68,8 @@ func (s *MessageReadService) DeleteMessage(ctx context.Context, msgID, msgFrom, 
 	return err
 }
 
-// RecordReads 批量记录首次已读时间（幂等）。INSERT ... SELECT 同时验证每条消息确实由
-// msgFrom 发给 readerChatID；不存在匹配投递记录的 ID 不会创建回执，也不会出现在返回值。
+// RecordReads records the first read time in batches (idempotent). INSERT ... SELECT also verifies that each message was actually sent by
+// msgFrom is sent to readerChatID; an ID that does not match the delivery record will not create a receipt and will not appear in the return value.
 func (s *MessageReadService) RecordReads(ctx context.Context, msgIDs []string, msgFrom, readerChatID string) ([]ReadReceipt, error) {
 	if len(msgIDs) == 0 {
 		return []ReadReceipt{}, nil
@@ -94,8 +94,8 @@ func (s *MessageReadService) RecordReads(ctx context.Context, msgIDs []string, m
 		return nil, err
 	}
 
-	// 兼容升级前已经保存在客户端、但服务器尚未建立 message_deliveries 的消息。
-	// msg_id 的首段是发送毫秒时间（base36）；只有早于归属追踪启用时间的 ID 才走兼容路径。
+	// Compatible with messages that have been saved on the client before the upgrade, but the server has not yet established message_deliveries.
+	// The first segment of msg_id is the sending millisecond time (base36); only IDs that are earlier than the time when attribution tracking is enabled will take the compatible path.
 	existing := make(map[string]struct{}, len(receipts))
 	for _, receipt := range receipts {
 		existing[receipt.MsgID] = struct{}{}
@@ -163,7 +163,7 @@ func (s *MessageReadService) queryReceipts(ctx context.Context, msgIDs []string,
 	return receipts, rows.Err()
 }
 
-// GetReadMsgIDs 获取某人已读的消息 ID 列表
+// GetReadMsgIDs Gets a list of message IDs that someone has read
 func (s *MessageReadService) GetReadMsgIDs(ctx context.Context, msgTo, readerChatID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT msg_id FROM message_reads WHERE msg_to = ? AND reader_chat_id = ?`,
@@ -185,11 +185,11 @@ func (s *MessageReadService) GetReadMsgIDs(ctx context.Context, msgTo, readerCha
 	return ids, nil
 }
 
-// DeleteOldReadReceipts 仅清理已经产生回执的旧投递归属；message_reads 本身是发送方
-// 长期离线时仍必须保留的阅后即焚 tombstone，不能按固定天数删除。
+// DeleteOldReadReceipts only cleans up old delivery attributions that have generated receipts; message_reads itself is the sender
+// Tombstones that must be retained even when offline for a long period of time cannot be deleted based on a fixed number of days.
 func (s *MessageReadService) DeleteOldReadReceipts(ctx context.Context, olderThanDays int) (int64, error) {
-	// 先删除已经产生且超过保留期的投递归属；未读消息必须保留归属，否则用户很久后
-	// 首次打开消息时，服务器将无法验证其合法已读回执。
+	// First delete the delivery attributes that have been generated and have exceeded the retention period; unread messages must retain the attributes, otherwise the user will wait for a long time
+	// When a message is first opened, the server will not be able to verify that it is a legitimate read receipt.
 	res, err := s.db.ExecContext(ctx, `
 		DELETE d FROM message_deliveries d
 		INNER JOIN message_reads r ON r.msg_id = d.msg_id
@@ -202,8 +202,8 @@ func (s *MessageReadService) DeleteOldReadReceipts(ctx context.Context, olderTha
 	return res.RowsAffected()
 }
 
-// GetReadReceiptsForSender 返回某发送者尚未确认应用的已读 tombstone，按阅读者分组。
-// WebSocket 重连时补投，避免 Redis 离线队列过期后丢失阅后即焚起始时间。
+// GetReadReceiptsForSender Returns read tombstones for a sender that have not yet acknowledged the application, grouped by reader.
+// WebSocket re-invests when reconnecting to prevent the Redis offline queue from losing the burn-after-read start time after expiration.
 func (s *MessageReadService) GetReadReceiptsForSender(ctx context.Context, msgFrom string) (map[string][]ReadReceipt, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT msg_id, reader_chat_id, CAST(UNIX_TIMESTAMP(read_at) * 1000 AS SIGNED)
@@ -224,8 +224,8 @@ func (s *MessageReadService) GetReadReceiptsForSender(ctx context.Context, msgFr
 	return result, rows.Err()
 }
 
-// MarkReadReceiptsApplied 标记发送方已经把回执应用到本地消息。记录本身不删除，
-// 以便阅读方重试 read 时仍能拿到同一个权威首次阅读时间。
+// MarkReadReceiptsApplied Marks that the sender has applied receipts to local messages. The record itself is not deleted,
+// So that the reader can still get the same authoritative first reading time when retrying read.
 func (s *MessageReadService) MarkReadReceiptsApplied(ctx context.Context, msgIDs []string, msgFrom, readerChatID string) error {
 	if len(msgIDs) == 0 {
 		return nil
@@ -242,8 +242,8 @@ func (s *MessageReadService) MarkReadReceiptsApplied(ctx context.Context, msgIDs
 	return err
 }
 
-// GetReadReceiptsByPeer 查询 msgFrom 发送给 readerChatID 的消息及服务器记录的首次阅读时间。
-// 用于发送方离线期间错过已读回执时的补偿查询
+// GetReadReceiptsByPeer queries the message msgFrom sent to readerChatID and the first reading time recorded by the server.
+// Compensation query for missed read receipts while the sender is offline
 func (s *MessageReadService) GetReadReceiptsByPeer(ctx context.Context, msgFrom, readerChatID string) ([]ReadReceipt, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT msg_id, CAST(UNIX_TIMESTAMP(read_at) * 1000 AS SIGNED)

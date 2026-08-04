@@ -13,8 +13,8 @@ type FistAccount struct {
 type FistTransaction struct {
 	ID           uint64    `json:"id"`
 	UserID       uint64    `json:"user_id"`
-	Amount       int64     `json:"amount"`        // 正数=收入，负数=支出
-	BalanceAfter int64     `json:"balance_after"` // 本次变动后的余额快照
+	Amount       int64     `json:"amount"`        //Positive numbers = income, negative numbers = expenses
+	BalanceAfter int64     `json:"balance_after"` //Balance snapshot after this change
 	Type         string    `json:"type"`
 	RefID        *string   `json:"ref_id,omitempty"`
 	Remark       *string   `json:"remark,omitempty"`

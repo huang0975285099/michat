@@ -3,18 +3,18 @@
     <div v-if="!bare" class="hb-info">
       <span class="hb-name">{{ name }}</span>
       <transition name="charge-pop">
-        <span v-if="charged" class="hb-charge" title="已蓄力">⚡</span>
+        <span v-if="charged" class="hb-charge" title="Already charged">⚡</span>
       </transition>
-      <!-- 出招记录等附加内容，与名字同行排布以节省纵向空间 -->
+      <!-- Additional content such as records of moves are arranged together with the names to save vertical space. -->
       <slot />
     </div>
     <div class="hb-track" :class="{ 'hb-track--shake': hit }">
       <!--
-        SVG 血条：viewBox 锁定 100x18，rect 永远画满宽度（直角矩形），
-        通过 clip-path 裁剪右/左侧露出 pct% 区域。
-        外轮廓圆角由父容器 .hb-track 的 border-radius + overflow:hidden 负责，
-        避免 preserveAspectRatio="none" 时 SVG rx 圆角被非均匀拉伸变形。
-        好处：渐变/高光保持稳定不变形，宽度变化只擦除不重绘，宽屏下圆角也完美。
+        SVG health bar：viewBox Lock 100x18，rect Always draw full width（right rectangle），
+        Pass clip-path crop right/Left side exposed pct% area。
+        The outer contour fillet is determined by the parent container .hb-track of border-radius + overflow:hidden responsible，
+        avoid preserveAspectRatio="none" time SVG rx Fillets are stretched and deformed non-uniformly。
+        Benefits：Gradient/Highlights remain stable without deformation，Width changes only erase and do not redraw，The rounded corners are also perfect in widescreen mode。
       -->
       <svg class="hb-svg" viewBox="0 0 100 18" preserveAspectRatio="none" aria-hidden="true">
         <defs>
@@ -26,7 +26,7 @@
             <stop offset="0%" stop-color="#ff7043" />
             <stop offset="100%" stop-color="#d84315" />
           </linearGradient>
-          <!-- 内发光：血条边缘柔光 -->
+          <!-- Inner glow: Soft light at the edge of the health bar -->
           <filter :id="glowId" x="-10%" y="-30%" width="120%" height="160%">
             <feGaussianBlur stdDeviation="0.5" result="b" />
             <feMerge>
@@ -36,7 +36,7 @@
           </filter>
         </defs>
 
-        <!-- 残血拖影（红，慢速延迟收缩） -->
+        <!-- Residual blood smear (red, slow delayed contraction) -->
         <rect
           x="0" y="0" width="100" height="18" rx="0"
           :fill="`url(#${ghostId})`"
@@ -44,7 +44,7 @@
           :style="{ 'clip-path': ghostClip }"
         />
 
-        <!-- 主血条（快速收缩，盖在拖影上） -->
+        <!-- Main health bar (quickly shrinks, covering the smear) -->
         <rect
           x="0" y="0" width="100" height="18" rx="0"
           :fill="`url(#${gradId})`"
@@ -54,7 +54,7 @@
           :style="{ 'clip-path': fillClip }"
         />
 
-        <!-- 顶部高光条 -->
+        <!-- Top highlight strip -->
         <rect
           x="0" y="0" width="100" height="9" rx="0"
           fill="url(#shineGrad)"
@@ -62,7 +62,7 @@
           :style="{ 'clip-path': fillClip }"
         />
 
-        <!-- 受击白闪：命中瞬间血量区域闪一下再淡出（key 变化强制重放动画） -->
+        <!-- White flash when hit: The health area flashes at the moment of hit and then fades out (key change forces replay animation) -->
         <rect
           v-if="flash" :key="flashKey"
           x="0" y="0" width="100" height="18" rx="0"
@@ -88,23 +88,23 @@ const props = defineProps({
   maxHp: { type: Number, default: 100 },
   charged: { type: Boolean, default: false },
   align: { type: String, default: 'left' }, // left | right
-  bare: { type: Boolean, default: false },  // 只渲染血条本体（名字行交由外部排布）
+  bare: { type: Boolean, default: false },  //Only the health bar body is rendered (the name line is arranged externally)
 })
 
-// 每实例唯一 id，避免同页面多 HealthBar 渐变冲突
+// Unique id for each instance to avoid gradient conflicts among multiple HealthBars on the same page
 const uid = useId()
 const gradId = `hb-grad-${uid}`
 const ghostId = `hb-ghost-${uid}`
 const glowId = `hb-glow-${uid}`
 
 const pct = computed(() => Math.max(0, Math.min(100, (props.hp / props.maxHp) * 100)))
-// 三阶段血色：健康(绿) > 60，警告(橙黄) 30~60，危险(红) ≤ 30
+// Three stages of blood color: Health (green) > 60, Warning (orange) 30~60, Danger (red) ≤ 30
 const hpClass = computed(() => {
   if (props.hp <= 30) return 'hb-fill--critical'
   if (props.hp <= 60) return 'hb-fill--low'
   return ''
 })
-// 三阶段渐变 stop 色（覆盖默认绿色）
+// Three-stage gradient stop color (overrides the default green)
 const gradStart = computed(() => {
   if (props.hp <= 30) return '#ff5b5b'
   if (props.hp <= 60) return '#ffce4d'
@@ -116,10 +116,10 @@ const gradEnd = computed(() => {
   return '#38f9d7'
 })
 
-// clip-path inset 裁剪：
-//   我方（left）: 裁右侧 → inset(0 (100-pct)% 0 0)
-//   对手（right）: 裁左侧 → inset(0 0 0 (100-pct)%)
-// 主血条快速收缩，拖影慢速延迟追上
+// clip-path inset clipping:
+// Our side (left): cut the right side → inset(0 (100-pct)% 0 0)
+// Opponent (right): cut left → inset(0 0 0 (100-pct)%)
+// The main health bar shrinks quickly, and the smear slowly catches up with delay.
 const rightCut = computed(() => Math.max(0, 100 - pct.value))
 const fillClip = computed(() =>
   props.align === 'right'
@@ -132,7 +132,7 @@ const ghostClip = computed(() =>
     : `inset(0 ${rightCut.value}% 0 0)`
 )
 
-// 受击反馈：抖动 + 白闪 + 数字滚动扣减
+// Hit feedback: jitter + white flash + digital scrolling deduction
 const hit = ref(false)
 const flash = ref(false)
 const flashKey = ref(0)
@@ -146,7 +146,7 @@ watch(() => props.hp, (now, prev) => {
     flash.value = true; flashKey.value++
     clearTimeout(flashTimer); flashTimer = setTimeout(() => { flash.value = false }, 300)
   }
-  // 数字从旧值 ease-out 滚到新值，与血条收缩同步（而非瞬间跳变）
+  // The number rolls from the old value to the new value with ease-out, synchronized with the shrinkage of the health bar (rather than an instantaneous jump)
   cancelAnimationFrame(rafId)
   const from = displayHp.value, to = now, t0 = performance.now(), dur = 420
   const step = () => {
@@ -186,29 +186,29 @@ onUnmounted(() => { cancelAnimationFrame(rafId); clearTimeout(hitTimer); clearTi
 
 .hb-svg {
   display: block; width: 100%; height: 100%;
-  /* 防止 SVG 子像素描边抖动 */
+  /* Prevent SVG sprite sketch edges from shaking */
   shape-rendering: geometricPrecision;
 }
 .hb-track-rect { fill: rgba(0, 0, 0, 0); }
 
-/* 拖影层：clip-path 慢速延迟过渡（受击时先停在原位，再慢慢追上） */
+/* Drag layer: clip-path slow delayed transition (when hit, first stop in place, then slowly catch up) */
 .hb-ghost-rect {
   transition: clip-path 0.6s cubic-bezier(0.4, 0, 0.2, 1) 0.22s;
 }
-/* 主血条：clip-path 快速过渡 */
+/* Main health bar: clip-path quick transition */
 .hb-fill-rect {
   transition: clip-path 0.32s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .hb-fill-rect.hb-fill--critical {
   animation: critPulse 0.7s ease-in-out infinite;
 }
-/* 高光条与主血条同步收缩 */
+/* The highlight bar shrinks synchronously with the main health bar */
 .hb-shine-rect {
   transition: clip-path 0.32s cubic-bezier(0.4, 0, 0.2, 1);
   pointer-events: none;
 }
 
-/* 受击白闪层：盖在主血条上，0.3s 提亮后淡出（screen 混合让它读作"高光"而非纯白块） */
+/* Hit white flash layer: covers the main health bar, brightens and then fades out in 0.3s (screen blending makes it read as "highlight" instead of pure white block) */
 .hb-flash-rect {
   pointer-events: none;
   mix-blend-mode: screen;

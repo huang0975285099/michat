@@ -1,12 +1,12 @@
 <template>
     <div class="flex flex-center column q-pa-lg" style="min-height: 100vh">
-        <img :src="logoUrl" alt="云密" width="80" style="border-radius: 16px" @click="goHome" />
-        <div class="text-h5 text-weight-bold q-mb-sm q-mt-sm">云密</div>
+        <img :src="logoUrl" alt="Yunmi" width="80" style="border-radius: 16px" @click="goHome" />
+        <div class="text-h5 text-weight-bold q-mb-sm q-mt-sm">Yunmi</div>
         <!-- <div class="text-body2 text-grey q-mb-xl text-center">
-            端到端加密聊天
+            End-to-end encrypted chat
         </div> -->
 
-        <!-- 无邀请码提示（native app 不显示） -->
+        <!-- No invitation code prompt (native app does not display) -->
         <q-card
             v-if="!inviteCode && !isNativeApp"
             class="q-mb-md bg-orange-1"
@@ -19,14 +19,14 @@
                     color="orange"
                     class="q-mb-sm"
                 />
-                <div class="text-subtitle2 text-orange">请获取邀请码</div>
+                <div class="text-subtitle2 text-orange">Please get the invitation code</div>
                 <div class="text-caption text-grey q-mb-md">
-                    云密采用邀请制注册，请从好友那获取邀请链接
+                    Yunmi adopts invitation-based registration，Please get the invitation link from your friend
                 </div>
             </q-card-section>
         </q-card>
 
-        <!-- 邀请提示 -->
+        <!-- Invitation prompt -->
         <q-card
             v-if="inviteCode && inviterInfo"
             class="q-mb-md bg-blue-1"
@@ -40,15 +40,15 @@
                     class="q-mb-sm"
                 />
                 <div class="text-subtitle2">
-                    来自 {{ inviterInfo.inviter_chat_id }} 的邀请
+                    from {{ inviterInfo.inviter_chat_id }} invitation
                 </div>
                 <div class="text-caption text-grey">
-                    注册后将自动添加对方为好友
+                    After registration, the other party will be automatically added as a friend.
                 </div>
             </q-card-section>
         </q-card>
 
-        <!-- 邀请码无效提示 -->
+        <!-- Invalid invitation code prompt -->
         <q-card
             v-if="inviteCode && inviteError"
             class="q-mb-md bg-orange-1"
@@ -61,35 +61,35 @@
                     color="orange"
                     class="q-mb-sm"
                 />
-                <div class="text-subtitle2 text-orange">邀请链接已失效</div>
+                <div class="text-subtitle2 text-orange">The invitation link has expired</div>
                 <div class="text-caption text-grey q-mb-md">
-                    邀请码过期或无效，请获取新的邀请链接
+                    The invitation code has expired or is invalid，Please get a new invitation link
                 </div>
                 <q-btn
                     outline
                     color="primary"
-                    label="访问首页"
+                    label="Visit homepage"
                     @click="goHome"
                 />
             </q-card-section>
         </q-card>
 
-        <!-- 创建新身份（邀请码有效 或 native app） -->
+        <!-- Create a new identity (invitation code is valid or native app) -->
         <q-card
             v-if="(inviteCode && inviterInfo) || isNativeApp"
             style="width: 100%; max-width: 400px"
         >
             <q-card-section>
                 <div class="text-subtitle1 text-weight-medium q-mb-sm">
-                    创建新身份
+                    Create new identity
                 </div>
                 <div class="text-caption text-grey q-mb-md">
-                    系统将为你生成唯一的加密身份。私钥仅保存在本设备，请务必备份。
+                    The system will generate a unique encrypted identity for you。The private key is only saved on this device，Be sure to back up。
                 </div>
                 <q-btn
                     unelevated
                     color="primary"
-                    :label="inviterInfo ? '接受邀请并创建身份' : '创建新身份'"
+                    :label="inviterInfo ? 'Accept the invitation and create an identity' : 'Create new identity'"
                     class="full-width"
                     :loading="creating"
                     @click="create"
@@ -97,9 +97,9 @@
             </q-card-section>
         </q-card>
 
-        <!-- 恢复身份 -->
+        <!-- restore identity -->
         <q-expansion-item
-            label="已有私钥？恢复身份"
+            label="Already have a private key？restore identity"
             class="q-mt-md"
             style="width: 100%; max-width: 400px"
             :default-opened="!!restorePrivKey || !inviteCode"
@@ -108,7 +108,7 @@
                 <q-card-section>
                     <q-input
                         v-model="restorePrivKey"
-                        label="私钥（Base64）"
+                        label="private key（Base64）"
                         type="textarea"
                         dense
                         outlined
@@ -116,12 +116,12 @@
                         rows="3"
                     />
                     <div class="text-caption text-grey q-mb-sm">
-                        粘贴私钥即可恢复，无需 Chat ID
+                        Paste the private key to restore，No need Chat ID
                     </div>
                     <q-btn
                         unelevated
                         color="secondary"
-                        label="恢复身份"
+                        label="restore identity"
                         class="full-width"
                         :loading="restoring"
                         @click="restore"
@@ -155,12 +155,12 @@ const creating = ref(false);
 const restoring = ref(false);
 const restorePrivKey = ref("");
 
-// 邀请相关
+// Invitation related
 const inviteCode = ref("");
 const inviterInfo = ref(null);
 const inviteError = ref(false);
 
-// Electron (file://) 或 Capacitor Android (https://localhost) 无邀请码也可注册
+// Electron (file://) or Capacitor Android (https://localhost) can also be registered without an invitation code
 const isNativeApp = window.location.protocol === 'file:' ||
     (window.location.protocol === 'https:' && window.location.hostname === 'localhost');
 
@@ -169,11 +169,11 @@ function goHome() {
 }
 
 onMounted(async () => {
-    // 从 URL 获取邀请码
+    // Get invitation code from URL
     const code = route.query.invite;
     if (code) {
         inviteCode.value = code;
-        // 验证邀请码
+        // Verify invitation code
         try {
             const { data } = await inviteApi.validate(code);
             if (data.valid) {
@@ -184,12 +184,12 @@ onMounted(async () => {
         }
     }
 
-    // 加载已有私钥
+    // Load existing private key
     try {
         const key = await exportPrivateKey();
         if (key) restorePrivKey.value = key;
     } catch {
-        // IndexedDB 无私钥，忽略
+        // IndexedDB has no private key and is ignored.
     }
 });
 
@@ -199,17 +199,17 @@ async function create() {
         const inviterChatId = await identity.initialize(inviteCode.value);
         $q.notify({
             type: "positive",
-            message: `身份创建成功：${identity.nickname}`,
+            message: `Identity created successfully：${identity.nickname}`,
         });
         if (inviterChatId) {
             $q.notify({
                 type: "info",
-                message: `已向 ${inviterChatId} 发送好友申请`,
+                message: `Already sent to ${inviterChatId} Send friend request`,
             });
         }
         router.replace("/chats");
     } catch (e) {
-        $q.notify({ type: "negative", message: "创建失败：" + e.message });
+        $q.notify({ type: "negative", message: "Creation failed：" + e.message });
     } finally {
         creating.value = false;
     }
@@ -217,21 +217,21 @@ async function create() {
 
 async function restore() {
     if (!restorePrivKey.value) {
-        $q.notify({ type: "warning", message: "请填写私钥" });
+        $q.notify({ type: "warning", message: "Please fill in the private key" });
         return;
     }
     restoring.value = true;
     try {
-        // 1. 导入私钥，推导公钥
+        // 1. Import the private key and derive the public key
         const pubKeyB64 = await importPrivateKey(restorePrivKey.value.trim());
 
-        // 2. 获取挑战码
+        // 2. Get the challenge code
         const { data: challengeData } = await identityApi.challenge(pubKeyB64);
 
-        // 3. 用私钥对挑战码签名，证明私钥所有权
+        // 3. Sign the challenge code with the private key to prove ownership of the private key
         const signature = await signChallenge(challengeData.nonce);
 
-        // 4. 提交公钥 + 签名 + 挑战码，换取新 session_token
+        // 4. Submit public key + signature + challenge code in exchange for new session_token
         const { data } = await identityApi.reauth(
             pubKeyB64,
             signature,
@@ -241,23 +241,23 @@ async function restore() {
         localStorage.setItem("chat_id", data.chat_id);
         localStorage.setItem("nickname", data.nickname);
 
-        // 5. 加载身份状态并跳转
+        // 5. Load identity status and jump
         await identity.load();
         if (identity.isReady) {
-            registerPushToken(); // 恢复身份后上报极光 token
+            registerPushToken(); //Report the Aurora token after restoring your identity
             $q.notify({
                 type: "positive",
-                message: `身份恢复成功：${data.nickname}`,
+                message: `Identity restored successfully：${data.nickname}`,
             });
             router.replace("/chats");
         } else {
-            $q.notify({ type: "warning", message: "身份恢复但服务端未就绪" });
+            $q.notify({ type: "warning", message: "Identity restored but server not ready" });
         }
     } catch (e) {
-        const errMsg = e.response?.data?.error || "网络错误";
+        const errMsg = e.response?.data?.error || "network error";
         $q.notify({
             type: "negative",
-            message: "恢复失败：" + errMsg,
+            message: "Recovery failed：" + errMsg,
         });
     } finally {
         restoring.value = false;

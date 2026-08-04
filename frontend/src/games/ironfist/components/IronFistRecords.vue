@@ -9,49 +9,49 @@
                 color="white"
                 @click="$emit('back')"
             />
-            <div class="text-h6 q-ml-sm">对战记录</div>
+            <div class="text-h6 q-ml-sm">Battle record</div>
         </div>
 
         <div v-if="statsLoading && !stats" class="text-center q-py-xl">
             <q-spinner-dots color="amber-8" size="38px" />
         </div>
         <template v-else-if="stats">
-            <!-- 战绩概览 -->
+            <!-- Record overview -->
             <div class="rec-total">
                 <div class="rec-total-num">{{ stats.total_battles }}</div>
-                <div class="rec-total-label">累计对战场次🔥 </div>
+                <div class="rec-total-label">Total number of battles🔥 </div>
                 <div class="rec-streak">
-                    当前 {{ stats.current_win_streak }} 连胜，最高 {{ stats.max_win_streak }} 连胜
+                    current {{ stats.current_win_streak }} winning streak，highest {{ stats.max_win_streak }} winning streak
                 </div>
             </div>
 
             <div class="rec-mode">
-                <div class="rec-mode-title">🤖 人机对战 PvE</div>
+                <div class="rec-mode-title">🤖 Man-machine battle PvE</div>
                 <div class="rec-wld">
-                    <span class="rec-w">{{ stats.pve_wins }} 胜</span>
-                    <span class="rec-l">{{ stats.pve_losses }} 负</span>
-                    <span class="rec-d">{{ stats.pve_draws }} 平</span>
+                    <span class="rec-w">{{ stats.pve_wins }} win</span>
+                    <span class="rec-l">{{ stats.pve_losses }} Negative</span>
+                    <span class="rec-d">{{ stats.pve_draws }} flat</span>
                 </div>
             </div>
             <div class="rec-mode">
-                <div class="rec-mode-title">⚔️ 匹配对战 PvP</div>
+                <div class="rec-mode-title">⚔️ Match play PvP</div>
                 <div class="rec-wld">
-                    <span class="rec-w">{{ stats.pvp_wins }} 胜</span>
-                    <span class="rec-l">{{ stats.pvp_losses }} 负</span>
-                    <span class="rec-d">{{ stats.pvp_draws }} 平</span>
+                    <span class="rec-w">{{ stats.pvp_wins }} win</span>
+                    <span class="rec-l">{{ stats.pvp_losses }} Negative</span>
+                    <span class="rec-d">{{ stats.pvp_draws }} flat</span>
                 </div>
             </div>
             <div class="rec-mode">
-                <div class="rec-mode-title">👥 好友对战</div>
+                <div class="rec-mode-title">👥 Friends vs. friends</div>
                 <div class="rec-wld">
-                    <span class="rec-w">{{ stats.friend_wins }} 胜</span>
-                    <span class="rec-l">{{ stats.friend_losses }} 负</span>
-                    <span class="rec-d">{{ stats.friend_draws }} 平</span>
+                    <span class="rec-w">{{ stats.friend_wins }} win</span>
+                    <span class="rec-l">{{ stats.friend_losses }} Negative</span>
+                    <span class="rec-d">{{ stats.friend_draws }} flat</span>
                 </div>
             </div>
 
-            <!-- 逐局明细 -->
-            <div class="section-title">逐局明细</div>
+            <!-- Game-by-game details -->
+            <div class="section-title">Game-by-game details</div>
             <div
                 v-if="matchesLoading && !matches.length"
                 class="text-center q-py-lg"
@@ -59,7 +59,7 @@
                 <q-spinner-dots color="amber-8" size="32px" />
             </div>
             <div v-else-if="!matches.length" class="empty-hint">
-                还没有对战记录，去人机模式打一局吧
+                No battle record yet，Let’s play in human-computer mode
             </div>
             <template v-else>
                 <div v-for="m in matches" :key="m.id" class="ml-card">
@@ -77,15 +77,15 @@
                             <div class="ml-line1">
                                 {{
                                     m.mode === "pve"
-                                        ? "人机 PvE"
+                                        ? "man-machine PvE"
                                         : m.mode === "friend"
-                                          ? "好友对战"
-                                          : "匹配 PvP"
+                                          ? "Friends vs. friends"
+                                          : "match PvP"
                                 }}
-                                · {{ m.opponent_name || "对手" }}
+                                · {{ m.opponent_name || "opponent" }}
                             </div>
                             <div class="ml-line2">
-                                {{ m.rounds }} 回合 · 终局 HP {{ m.player_hp }} :
+                                {{ m.rounds }} round · Finale HP {{ m.player_hp }} :
                                 {{ m.opponent_hp }}
                             </div>
                         </div>
@@ -144,10 +144,10 @@
                         flat
                         dense
                         color="amber-7"
-                        label="加载更多"
+                        label="load more"
                         @click="loadMatches()"
                     />
-                    <div v-else class="text-caption text-grey-6">没有更多了</div>
+                    <div v-else class="text-caption text-grey-6">no more</div>
                 </div>
             </template>
         </template>
@@ -195,7 +195,7 @@ async function loadMatches(reset = false) {
         matches.value = reset ? list : [...matches.value, ...list];
         matchesHasMore.value = list.length === PAGE;
     } catch {
-        // 静默失败
+        // Silently fails
     } finally {
         matchesLoading.value = false;
     }
@@ -208,7 +208,7 @@ onMounted(async () => {
         stats.value = data;
     } catch {
         Notify.create({
-            message: "战绩数据加载失败",
+            message: "Failed to load performance data",
             color: "negative",
             textColor: "white",
             position: "top",
@@ -239,7 +239,7 @@ onMounted(async () => {
     padding: 32px 16px;
 }
 
-/* 战绩概览 */
+/* Record overview */
 .rec-total {
     text-align: center;
     padding: 20px;
@@ -293,7 +293,7 @@ onMounted(async () => {
     color: #c5b3ff;
 }
 
-/* 逐局明细卡片 */
+/* Game-by-game detail cards */
 .ml-card {
     border-radius: 12px;
     background: rgba(255, 255, 255, 0.04);
@@ -356,7 +356,7 @@ onMounted(async () => {
     color: rgba(255, 255, 255, 0.4);
 }
 
-/* 逐回合展开 */
+/* unfold round by round */
 .ml-detail {
     padding: 4px 14px 10px;
     border-top: 1px dashed rgba(255, 255, 255, 0.08);

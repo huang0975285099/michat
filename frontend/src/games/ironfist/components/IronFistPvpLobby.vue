@@ -9,7 +9,7 @@
         color="white"
         @click="$emit('back')"
       />
-      <div class="text-h6 q-ml-sm">匹配对战</div>
+      <div class="text-h6 q-ml-sm">Match play</div>
       <q-space />
       <q-chip dense color="amber-9" text-color="white" class="fist-chip">
         ⚡ {{ fistStore.balance.toLocaleString() }} {{ currency }}
@@ -20,11 +20,11 @@
       <!-- <q-icon name="groups" size="22px" class="pvp-banner-ic" /> -->
       <div class="pvp-banner-main">
         <div class="pvp-banner-title">
-          大厅人数
+          Number of people in the hall
           <span class="pvp-banner-count">{{ lobbyUsers.length }}</span>
         </div>
 
-        <!-- 大厅在线玩家头像列表 -->
+        <!-- Lobby online player avatar list -->
         <div v-if="lobbyUsers.length" class="lobby-users">
           <div
             v-for="u in lobbyUsers"
@@ -41,19 +41,19 @@
               {{ avatarLetter(u.nickname || u.chat_id) }}
             </q-avatar>
             <div class="lobby-user-name">{{ u.nickname || u.chat_id }}</div>
-            <div v-if="u.chat_id === myChatId" class="lobby-user-tag">我</div>
+            <div v-if="u.chat_id === myChatId" class="lobby-user-tag">me</div>
           </div>
         </div>
         <div v-else class="lobby-empty">
           <q-spinner-dots v-if="lobbyJoining" color="amber" size="22px" />
           <span class="q-ml-sm">{{
-            lobbyJoining ? "正在加入大厅…" : "当前大厅暂无其他玩家"
+            lobbyJoining ? "Joining lobby…" : "There are currently no other players in the lobby"
           }}</span>
         </div>
       </div>
     </div>
 
-    <!-- 玩家信息弹窗 -->
+    <!-- Player information pop-up window -->
     <q-dialog v-model="profileDialog">
       <q-card class="profile-card">
         <q-card-section class="row items-center q-pb-none">
@@ -76,19 +76,19 @@
             <div class="profile-stat-num">
               {{ (profileData?.fist_balance || 0).toLocaleString() }}
             </div>
-            <div class="profile-stat-label">{{ currency }} 余额</div>
+            <div class="profile-stat-label">{{ currency }} balance</div>
           </div>
           <div class="profile-stat">
             <div class="profile-stat-num">
               {{ profileData?.total_battles || 0 }}
             </div>
-            <div class="profile-stat-label">累计对战场次</div>
+            <div class="profile-stat-label">Total number of battles</div>
           </div>
         </q-card-section>
       </q-card>
     </q-dialog>
 
-    <div class="section-title">选择房间档位</div>
+    <div class="section-title">Select room category</div>
     <div
       v-for="t in PVP_TIERS"
       :key="t.key"
@@ -105,37 +105,37 @@
         <div class="tier-stake-amount">
           {{ t.stake.toLocaleString() }}
         </div>
-        <div class="tier-stake-unit">{{ currency }} / 局</div>
+        <div class="tier-stake-unit">{{ currency }} / bureau</div>
       </div>
     </div>
 
-    <!-- 匹配遮罩：调真实撮合 API，等待 WS 推送或立即匹配 -->
+    <!-- Matching mask: adjust the real matching API, wait for WS push or match immediately -->
     <transition name="result-fade">
       <div v-if="matchState !== 'idle'" class="match-overlay">
         <div class="match-card">
           <template v-if="matchState === 'searching'">
             <q-spinner-dots color="amber" size="56px" />
-            <div class="match-title">正在寻找对手…</div>
+            <div class="match-title">Looking for an opponent…</div>
             <div class="match-sub">
-              {{ matchTier?.name }} · 质押
+              {{ matchTier?.name }} · pledge
               {{ matchTier?.stake.toLocaleString() }} {{ currency }}
             </div>
             <q-btn
               flat
               color="grey-5"
-              label="取消匹配"
+              label="Unmatch"
               :disable="cancelling"
               @click="cancelMatch"
             />
           </template>
           <template v-else-if="matchState === 'error'">
             <div class="match-soon-emoji">⚠️</div>
-            <div class="match-title">{{ matchError || "匹配失败" }}</div>
+            <div class="match-title">{{ matchError || "Match failed" }}</div>
             <q-btn
               unelevated
               color="amber-8"
               text-color="dark"
-              label="知道了"
+              label="Got it"
               @click="resetMatch"
             />
           </template>
@@ -170,11 +170,11 @@ const matchTier = ref(null);
 const matchError = ref("");
 const cancelling = ref(false);
 let matchTimer = null;
-let matchEpoch = 0; // 每次 startMatch/cancelMatch 自增，用于丢弃过期的异步响应
-let pollTimer = null; // WS 通知丢失时的轮询兜底
+let matchEpoch = 0; //Each time startMatch/cancelMatch is incremented, it is used to discard expired asynchronous responses.
+let pollTimer = null; //Polling when WS notification is lost
 let disposed = false;
 
-// 收到 WS 推送的匹配成功（仅作为等待方时触发；B 端立即匹配走 joinPVPQueue 返回值）
+// The match pushed by WS is received successfully (triggered only when serving as a waiting party; the B side will match immediately and use the joinPVPQueue return value)
 function onPVPMatched(payload) {
   if (matchState.value !== "searching") return;
   if (!payload?.room_id) return;
@@ -182,11 +182,11 @@ function onPVPMatched(payload) {
   emitMatched(payload);
 }
 
-// 统一出口：携带房间号与对手档案给父级路由切到对战页
+// Unified exit: Bring the room number and opponent file to the parent router to switch to the battle page
 function emitMatched({ room_id, opponent, tier, stake }) {
   clearTimeout(matchTimer);
   clearTimeout(pollTimer);
-  // 先暂存 matchTier 再置 null，否则下方 fallback 永远拿到 null
+  // First temporarily store matchTier and then set it to null, otherwise the fallback below will always get null.
   const savedTier = matchTier.value;
   matchState.value = "idle";
   matchTier.value = null;
@@ -198,25 +198,25 @@ function emitMatched({ room_id, opponent, tier, stake }) {
   });
 }
 
-// PVP 大厅在线玩家列表
+// PVP lobby online player list
 const lobbyUsers = ref([]); // [{chat_id, nickname, fist_balance, total_battles}]
 const lobbyJoining = ref(true);
 const myChatId = identityStore.chatId;
 const profileDialog = ref(false);
 const profileData = ref(null);
 
-// 大厅列表更新处理（服务端在有人加入/离开时广播）
+// Lobby list update processing (the server broadcasts when someone joins/leaves)
 function onLobbyUpdate(payload) {
   // payload: { count, users: [{chat_id, nickname, fist_balance, total_battles}] }
   lobbyUsers.value = payload?.users ?? [];
   lobbyJoining.value = false;
 }
 
-// 进入大厅：注册监听 + 发送 join
+// Enter the lobby: register to listen + send join
 async function joinLobby() {
   wsOn("ironfist_lobby_update", onLobbyUpdate);
   wsOn("ironfist_pvp_matched", onPVPMatched);
-  await wsConnect(); // 确保连接已建立（IronFistPage 进入时已连接，幂等）
+  await wsConnect(); //Make sure the connection is established (IronFistPage is connected when entering, idempotent)
   if (disposed) return;
   wsSend("ironfist_lobby_join", {});
 }
@@ -226,11 +226,11 @@ function leaveLobby() {
   wsOff("ironfist_lobby_update", onLobbyUpdate);
   wsOff("ironfist_pvp_matched", onPVPMatched);
   lobbyUsers.value = [];
-  // 离开大厅时若仍在匹配中，需释放质押。但存在竞态：恰在离开瞬间可能已被撮合，
-  // 此时 cancel 对 matched 房间无效（静默跳过），直接 idle 会留下孤儿 matched 房间，
-  // 质押被锁定至后端 matched 超时才按平局退款。故与 cancelMatch 一致先复查队列状态：
-  //   - 已 matched → 改为进入对战页（已质押不能丢，父级仍挂载，emit 可被处理）
-  //   - 否则 → 正常取消退款
+  // If you are still in the match when you leave the lobby, you need to release the pledge. But there is a competition: you may have been matched at the moment of leaving,
+  // At this time, cancel is invalid for matched rooms (skipping silently), and directly idle will leave orphan matched rooms.
+  // The pledge is locked until the backend matched times out and is refunded as a draw. Therefore, consistent with cancelMatch, check the queue status first:
+  // - Matched → Enter the battle page instead (pledged cannot be lost, the parent is still mounted, and emit can be processed)
+  // - Otherwise → normal cancellation and refund
   if (matchState.value === "searching") {
     matchEpoch++;
     clearTimeout(matchTimer);
@@ -250,16 +250,16 @@ function leaveLobby() {
           return;
         }
       } catch {
-        // 复查失败：退回到主动取消兜底
+        // Review failed: Return to proactively canceling the cover
       }
       ironfistApi.cancelPVPQueue().catch(() => {});
     })();
   }
 }
 
-// 选择档位后进入匹配：调用撮合 API。
-//   - status='queued'：保持 searching，等待 WS ironfist_pvp_matched 推送 + 轮询兜底
-//   - status='matched'：本地调用方为 B，opponent 已是 A 档案，立即切到对战页
+// Enter matching after selecting a gear: call the matching API.
+// - status='queued': keep searching and wait for WS ironfist_pvp_matched push + polling for details
+// - status='matched': The local caller is B, the opponent is already the A file, immediately switch to the battle page
 async function startMatch(tier) {
   const epoch = ++matchEpoch;
   matchTier.value = tier;
@@ -269,8 +269,8 @@ async function startMatch(tier) {
   try {
     const { data } = await ironfistApi.joinPVPQueue(tier.key);
     if (data?.status === "matched") {
-      // 立即匹配：即便用户在 POST 飞行期间点了取消也直接进入——
-      // matched 房间无法取消，强行丢弃只会让对手空等并触发 15 分钟超时退款
+      // Immediate matching: Even if the user clicks Cancel during the POST flight, they will enter directly——
+      // Matched rooms cannot be canceled. Forcibly discarding them will only make the opponent wait for nothing and trigger a 15-minute timeout refund.
       emitMatched({
         room_id: data.room_id,
         opponent: data.opponent,
@@ -279,19 +279,19 @@ async function startMatch(tier) {
       });
       return;
     }
-    // status === 'queued'：保持 searching 等待 WS 推送
-    // 若用户在 POST 飞行期间已点取消（epoch 已变），先前的 DELETE 可能未命中此房间，补一次取消
+    // status === 'queued': Keep searching waiting for WS push
+    // If the user has clicked Cancel during the POST flight (epoch has changed), the previous DELETE may not have hit this room. Please cancel once.
     if (epoch !== matchEpoch) {
       ironfistApi.cancelPVPQueue().catch(() => {});
       return;
     }
-    // WS 通知丢失兜底：每 5 秒轮询一次队列状态，发现 matched 立即进入对战页
+    // WS notification is lost: the queue status is polled every 5 seconds, and if matched is found, enter the battle page immediately
     startMatchPoll(epoch);
-    // 兜底超时（10 分钟），避免后端漏推 + 轮询同时失效导致用户卡死
+    // Backend timeout (10 minutes) to avoid backend push leakage + polling failure at the same time, causing users to get stuck.
     clearTimeout(matchTimer);
     matchTimer = setTimeout(() => {
       if (matchState.value === "searching") {
-        matchError.value = "匹配超时，请重试";
+        matchError.value = "Match timeout，Please try again";
         matchState.value = "error";
         clearTimeout(pollTimer);
         ironfistApi.cancelPVPQueue().catch(() => {});
@@ -302,19 +302,19 @@ async function startMatch(tier) {
     const status = e?.response?.status;
     const msg = e?.response?.data?.error;
     if (status === 402) {
-      matchError.value = `${currency.value} 余额不足，无法质押`;
+      matchError.value = `${currency.value} Insufficient balance，Unable to pledge`;
     } else if (status === 400) {
-      matchError.value = msg || "档位无效";
+      matchError.value = msg || "Invalid gear";
     } else if (status === 409) {
-      matchError.value = msg || "已在一场对局中，请先完成或等待结算";
+      matchError.value = msg || "Already in a match，Please complete first or wait for settlement";
     } else {
-      matchError.value = msg || "匹配失败，请稍后重试";
+      matchError.value = msg || "Match failed，Please try again later";
     }
     matchState.value = "error";
   }
 }
 
-// 轮询队列状态兜底 WS 通知丢失：发现 matched 则切到对战页
+// Polling queue status, WS notification is lost: if matched is found, switch to the battle page
 function startMatchPoll(epoch) {
   clearTimeout(pollTimer);
   pollTimer = setTimeout(async () => {
@@ -331,40 +331,40 @@ function startMatchPoll(epoch) {
         });
         return;
       }
-      // 仍 queued 或 idle 则继续轮询
+      // If it is still queued or idle, continue polling.
       startMatchPoll(epoch);
     } catch (e) {
-      // 轮询失败不致命，继续下一轮
+      // Polling failure is not fatal and continues to the next round
       startMatchPoll(epoch);
     }
   }, 5000);
 }
 
-// 用户主动取消匹配：调后端取消接口（退款），并复位本地状态
+// The user actively cancels matching: adjust the backend to cancel the interface (refund) and reset the local status
 async function cancelMatch() {
   if (cancelling.value) return;
   cancelling.value = true;
-  matchEpoch++; // 使进行中的 startMatch 响应失效
+  matchEpoch++; //Invalidate a startMatch response in progress
   clearTimeout(matchTimer);
   clearTimeout(pollTimer);
   try {
     await ironfistApi.cancelPVPQueue();
   } catch (e) {
-    // 取消失败不能静默回退到 idle：后端可能仍持有 matching 房间，
-    // 用户以为已取消却仍可能被撮合。保留错误状态提示重试。
-    matchError.value = e?.response?.data?.error || "取消失败，请重试";
+    // Cancellation failure cannot silently fall back to idle: the backend may still hold matching rooms.
+    // Users may still be matched even though they think they have been cancelled. Keep the error status and prompt to try again.
+    matchError.value = e?.response?.data?.error || "Cancellation failed，Please try again";
     matchState.value = "error";
     cancelling.value = false;
     return;
   }
-  // 竞态复查：cancelPVPQueue 仅能取消 status='matching' 的房间，已 matched 的房间
-  // 会被静默跳过（返回 ok=true）。若不复查，玩家 A 会在被撮合的瞬间点取消，
-  // 误以为取消成功置 idle，导致 WS 推送与轮询双双失效，形成孤儿 matched 房间，
-  // 质押被锁定 15 分钟才由 SweepTimeoutPVPMatched 按平局退款。
+  // Race status review: cancelPVPQueue can only cancel rooms with status='matching' and matched rooms
+  // Will be silently skipped (returns ok=true). If there is no review, Player A will be canceled at the moment of being matched.
+  // It was mistakenly thought that the cancellation was successful and idle was set, causing both WS push and polling to fail, forming an orphan matched room.
+  // The stake is locked for 15 minutes before being refunded in a draw by SweepTimeoutPVPMatched.
   try {
     const { data } = await ironfistApi.getPVPQueueStatus();
     if (data?.status === "matched" && data.room_id) {
-      // 实际已被撮合：matched 房间无法取消，直接进入对战页避免孤儿房间
+      // Actually matched: The matched room cannot be canceled. Go directly to the match page to avoid orphan rooms.
       emitMatched({
         room_id: data.room_id,
         opponent: data.opponent,
@@ -375,7 +375,7 @@ async function cancelMatch() {
       return;
     }
   } catch (e) {
-    // 复查失败不影响取消结果，仍按已取消处理（最坏情况由 15 分钟超时兜底）
+    // Failure to review will not affect the cancellation result and will still be processed as canceled (the worst case scenario will be covered by a 15-minute timeout)
   }
   cancelling.value = false;
   matchState.value = "idle";
@@ -383,8 +383,8 @@ async function cancelMatch() {
 }
 
 function resetMatch() {
-  // 关闭错误弹窗：清理定时器、使进行中的异步响应失效，
-  // 并 best-effort 清理可能残留的 matching 房间（如 cancelMatch 失败场景）。
+  // Close the error pop-up window: clear the timer and invalidate the asynchronous response in progress.
+  // And best-effort cleans up possible remaining matching rooms (such as cancelMatch failure scenarios).
   matchEpoch++;
   clearTimeout(matchTimer);
   clearTimeout(pollTimer);
@@ -394,7 +394,7 @@ function resetMatch() {
   matchError.value = "";
 }
 
-// 头像字母与配色（与好友列表风格一致）
+// Avatar lettering and color matching (consistent with friend list style)
 const AVATAR_COLORS = [
   "purple",
   "deep-orange",
@@ -481,7 +481,7 @@ onUnmounted(() => {
   line-height: 1.4;
 }
 
-/* 大厅在线玩家头像列表 */
+/* Lobby online player avatar list */
 .lobby-users {
   display: flex;
   gap: 12px;
@@ -541,7 +541,7 @@ onUnmounted(() => {
   margin-bottom: 8px;
 }
 
-/* 玩家信息弹窗 */
+/* Player information pop-up window */
 .profile-card {
   background: linear-gradient(180deg, #2a2140, #1a1f3e);
   color: #fff;
@@ -634,7 +634,7 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.5);
 }
 
-/* 匹配遮罩 */
+/* match mask */
 .match-overlay {
   position: fixed;
   inset: 0;
@@ -674,7 +674,7 @@ onUnmounted(() => {
   line-height: 1.5;
 }
 
-/* 匹配遮罩淡入淡出 */
+/* Match mask fade */
 .result-fade-enter-active {
   transition: opacity 0.45s ease;
 }

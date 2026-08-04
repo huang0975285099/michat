@@ -15,7 +15,7 @@ export const useGameStore = defineStore('game', () => {
   const roomId     = ref('')
   const seed       = ref(0)
   const isHost     = ref(false)
-  const game       = ref('bomberman')   // 当前对战的游戏类型
+  const game       = ref('bomberman')   //The type of game you are currently playing against
 
   let _router = null
   let _inviteTimer = null
@@ -34,8 +34,8 @@ export const useGameStore = defineStore('game', () => {
     game.value = gameType
     state.value = 'inviting'
 
-    // 携带邀请方自己的昵称：受邀方（guest）据此显示对手昵称，
-    // 否则只能拿到对方 chat_id，导致战绩里显示 ID 而非昵称。
+    // Carrying the inviter's own nickname: the invitee (guest) displays the opponent's nickname accordingly.
+    // Otherwise, you can only get the other party's chat_id, causing the ID instead of the nickname to be displayed in the results.
     send('game_invite', {
       to: chatId,
       game: gameType,
@@ -45,7 +45,7 @@ export const useGameStore = defineStore('game', () => {
 
     _inviteTimer = setTimeout(() => {
       if (state.value === 'inviting') {
-        Notify.create({ type: 'warning', message: '对方未响应邀请', timeout: 2000 })
+        Notify.create({ type: 'warning', message: 'The other party did not respond to the invitation', timeout: 2000 })
         reset()
       }
     }, 30_000)
@@ -86,7 +86,7 @@ export const useGameStore = defineStore('game', () => {
     }
     isHost.value = false
     opponentId.value = payload.from
-    // 优先用邀请方携带的昵称；否则回退好友昵称缓存；再退化为 chat_id
+    // Priority will be given to the nickname carried by the inviter; otherwise, the friend's nickname cache will be rolled back; then it will be degraded to chat_id.
     opponentNickname.value =
       payload.from_nickname ||
       useIdentityStore().getFriendName(payload.from) ||
@@ -115,7 +115,7 @@ export const useGameStore = defineStore('game', () => {
   function _onReject(payload) {
     if (state.value !== 'inviting') return
     clearTimeout(_inviteTimer)
-    const reason = payload.reason === 'busy' ? '对方正忙' : '对方拒绝了邀请'
+    const reason = payload.reason === 'busy' ? 'The other party is busy' : 'The other party declined the invitation'
     Notify.create({ type: 'warning', message: reason, timeout: 2000 })
     reset()
   }

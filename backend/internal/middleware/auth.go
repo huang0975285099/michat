@@ -13,7 +13,7 @@ const CtxChatID = "chat_id"
 const CtxUserID = "user_id"
 const CtxNickname = "nickname"
 
-// Auth 校验 session token，将 chat_id 注入 context
+// Auth verifies session token and injects chat_id into context
 func Auth(svc *service.IdentityService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := extractToken(c)
@@ -26,7 +26,7 @@ func Auth(svc *service.IdentityService) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired session"})
 			return
 		}
-		// 查出 user id
+		// Find user id
 		user, err := svc.GetByChatID(c.Request.Context(), chatID)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
@@ -40,10 +40,10 @@ func Auth(svc *service.IdentityService) gin.HandlerFunc {
 }
 
 func extractToken(c *gin.Context) string {
-	// 优先从 Authorization: Bearer <token>
+	// Prioritize from Authorization: Bearer <token>
 	if auth := c.GetHeader("Authorization"); strings.HasPrefix(auth, "Bearer ") {
 		return strings.TrimPrefix(auth, "Bearer ")
 	}
-	// 其次从 query param（WebSocket 握手用）
+	// Secondly, from query param (used for WebSocket handshake)
 	return c.Query("token")
 }

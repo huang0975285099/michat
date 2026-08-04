@@ -16,14 +16,14 @@
             :color="muted ? 'negative' : 'white'"
             @click="toggleMute"
         >
-            <q-tooltip>{{ muted ? '取消静音' : '静音' }}</q-tooltip>
+            <q-tooltip>{{ muted ? 'Unmute' : 'mute' }}</q-tooltip>
         </q-btn>
         <q-btn
             flat round dense size="sm"
             icon="call_end" color="negative"
             @click="callStore.hangup()"
         >
-            <q-tooltip>挂断</q-tooltip>
+            <q-tooltip>Hang up</q-tooltip>
         </q-btn>
     </div>
 </template>
@@ -41,12 +41,12 @@ let timer = null;
 const statusText = computed(() => {
     const name = callStore.peerNickname || callStore.peerId;
     if (callStore.connectionStatus === "reconnecting") {
-        return `网络中断，正在恢复（${callStore.reconnectSeconds}秒）`;
+        return `Network outage，Recovering（${callStore.reconnectSeconds}seconds）`;
     }
     switch (callStore.state) {
-        case "calling": return `正在呼叫 ${name}...`;
-        case "ringing": return `来电：${name}`;
-        case "active":  return callStore.connectionStatus === "connected" ? name : "正在建立安全连接...";
+        case "calling": return `Calling ${name}...`;
+        case "ringing": return `incoming call：${name}`;
+        case "active":  return callStore.connectionStatus === "connected" ? name : "Establishing secure connection...";
         default:        return "";
     }
 });

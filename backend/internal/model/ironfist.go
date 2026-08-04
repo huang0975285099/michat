@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// IronFistStats 用户对战统计（每人一行）
+// IronFistStats user battle statistics (one row per person)
 type IronFistStats struct {
 	UserID           uint64    `json:"user_id"`
 	PvpWins          int       `json:"pvp_wins"`
@@ -21,17 +21,17 @@ type IronFistStats struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
-// 成就代号（与前端 ACHIEVEMENTS 列表保持一致）
+// Achievement code (consistent with the front-end ACHIEVEMENTS list)
 const (
-	AchievementFirstBattle    = "first_battle"    // 初出茅庐：完成 1 场对战
-	AchievementHundredBattles = "hundred_battles" // 百战不殆：累计 100 场对战
-	AchievementWinStreak5     = "win_streak_5"    // 连胜达人：连胜 5 场
-	AchievementCounterMaster  = "counter_master"  // 反击大师：单场反击成功 3 次
-	AchievementLowHpComeback  = "low_hp_comeback" // 残血翻盘：HP < 10 时获胜
-	AchievementHighHpWin      = "high_hp_win"     // 稳操胜券：HP > 90 时获胜
+	AchievementFirstBattle    = "first_battle"    //Fledgling: Complete 1 match
+	AchievementHundredBattles = "hundred_battles" //Fight a hundred battles without danger: 100 battles in total
+	AchievementWinStreak5     = "win_streak_5"    //Winning Streak: Win 5 games in a row
+	AchievementCounterMaster  = "counter_master"  //Counterattack Master: Successfully counterattack 3 times in a single game
+	AchievementLowHpComeback  = "low_hp_comeback" //Comeback with residual health: Win when HP < 10
+	AchievementHighHpWin      = "high_hp_win"     //Guaranteed victory: Win when HP > 90
 )
 
-// AllAchievements 全部成就代号
+// AllAchievements All achievement codes
 var AllAchievements = []string{
 	AchievementFirstBattle,
 	AchievementHundredBattles,
@@ -41,14 +41,14 @@ var AllAchievements = []string{
 	AchievementHighHpWin,
 }
 
-// AchievementMeta 成就展示信息
+// AchievementMeta achievement display information
 type AchievementMeta struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
 	Desc string `json:"desc"`
 }
 
-// AchievementDefinitions 成就定义（代号 → 名称/条件），与文档第十九节第4点一致
+// AchievementDefinitions achievement definition (code → name/condition), consistent with point 4 of Section 19 of the document
 var AchievementDefinitions = map[string]AchievementMeta{
 	AchievementFirstBattle:    {Code: AchievementFirstBattle, Name: "初出茅庐", Desc: "完成 1 场对战"},
 	AchievementHundredBattles: {Code: AchievementHundredBattles, Name: "百战不殆", Desc: "累计 100 场对战"},

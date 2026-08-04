@@ -13,7 +13,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
-// IronFistService 铁拳对战统计与成就服务
+// IronFistService Iron Fist battle statistics and achievement service
 type IronFistService struct {
 	db *sql.DB
 }
@@ -22,7 +22,7 @@ func NewIronFistService(db *sql.DB) *IronFistService {
 	return &IronFistService{db: db}
 }
 
-// StatsView 返回给前端的统计概览
+// StatsView returns an overview of statistics to the front end
 type StatsView struct {
 	PvpWins          int              `json:"pvp_wins"`
 	PvpLosses        int              `json:"pvp_losses"`
@@ -36,25 +36,25 @@ type StatsView struct {
 	CurrentWinStreak int              `json:"current_win_streak"`
 	MaxWinStreak     int              `json:"max_win_streak"`
 	TotalBattles     int              `json:"total_battles"`
-	Achievements     []string         `json:"achievements"`         // 已解锁成就代号列表
-	NewAchievements  []string         `json:"new_achievements"`     // 本次新解锁（仅上报接口返回）
-	PVPSettle        *PVPSettleResult `json:"pvp_settle,omitempty"` // 真实 PVP 结算结果（仅 mode=pvp + room_id 时填充）
+	Achievements     []string         `json:"achievements"`         //List of unlocked achievement codes
+	NewAchievements  []string         `json:"new_achievements"`     //Newly unlocked this time (only reported interface returns)
+	PVPSettle        *PVPSettleResult `json:"pvp_settle,omitempty"` //Real PVP settlement result (only populated when mode=pvp + room_id)
 }
 
-// ReportMatchRequest 上报对局结果
+// ReportMatchRequest reports match results
 type ReportMatchRequest struct {
 	Mode             string          `json:"mode"`              // "pve" | "pvp" | "friend"
 	Result           string          `json:"result"`            // "win" | "lose" | "draw" | "doubleLose"
-	PlayerHP         int             `json:"player_hp"`         // 玩家最终 HP
-	CounterSuccesses int             `json:"counter_successes"` // 单场反击成功次数
-	Rounds           int             `json:"rounds"`            // 总回合数
-	OpponentHP       int             `json:"opponent_hp"`       // 对手最终 HP
-	OpponentName     string          `json:"opponent_name"`     // 对手昵称（PvP）/「电脑」
-	Detail           json.RawMessage `json:"detail"`            // 逐回合明细 JSON 数组
-	RoomID           *uint64         `json:"room_id,omitempty"` // 真实 PVP 撮合房间 ID：携带则触发质押结算（幂等）
+	PlayerHP         int             `json:"player_hp"`         //Player's final HP
+	CounterSuccesses int             `json:"counter_successes"` //Number of successful counterattacks in a single game
+	Rounds           int             `json:"rounds"`            //Total rounds
+	OpponentHP       int             `json:"opponent_hp"`       //Opponent's final HP
+	OpponentName     string          `json:"opponent_name"`     //Opponent Nickname (PvP)/"Computer"
+	Detail           json.RawMessage `json:"detail"`            //JSON array of round-by-round details
+	RoomID           *uint64         `json:"room_id,omitempty"` //Real PVP matching room ID: carrying it triggers pledge settlement (idempotent)
 }
 
-// MatchLogView 逐局对战明细（返回给前端）
+// MatchLogView game-by-game match details (returned to the front end)
 type MatchLogView struct {
 	ID           uint64          `json:"id"`
 	Mode         string          `json:"mode"`
@@ -67,7 +67,7 @@ type MatchLogView struct {
 	CreatedAt    string          `json:"created_at"`
 }
 
-// ensureStatsRow 确保用户的 ironfist_stats 行存在
+// ensureStatsRow ensures that the user's ironfist_stats row exists
 func (s *IronFistService) ensureStatsRow(ctx context.Context, ex interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }, userID uint64) error {
@@ -76,7 +76,7 @@ func (s *IronFistService) ensureStatsRow(ctx context.Context, ex interface {
 	return err
 }
 
-// GetStats 查询当前用户统计与已解锁成就
+// GetStats Query current user statistics and unlocked achievements
 func (s *IronFistService) GetStats(ctx context.Context, userID uint64) (*StatsView, error) {
 	if err := s.ensureStatsRow(ctx, s.db, userID); err != nil {
 		return nil, err
@@ -105,7 +105,7 @@ func (s *IronFistService) GetStats(ctx context.Context, userID uint64) (*StatsVi
 	return view, nil
 }
 
-// queryAchievements 查询已解锁成就代号列表（保序，按 AllAchievements 顺序）
+// queryAchievements Query the list of unlocked achievement codes (ordered, in AllAchievements order)
 func (s *IronFistService) queryAchievements(ctx context.Context, ex interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, userID uint64) ([]string, error) {
@@ -126,7 +126,7 @@ func (s *IronFistService) queryAchievements(ctx context.Context, ex interface {
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-	// 按 AllAchievements 定义顺序输出
+	// Output in the order defined by AllAchievements
 	out := make([]string, 0, len(set))
 	for _, code := range model.AllAchievements {
 		if _, ok := set[code]; ok {
@@ -136,8 +136,8 @@ func (s *IronFistService) queryAchievements(ctx context.Context, ex interface {
 	return out, nil
 }
 
-// ReportMatch 上报对局结果，更新统计并判定成就解锁。
-// 全程在事务内原子执行，返回更新后的统计 + 本次新解锁的成就。
+// ReportMatch reports game results, updates statistics and determines achievement unlocks.
+// The entire process is executed atomically within the transaction, and the updated statistics + the newly unlocked achievements are returned.
 func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *ReportMatchRequest) (*StatsView, error) {
 	if err := validateReportMatchRequest(req); err != nil {
 		return nil, err
@@ -153,7 +153,7 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 		return nil, err
 	}
 
-	// 读取当前统计并加行锁，防止并发上报导致计数错乱
+	// Read the current statistics and add row locks to prevent counting confusion caused by concurrent reporting.
 	var st model.IronFistStats
 	err = tx.QueryRowContext(ctx, `
 		SELECT pvp_wins, pvp_losses, pvp_draws,
@@ -171,12 +171,12 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 		return nil, err
 	}
 
-	// === 真实 PVP 上报幂等去重 ===
-	// 同一玩家对同一房间重复上报（双 gameover / 前端重试 / settle 失败后重试）时，
-	// 统计与战绩只计一次——否则会虚增 pvp 胜负场次并写入重复战绩行。
-	// 资金侧由 SettlePVP 自身幂等保证，此处仅守护统计与战绩。
-	// 以 ironfist_matches 是否已存在 (user_id, pvp_room_id) 行为准：该行在首次上报的
-	// 事务内提交，且与 settle 是否成功无关，因此即便首次 settle 失败、前端重试也不会重复计数。
+	// === Real PVP reporting idempotent deduplication ===
+	// When the same player reports to the same room repeatedly (double gameover/front-end retry/retry after settlement failure),
+	// Statistics and results are only counted once - otherwise the number of pvp wins and losses will be inflated and duplicate record rows will be written.
+	// The capital side is guaranteed by SettlePVP itself as idempotent, and only statistics and achievements are guarded here.
+	// Depends on whether ironfist_matches already exists (user_id, pvp_room_id) row: this row is reported for the first time
+	// It is committed within the transaction and has nothing to do with whether the settlement is successful, so even if the first settlement fails and the front-end retries, the count will not be repeated.
 	pvpDup := false
 	if req.Mode == "pvp" && req.RoomID != nil {
 		var one int
@@ -194,8 +194,8 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 	var newAchievements []string
 
 	if pvpDup {
-		// 重复上报：跳过统计/战绩/成就的全部写入，仅查询已解锁成就用于返回视图。
-		// 注意不在此 return —— 仍需走下方 SettlePVP（幂等）以便重试时拿到结算结果。
+		// Repeated reporting: Skip all writing of statistics/achievements/achievements, and only query unlocked achievements for return view.
+		// Note that there is no return here - you still need to go to SettlePVP (idempotent) below to get the settlement result when you try again.
 		unlocked, qerr := s.queryAchievements(ctx, tx, userID)
 		if qerr != nil {
 			return nil, qerr
@@ -205,14 +205,14 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 			existing[c] = struct{}{}
 		}
 	} else {
-		// === 更新胜负计数 ===
-		// 注意：PVP 这里按"本方自报结果"计数（一次，已由 pvpDup 去重保证）。
-		// 双方一致的常态下与仲裁结果相符；仅在作弊/desync 导致双方都报赢、被 SettlePVP
-		// 仲裁为平局时，二者会短暂背离（统计偏向乐观）。资金以仲裁为准，统计仅展示用。
+		// === Update win-loss count ===
+		// Note: PVP is counted here according to "own self-reported results" (once, guaranteed by pvpDup deduplication).
+		// It is consistent with the arbitration result when both parties are consistent; only cheating/desync causes both parties to win and be SettlePVP
+		// When the arbitration results in a draw, the two will diverge briefly (the statistics tend to be optimistic). Funds are subject to arbitration and statistics are for display only.
 		isWin := req.Result == "win"
-		// "doubleLose"（回合上限双方力竭）按平局计入，与 "draw" 同口径
+		// "doubleLose" (the upper limit of the round when both sides are exhausted) is counted as a draw, the same as "draw"
 		isDraw := req.Result == "draw" || req.Result == "doubleLose"
-		// "lose" 计为负
+		// "lose" counts as negative
 		switch req.Mode {
 		case "pvp":
 			switch {
@@ -224,7 +224,7 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 				st.PvpLosses++
 			}
 		case "friend":
-			// 好友娱乐局：独立计数，不影响 total_battles / 连胜 / 成就
+			// Friends Entertainment Bureau: independent counting, does not affect total_battles / winning streak / achievements
 			switch {
 			case isWin:
 				st.FriendWins++
@@ -244,7 +244,7 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 			}
 		}
 
-		// === 连胜 & 总场次（好友局不计入）===
+		// === Winning streak & total games played (Friend games are not included) ===
 		if req.Mode != "friend" {
 			if isWin {
 				st.CurrentWinStreak++
@@ -272,8 +272,8 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 			return nil, err
 		}
 
-		// === 逐局明细落库 ===
-		// detail 为空数组/空值时存 NULL，避免无意义占用
+		// === Game by game details ===
+		// When detail is an empty array/null value, NULL is stored to avoid meaningless occupation.
 		var detail any
 		if len(req.Detail) > 0 && string(req.Detail) != "null" && string(req.Detail) != "[]" {
 			detail = []byte(req.Detail)
@@ -282,7 +282,7 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 		if req.OpponentName != "" {
 			oppName = req.OpponentName
 		}
-		// 真实 PVP 写入 pvp_room_id 作为幂等锚点；pve/friend 为 NULL（不受唯一约束限制）
+		// Real PVP writes pvp_room_id as idempotent anchor; pve/friend is NULL (not limited by unique constraints)
 		var roomIDVal any
 		if req.Mode == "pvp" && req.RoomID != nil {
 			roomIDVal = *req.RoomID
@@ -298,7 +298,7 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 			return nil, err
 		}
 
-		// === 成就判定（好友娱乐局不计入任何成就）===
+		// === Achievement determination (Friends Entertainment Bureau does not count into any achievements) ===
 		if req.Mode != "friend" {
 			unlocked, qerr := s.queryAchievements(ctx, tx, userID)
 			if qerr != nil {
@@ -342,7 +342,7 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 				existing[code] = struct{}{}
 			}
 		} else {
-			// 好友局：查询现有成就仅用于返回视图，不做任何写入
+			// Friends Bureau: Querying existing achievements is only used to return the view, without any writing.
 			unlocked, qerr := s.queryAchievements(ctx, tx, userID)
 			if qerr != nil {
 				return nil, qerr
@@ -358,20 +358,20 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 		return nil, err
 	}
 
-	// 真实 PVP：携带 room_id 时触发质押结算（独立事务，幂等）
-	// 与统计写入解耦：结算失败不影响统计已落库，前端可重试 reportMatch。
+	// Real PVP: Trigger pledge settlement when carrying room_id (independent transaction, idempotent)
+	// Decoupled from statistics writing: settlement failure does not affect the statistics being dropped into the database, and the front end can retry reportMatch.
 	var settle *PVPSettleResult
 	if req.Mode == "pvp" && req.RoomID != nil {
 		sr, serr := s.SettlePVP(ctx, *req.RoomID, userID, req.Result)
 		if serr != nil {
-			// 结算失败仅记录日志，不阻塞统计返回；调用方可在结果页提示
+			// If settlement fails, only logs will be recorded and statistics will not be returned; the caller can prompt on the result page.
 			fmt.Printf("[ironfist] settle pvp room %d by user %d: %v\n", *req.RoomID, userID, serr)
 		} else {
 			settle = sr
 		}
 	}
 
-	// 组装返回视图（按定义顺序输出已解锁成就）
+	// Assemble return view (outputs unlocked achievements in defined order)
 	allUnlocked := make([]string, 0, len(existing))
 	for _, code := range model.AllAchievements {
 		if _, ok := existing[code]; ok {
@@ -408,8 +408,8 @@ type reportRound struct {
 	OpponentDamage int    `json:"od"`
 }
 
-// validateReportMatchRequest 拒绝无法由正常客户端产生的战绩数据。真实 PVP 的重复结算
-// 轮询会发送 rounds=0/detail=[]，因此仅在携带 room_id 的 pvp 模式允许零回合摘要。
+// validateReportMatchRequest rejects match data that cannot be generated by a normal client. Duplicate Settlement for Real PVP
+// Polling will send rounds=0/detail=[], so zero round digests are only allowed in pvp mode with room_id.
 func validateReportMatchRequest(req *ReportMatchRequest) error {
 	if req == nil {
 		return errors.New("missing report")
@@ -469,7 +469,7 @@ func validReportedAction(action string) bool {
 	}
 }
 
-// ListMatches 查询逐局对战明细，游标分页（before_id），最新在前。
+// ListMatches queries the game-by-game match details, cursor paging (before_id), latest first.
 func (s *IronFistService) ListMatches(ctx context.Context, userID uint64, beforeID uint64, limit int) ([]*MatchLogView, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 20
@@ -515,7 +515,7 @@ func (s *IronFistService) ListMatches(ctx context.Context, userID uint64, before
 	return out, rows.Err()
 }
 
-// LobbyUserProfile PVP 大厅展示的用户档案：聚合 users + fist_accounts + ironfist_stats
+// LobbyUserProfile User profile displayed in PVP lobby: aggregate users + fist_accounts + ironfist_stats
 type LobbyUserProfile struct {
 	ChatID       string `json:"chat_id"`
 	Nickname     string `json:"nickname"`
@@ -523,12 +523,12 @@ type LobbyUserProfile struct {
 	TotalBattles int    `json:"total_battles"`
 }
 
-// GetLobbyUserProfile 联表查询指定 chatID 的 PVP 大厅档案信息。
-// 用于大厅列表展示与点击头像查看玩家信息。
-// 任意子表缺失均返回 0/空值，不报错（新用户可能尚无 fist_accounts / ironfist_stats 行）。
+// GetLobbyUserProfile joins the table to query the PVP lobby profile information of the specified chatID.
+// Used to display the lobby list and click on the avatar to view player information.
+// If any subtable is missing, 0/null value will be returned and no error will be reported (new users may not have fist_accounts / ironfist_stats rows yet).
 func (s *IronFistService) GetLobbyUserProfile(ctx context.Context, chatID string) (*LobbyUserProfile, error) {
 	p := &LobbyUserProfile{}
-	// LEFT JOIN：users 一定存在；fist_accounts/ironfist_stats 可能为空
+	// LEFT JOIN: users must exist; fist_accounts/ironfist_stats may be empty
 	err := s.db.QueryRowContext(ctx, `
 		SELECT u.chat_id, u.nickname,
 		       COALESCE(fa.balance, 0),
@@ -545,10 +545,10 @@ func (s *IronFistService) GetLobbyUserProfile(ctx context.Context, chatID string
 }
 
 // ─────────────────────────────────────────────────────
-// PVP 撮合与质押结算
+// PVP matching and pledge settlement
 // ─────────────────────────────────────────────────────
 
-// PVPTierStakes 各档位单人质押金额（与前端 PVP_TIERS 对齐）
+// PVPTierStakes The amount of individual stakes for each level (aligned with the front-end PVP_TIERS)
 var PVPTierStakes = map[string]int64{
 	"gold":     100,
 	"platinum": 1000,
@@ -569,38 +569,38 @@ var (
 	ErrPVPAlreadyInMatch   = fmt.Errorf("already in an active pvp match")
 )
 
-// PVPMatchResult 加入撮合队列的返回值
+// PVPMatchResult The return value of joining the matching queue
 type PVPMatchResult struct {
 	Status   string            `json:"status"` // "queued" | "matched"
 	RoomID   uint64            `json:"room_id,omitempty"`
 	Tier     string            `json:"tier,omitempty"`
 	Stake    int64             `json:"stake,omitempty"`
-	Opponent *LobbyUserProfile `json:"opponent,omitempty"`        // 匹配成功时返回对手档案（供本地直接开局）
-	Waiting  string            `json:"waiting_chat_id,omitempty"` // 匹配成功时为等待方 chatID（供 Hub 推送）
+	Opponent *LobbyUserProfile `json:"opponent,omitempty"`        //When the match is successful, the opponent's file is returned (for local direct start)
+	Waiting  string            `json:"waiting_chat_id,omitempty"` //When the match is successful, it is the waiting party's chatID (for Hub push)
 }
 
-// PVPSettleResult 结算结果
+// PVPSettleResult settlement result
 type PVPSettleResult struct {
-	Settled      bool   `json:"settled"`           // false 表示未结算（pending 或已结算的幂等返回）
-	Pending      bool   `json:"pending,omitempty"` // true 表示已记录本方上报，等待对手确认
+	Settled      bool   `json:"settled"`           //false means unsettled (pending or settled idempotent return)
+	Pending      bool   `json:"pending,omitempty"` //true means that our report has been recorded and is waiting for confirmation from the opponent.
 	RoomID       uint64 `json:"room_id"`
 	Result       string `json:"result"`        // win_a / win_b / draw / doubleLose
-	WinnerAmount int64  `json:"winner_amount"` // 赢家到手（含本金）
-	RefundA      int64  `json:"refund_a"`      // 平局时 A 退回
-	RefundB      int64  `json:"refund_b"`      // 平局时 B 退回
-	FeeBurn      int64  `json:"fee_burn"`      // 销毁部分（MVP 仅记账）
-	FeeTreasury  int64  `json:"fee_treasury"`  // 国库部分（MVP 仅记账）
+	WinnerAmount int64  `json:"winner_amount"` //The winner gets it (including principal)
+	RefundA      int64  `json:"refund_a"`      //A returns in case of draw
+	RefundB      int64  `json:"refund_b"`      //B returns in case of draw
+	FeeBurn      int64  `json:"fee_burn"`      //Destroy part (MVP only accounting)
+	FeeTreasury  int64  `json:"fee_treasury"`  //Treasury part (MVP only accounting)
 }
 
-// isDeadlock 判断是否为 MySQL 死锁错误（1213），用于重试决策。
+// isDeadlock determines whether it is a MySQL deadlock error (1213) and is used for retry decisions.
 func isDeadlock(err error) bool {
 	var me *mysql.MySQLError
 	return errors.As(err, &me) && me.Number == 1213
 }
 
-// EnqueuePVP 加入 PVP 撮合队列，内部对死锁自动重试最多 3 次。
+// EnqueuePVP joins the PVP matching queue and automatically retries up to 3 times for deadlocks internally.
 //
-// 调用方（Handler）拿到 Status=="matched" 时需通过 Hub 向 Waiting chatID 推送匹配通知。
+// When the caller (Handler) gets Status=="matched", it needs to push a matching notification to the Waiting chatID through the Hub.
 func (s *IronFistService) EnqueuePVP(ctx context.Context, userID uint64, chatID, tier string) (*PVPMatchResult, error) {
 	const maxRetries = 3
 	for attempt := 0; ; attempt++ {
@@ -612,10 +612,10 @@ func (s *IronFistService) EnqueuePVP(ctx context.Context, userID uint64, chatID,
 	}
 }
 
-// enqueuePVP 加入 PVP 撮合队列（单次执行，不含重试）：
-//  1. 校验档位与余额
-//  2. 尝试匹配等待中的房间（玩家 B 视角）：找到则扣质押、状态置 matched、返回对手档案
-//  3. 未匹配到则创建新房间（玩家 A 视角）：扣质押、状态置 matching、返回 queued
+// enqueuePVP Join the PVP matching queue (single execution, no retries):
+// 1. Verify gear level and balance
+// 2. Try to match the waiting room (player B's perspective): If found, the pledge will be deducted, the status will be set to matched, and the opponent's file will be returned.
+// 3. If no match is found, create a new room (player A’s perspective): withhold pledge, set status to matching, and return to queued
 func (s *IronFistService) enqueuePVPOnce(ctx context.Context, userID uint64, chatID, tier string) (*PVPMatchResult, error) {
 	stake, ok := PVPTierStakes[tier]
 	if !ok {
@@ -628,8 +628,8 @@ func (s *IronFistService) enqueuePVPOnce(ctx context.Context, userID uint64, cha
 	}
 	defer tx.Rollback()
 
-	// 1. 先锁定本用户 $FIST 账户：对同一用户的并发入队请求在此处串行化，
-	//    后续的重复入队检查（FOR UPDATE）才能看到前一个请求已提交的房间。
+	// 1. First lock this user’s $FIST account: concurrent enqueuing requests for the same user are serialized here.
+	// Only subsequent repeated enqueue checks (FOR UPDATE) can see the rooms submitted by the previous request.
 	if err = s.ensureFistAccountTx(ctx, tx, userID); err != nil {
 		return nil, err
 	}
@@ -643,10 +643,10 @@ func (s *IronFistService) enqueuePVPOnce(ctx context.Context, userID uint64, cha
 		return nil, ErrPVPInsufficientFist
 	}
 
-	// 2. 防止重复入队：查找本用户已存在的 matching/matched 房间（同时检查 A/B 身份）。
-	//    FOR UPDATE 做当前读，确保看到并发请求已提交的房间，避免重复扣质押。
-	//    必须检查 player_b：否则用户已作为 B 在 matched 房间（未结算）时仍可创建/加入新房间，
-	//    导致同时处于多场对局、质押双倍锁定。
+	// 2. Prevent duplicate entry: Find existing matching/matched rooms for this user (check A/B identity at the same time).
+	// FOR UPDATE does the current read, ensuring that rooms that have been submitted by concurrent requests are seen to avoid repeated deductions of pledges.
+	// player_b must be checked: otherwise user can still create/join new rooms when already in matched room as B (not settled),
+	// As a result, you are in multiple games at the same time and your stake is doubled.
 	var (
 		existingID     uint64
 		existingStatus string
@@ -660,18 +660,18 @@ func (s *IronFistService) enqueuePVPOnce(ctx context.Context, userID uint64, cha
 	`, userID, userID).Scan(&existingID, &existingStatus, &existingTier, &existingStake)
 	if err == nil {
 		if existingStatus == "matched" {
-			// 已在一场未结算的对局中，禁止再次入队
+			// Already in an unsettled game, prohibited from joining the team again
 			return nil, ErrPVPAlreadyInMatch
 		}
-		// 已在队列中（matching），直接返回 queued。
-		// 用已有房间的 tier/stake 而非本次请求值：用户刷新后换档位再次入队时不应返回错误档位。
+		// Already in the queue (matching), return queued directly.
+		// Use the tier/stake of the existing room instead of this request value: the wrong gear should not be returned when the user changes gears and joins the queue again after refreshing.
 		return &PVPMatchResult{Status: "queued", RoomID: existingID, Tier: existingTier, Stake: existingStake}, nil
 	}
 	if err != sql.ErrNoRows {
 		return nil, err
 	}
 
-	// 3. 尝试撮合：寻找同档位最早的 matching 房间（排除自己创建的）
+	// 3. Try to match: Find the earliest matching room in the same stall (excluding those created by yourself)
 	var (
 		roomID, aUserID uint64
 		aChatID         string
@@ -683,22 +683,22 @@ func (s *IronFistService) enqueuePVPOnce(ctx context.Context, userID uint64, cha
 		ORDER BY id ASC LIMIT 1 FOR UPDATE
 	`, tier, userID).Scan(&roomID, &aUserID, &aChatID)
 	if err == nil {
-		// 命中撮合：本用户作为 B 加入
+		// Hit matching: This user joins as B
 		if aUserID == userID {
 			return nil, ErrPVPSelfMatch
 		}
-		// 扣 B 的质押
+		// Withhold B’s pledge
 		if _, err = tx.ExecContext(ctx,
 			`UPDATE fist_accounts SET balance = balance - ? WHERE user_id = ?`,
 			stake, userID); err != nil {
 			return nil, err
 		}
-		// B 的质押扣款流水
+		// B’s pledge deduction flow
 		if err = s.writeFistTx(ctx, tx, userID, -stake, "pvp_stake", pvpRoomRef(roomID),
 			fmt.Sprintf("PVP 质押（%s场，对手：%s）", tier, aChatID)); err != nil {
 			return nil, err
 		}
-		// 房间状态推进
+		// Room status advancement
 		if _, err = tx.ExecContext(ctx, `
 			UPDATE ironfist_pvp_rooms
 			SET player_b_user_id = ?, player_b_chat_id = ?,
@@ -710,7 +710,7 @@ func (s *IronFistService) enqueuePVPOnce(ctx context.Context, userID uint64, cha
 		if err = tx.Commit(); err != nil {
 			return nil, err
 		}
-		// 查询 A 的档案供 B 直接展示
+		// Query A's files for B to display directly
 		opp, qerr := s.GetLobbyUserProfile(ctx, aChatID)
 		if qerr != nil {
 			opp = &LobbyUserProfile{ChatID: aChatID, Nickname: aChatID}
@@ -728,8 +728,8 @@ func (s *IronFistService) enqueuePVPOnce(ctx context.Context, userID uint64, cha
 		return nil, err
 	}
 
-	// 4. 未命中撮合：作为玩家 A 创建新房间。先取得 room_id，再写质押流水，
-	// 使每条积分变动都能通过 ref_id 精确追溯到房间；全部仍在同一事务内。
+	// 4. Miss Matchmaking: Create a new room as player A. Get the room_id first, and then write the pledge slip.
+	// Enables each point change to be traced back exactly to the room via ref_id; all still within the same transaction.
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO ironfist_pvp_rooms
 		  (tier, stake_amount, player_a_user_id, player_a_chat_id, status)
@@ -763,9 +763,9 @@ func (s *IronFistService) enqueuePVPOnce(ctx context.Context, userID uint64, cha
 	}, nil
 }
 
-// GetPVPQueueStatus 查询当前用户的撮合队列状态（前端轮询兜底 WS 通知丢失）。
-// 返回最近的 matching/matched 房间；无则返回 status="idle"。
-// 用于等待方（玩家 A）在 WS ironfist_pvp_matched 通知丢失时通过轮询发现匹配结果。
+// GetPVPQueueStatus queries the matching queue status of the current user (the front-end polling WS notification is lost).
+// Returns the nearest matching/matched room; otherwise returns status="idle".
+// Used to wait for the party (player A) to discover the match result by polling when the WS ironfist_pvp_matched notification is lost.
 func (s *IronFistService) GetPVPQueueStatus(ctx context.Context, userID uint64) (*PVPMatchResult, error) {
 	var (
 		roomID, aUserID       uint64
@@ -792,7 +792,7 @@ func (s *IronFistService) GetPVPQueueStatus(ctx context.Context, userID uint64) 
 	if status == "matching" {
 		return &PVPMatchResult{Status: "queued", RoomID: roomID, Tier: tier, Stake: stake}, nil
 	}
-	// matched：本用户可能是 A 或 B，对手为另一方
+	// matched: This user may be A or B, and the opponent is the other party
 	var oppChatID string
 	if aUserID == userID {
 		oppChatID = bChatID.String
@@ -812,20 +812,20 @@ func (s *IronFistService) GetPVPQueueStatus(ctx context.Context, userID uint64) 
 	}, nil
 }
 
-// PVPRoomParticipants 房间参与方信息，供 WS 层做越权校验
+// PVPRoomParticipants Room participant information for WS layer to perform unauthorized verification
 type PVPRoomParticipants struct {
 	Status  string // matching / matched / settled / cancelled
-	AChatID string // player_a_chat_id（NOT NULL，必有值）
-	BChatID string // player_b_chat_id（matched 前为空）
+	AChatID string //player_a_chat_id (NOT NULL, must have a value)
+	BChatID string //player_b_chat_id (empty before matched)
 }
 
-// GetPVPRoomParticipants 查询指定 PVP 房间的状态与双方 chatID。
-// 用于 WS 层 ironfist_action / ironfist_reconnect 防越权：
-//   - 校验 from 是否为参与方
-//   - 校验 p.To 是否为对手 chatID
-//   - 校验状态为 matched（结算后不再允许 action / reconnect）
+// GetPVPRoomParticipants queries the status of the specified PVP room and the chat IDs of both parties.
+// Used for WS layer ironfist_action / ironfist_reconnect to prevent unauthorized access:
+// - Verify whether from is a participant
+// - Verify whether p.To is the opponent's chatID
+// - The verification status is matched (action / reconnect is no longer allowed after settlement)
 //
-// 房间不存在时返回 (nil, nil)。
+// Returns (nil, nil) if the room does not exist.
 func (s *IronFistService) GetPVPRoomParticipants(ctx context.Context, roomID uint64) (*PVPRoomParticipants, error) {
 	var (
 		status  string
@@ -849,9 +849,9 @@ func (s *IronFistService) GetPVPRoomParticipants(ctx context.Context, roomID uin
 	return p, nil
 }
 
-// CancelPVPQueue 取消撮合（用户主动取消或断线清理）：
-// 仅 'matching' 状态可取消，全额退回质押；其他状态视为已无可取消队列。
-// 通过 chatID 取消以支持 Hub.Unregister 调用；返回取消的 roomID（0 表示无可取消）。
+// CancelPVPQueue cancels matching (user actively cancels or disconnects to clean up):
+// Only the 'matching' status can be canceled and the pledge will be returned in full; other statuses are deemed to have no cancellation queue.
+// Cancel via chatID to support Hub.Unregister calls; returns the canceled roomID (0 means no cancellation).
 func (s *IronFistService) CancelPVPQueue(ctx context.Context, chatID string) (uint64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -871,12 +871,12 @@ func (s *IronFistService) CancelPVPQueue(ctx context.Context, chatID string) (ui
 		ORDER BY id DESC LIMIT 1 FOR UPDATE
 	`, chatID).Scan(&roomID, &aUserID, &stake, &tier)
 	if err == sql.ErrNoRows {
-		return 0, nil // 无在队，幂等
+		return 0, nil //No team, idempotent
 	}
 	if err != nil {
 		return 0, err
 	}
-	// 退款
+	// Refund
 	if _, err = tx.ExecContext(ctx,
 		`UPDATE fist_accounts SET balance = balance + ? WHERE user_id = ?`,
 		stake, aUserID); err != nil {
@@ -896,16 +896,16 @@ func (s *IronFistService) CancelPVPQueue(ctx context.Context, chatID string) (ui
 	return roomID, nil
 }
 
-// PVPMatchTimeout PVP 撮合等待超时窗口：超过则服务端自动取消并退款。
-// 设为 5 分钟：长于前端兜底（10 分钟）会失去意义，短于 1 分钟会误伤。
-// 客户端可提前主动取消；这里只兜底"客户端崩溃 / 网络完全失联"的极端情况。
+// PVPMatchTimeout PVP matching waiting timeout window: if exceeded, the server will automatically cancel and refund.
+// Set to 5 minutes: If it is longer than the front end pocket (10 minutes), it will be meaningless, and if it is shorter than 1 minute, it will cause accidental injury.
+// The client can proactively cancel in advance; here we only cover the extreme situation of "client crash/complete network loss".
 const PVPMatchTimeout = 5 * time.Minute
 
-// SweepTimeoutPVPQueues 扫描所有超时未匹配的 PVP 房间并退款。
-// 由 main.go 的定时任务周期性调用（每 1 分钟）。返回处理的房间数。
+// SweepTimeoutPVPQueues scans all unmatched PVP rooms that time out and refunds them.
+// Called periodically (every 1 minute) by the scheduled task of main.go. Returns the number of rooms processed.
 //
-// 触发条件：status='matching' 且 created_at < NOW() - PVPMatchTimeout。
-// 退款方式与 CancelPVPQueue 一致：全额退给 A 玩家，房间状态置 'cancelled'。
+// Trigger condition: status='matching' and created_at < NOW() - PVPMatchTimeout.
+// The refund method is the same as CancelPVPQueue: full refund to player A, and the room status is set to 'cancelled'.
 func (s *IronFistService) SweepTimeoutPVPQueues(ctx context.Context) (int, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, player_a_user_id, stake_amount, tier
@@ -944,7 +944,7 @@ func (s *IronFistService) SweepTimeoutPVPQueues(ctx context.Context) (int, error
 		if err != nil {
 			return swept, err
 		}
-		// 二次校验状态（防止与正常撮合/取消并发冲突）
+		// Secondary verification status (to prevent conflicts with normal matching/cancellation of concurrency)
 		var status string
 		err = tx.QueryRowContext(ctx,
 			`SELECT status FROM ironfist_pvp_rooms WHERE id = ? FOR UPDATE`,
@@ -959,9 +959,9 @@ func (s *IronFistService) SweepTimeoutPVPQueues(ctx context.Context) (int, error
 		}
 		if status != "matching" {
 			tx.Rollback()
-			continue // 已被撮合/取消，跳过
+			continue //Already matched/cancelled, skipped
 		}
-		// 退款给 A
+		// Refund to A
 		if _, err = tx.ExecContext(ctx,
 			`UPDATE fist_accounts SET balance = balance + ? WHERE user_id = ?`,
 			p.stake, p.aUserID); err != nil {
@@ -987,21 +987,21 @@ func (s *IronFistService) SweepTimeoutPVPQueues(ctx context.Context) (int, error
 	return swept, nil
 }
 
-// PVPMatchedTimeout 已匹配但未结算的对局超时窗口：超过则服务端按平局退款兜底。
+// PVPMatchedTimeout Timeout window for matches that have been matched but not settled: if exceeded, the server will refund the money as a draw.
 //
-// 必须 ≥ 单局对战的最大真实时长，否则会把"仍在进行中的正常对局"误扫成平局，
-// 抢走赢家的胜利并多扣双方手续费。对战上限：MAX_ROUNDS(20) × ROUND_SECONDS(30s) =
-// 600s(10 分钟)，再叠加掉线后 60s 重连窗口（可能多次），实际最长约 11~12 分钟。
-// 故设为 15 分钟，安全覆盖最长对局 + 缓冲；matched_at 在撮合时写入后不再刷新，
-// 因此这是"从撮合成功到必须结算"的硬上限。
-// 代价：撮合后无人开局的孤儿房间最长锁定 15 分钟才退款（罕见，前端已尽力主动取消）。
+// It must be ≥ the maximum real duration of a single game, otherwise the "normal game still in progress" will be mistakenly converted into a draw.
+// Steal the victory from the winner and deduct more handling fees from both parties. Upper limit of battle: MAX_ROUNDS(20) × ROUND_SECONDS(30s) =
+// 600s (10 minutes), plus a 60s reconnection window after disconnection (possibly multiple times), the actual maximum time is about 11~12 minutes.
+// Therefore, it is set to 15 minutes to safely cover the longest game + buffer; matched_at will not be refreshed after being written during matching.
+// Therefore, this is the hard upper limit of "from successful matching to settlement required".
+// Price: After matching, the orphan room with no one to start the game will be locked for up to 15 minutes before being refunded (rare, the front-end has tried its best to cancel it proactively).
 const PVPMatchedTimeout = 15 * time.Minute
 
-// SweepTimeoutPVPMatched 扫描所有超时未结算的 matched 房间，按平局退款兜底。
-// 由 main.go 的定时任务周期性调用（每 1 分钟）。返回处理的房间数。
+// SweepTimeoutPVPMatched scans all matched rooms that have timed out but have not been settled, and refunds will be made based on a tie.
+// Called periodically (every 1 minute) by the scheduled task of main.go. Returns the number of rooms processed.
 //
-// 触发条件：status='matched' 且 matched_at < NOW() - PVPMatchedTimeout。
-// 退款方式：双方各退 97.5%（与平局结算一致），房间状态置 'settled'，result='draw'。
+// Trigger condition: status='matched' and matched_at < NOW() - PVPMatchedTimeout.
+// Refund method: Both parties will refund 97.5% (consistent with draw settlement), the room status is set to 'settled', result='draw'.
 func (s *IronFistService) SweepTimeoutPVPMatched(ctx context.Context) (int, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, player_a_user_id, player_b_user_id, stake_amount, tier
@@ -1054,11 +1054,11 @@ func (s *IronFistService) SweepTimeoutPVPMatched(ctx context.Context) (int, erro
 		}
 		if status != "matched" {
 			tx.Rollback()
-			continue // 已被结算/取消，跳过
+			continue //Has been settled/cancelled, skipped
 		}
-		// 平局兜底：双方对等退回，各退 floor((pool - fee)/2)，余数并入手续费（与 SettlePVP 一致）
+		// In case of a tie, both parties will be refunded equally, each will be refunded floor((pool - fee)/2), and the remainder will be incorporated into the handling fee (consistent with SettlePVP)
 		totalPool := p.stake * 2
-		nominalFee := totalPool * 25 / 1000 // 名义 2.5%
+		nominalFee := totalPool * 25 / 1000 //Nominal 2.5%
 		refundEach := (totalPool - nominalFee) / 2
 		refundA := refundEach
 		refundB := refundEach
@@ -1113,10 +1113,10 @@ func (s *IronFistService) SweepTimeoutPVPMatched(ctx context.Context) (int, erro
 	return swept, nil
 }
 
-// SettlePVP 结算 PVP 房间：根据 result 与 caller 身份计算赢家/退款/手续费。
-// 幂等：若房间已 settled，直接返回已存结果（settled=false 表示之前已结算）。
-// fee（销毁+国库）在 MVP 阶段不实际转账，仅写入房间字段与流水备注用于对账；
-// 未来接入链上合约时改为真实 burn/treasury 转账。
+// SettlePVP settlement PVP room: Calculate winner/refund/handling fee based on result and caller identity.
+// Idempotent: If the room has been settled, the saved result will be returned directly (settled=false means it has been settled before).
+// The fee (destruction + treasury) is not actually transferred during the MVP stage, but is only written into the room field and transaction notes for reconciliation;
+// In the future, it will be changed to real burn/treasury transfer when connecting to the on-chain contract.
 func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID uint64, callerResult string) (*PVPSettleResult, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1152,7 +1152,7 @@ func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID ui
 	if callerUserID != aUserID && callerUserID != bUserID {
 		return nil, ErrPVPNotParticipant
 	}
-	// 幂等：已结算 → 回放已存的最终结果与金额（供先上报方轮询拿到一致的结算信息）
+	// Idempotent: Settled → Play back the saved final result and amount (for the first reporting party to poll to get consistent settlement information)
 	if status == "settled" {
 		return &PVPSettleResult{
 			Settled: true, RoomID: roomID, Result: storedResult,
@@ -1164,17 +1164,17 @@ func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID ui
 		return nil, ErrPVPRoomNotMatched
 	}
 
-	// 调用方视角 → 房间视角
+	// Caller perspective → Room perspective
 	callerIsA := callerUserID == aUserID
 	roomResult, err := mapPVPResult(callerResult, callerIsA)
 	if err != nil {
 		return nil, err
 	}
 
-	// 首次为准，不可修改：本方只要已上报过（无论结果是否相同），就忽略本次上报。
-	// 能走到这里（status='matched' 未结算）说明对手尚未上报——否则第二个上报方触发时
-	// 双方均已 valid 会在同一事务内结算并置 settled，前面的 status 检查就已返回。
-	// 因此本方重复上报无需改写、也不会影响结算，直接返回 pending（携带已存结果）。
+	// The first time is valid and cannot be modified: as long as this party has already reported it (regardless of whether the results are the same), this report will be ignored.
+	// Being able to get here (status='matched' unsettled) means that the opponent has not yet reported - otherwise when the second reporting party triggers
+	// Both parties are valid and will be settled within the same transaction, and the previous status check has been returned.
+	// Therefore, our repeated reporting does not need to be rewritten, nor will it affect settlement. It will directly return pending (carrying the saved results).
 	if callerIsA && reportA.Valid {
 		return &PVPSettleResult{Pending: true, RoomID: roomID, Result: reportA.String}, nil
 	}
@@ -1182,7 +1182,7 @@ func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID ui
 		return &PVPSettleResult{Pending: true, RoomID: roomID, Result: reportB.String}, nil
 	}
 
-	// 记录本方首次上报
+	// Record our first report
 	if callerIsA {
 		if _, err = tx.ExecContext(ctx,
 			`UPDATE ironfist_pvp_rooms SET report_a = ? WHERE id = ?`, roomResult, roomID); err != nil {
@@ -1197,7 +1197,7 @@ func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID ui
 		reportB = sql.NullString{String: roomResult, Valid: true}
 	}
 
-	// 双方均已上报才结算；否则提交本方上报后返回 pending
+	// Settlement will be made only after both parties have reported; otherwise, pending will be returned after submitting the report from one party.
 	if !reportA.Valid || !reportB.Valid {
 		if err = tx.Commit(); err != nil {
 			return nil, err
@@ -1205,7 +1205,7 @@ func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID ui
 		return &PVPSettleResult{Pending: true, RoomID: roomID, Result: roomResult}, nil
 	}
 
-	// 双方上报一致 → 按该结果结算；不一致 → 判平局（防作弊兜底）
+	// If the reports from both parties are consistent → settle according to the result; if they are inconsistent → a draw (to prevent cheating)
 	finalResult := roomResult
 	if reportA.String != reportB.String {
 		finalResult = "draw"
@@ -1220,9 +1220,9 @@ func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID ui
 		totalFee = totalPool * 5 / 100 // 5%
 	}
 	out.FeeBurn = totalFee / 2
-	out.FeeTreasury = totalFee - out.FeeBurn // 余数归国库
+	out.FeeTreasury = totalFee - out.FeeBurn //The remainder goes to the treasury
 
-	// 锁定两个账户行（防止与并发提现等冲突）
+	// Lock two account lines (to prevent conflicts with concurrent withdrawals, etc.)
 	if err = s.ensureFistAccountTx(ctx, tx, aUserID); err != nil {
 		return nil, err
 	}
@@ -1230,7 +1230,7 @@ func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID ui
 		return nil, err
 	}
 
-	// 备注里直接带上双方对手 chatID：A 的对手是 B，B 的对手是 A
+	// Directly include the chat IDs of both opponents in the remarks: A’s opponent is B, and B’s opponent is A.
 	switch finalResult {
 	case "win_a":
 		out.WinnerAmount = totalPool - totalFee
@@ -1255,13 +1255,13 @@ func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID ui
 			return nil, err
 		}
 	case "draw", "doubleLose":
-		// 平局：双方对等退回，各退 floor((pool - fee)/2)，不可整除的余数并入手续费。
-		// 相比"余数归 B"，这样两名玩家退款金额完全一致（避免一方 97、一方 98 的观感差异），
-		// 代价是平局费率可能比名义 2.5% 多出 1 个最小单位（并入 burn/treasury，仍守恒）。
+		// Tie: Both parties will refund equally, each will refund floor((pool - fee)/2), and the remainder that is not divisible will be included in the handling fee.
+		// Compared with "remainder goes to B", the refund amount of the two players is exactly the same (to avoid the difference in perception between one party 97 and one party 98),
+		// The trade-off is that the draw rate may be 1 minimum unit more than the nominal 2.5% (incorporated into burn/treasury, still conserved).
 		refundEach := (totalPool - totalFee) / 2
 		out.RefundA = refundEach
 		out.RefundB = refundEach
-		actualFee := totalPool - refundEach*2 // = totalFee 或 totalFee+1
+		actualFee := totalPool - refundEach*2 //= totalFee or totalFee+1
 		out.FeeBurn = actualFee / 2
 		out.FeeTreasury = actualFee - out.FeeBurn
 		if _, err = tx.ExecContext(ctx,
@@ -1303,12 +1303,12 @@ func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID ui
 	return out, nil
 }
 
-// mapPVPResult 把调用方上报的 win/lose/draw/doubleLose 映射为房间视角结果。
-// callerIsA=true 表示调用方是 A 玩家，否则是 B 玩家。
+// mapPVPResult maps the win/lose/draw/doubleLose reported by the caller to the room perspective result.
+// callerIsA=true means the caller is player A, otherwise it is player B.
 //
-//	"win"  → caller 是胜者：A 胜→win_a，B 胜→win_b
-//	"lose" → caller 是败者：A 败→win_b，B 败→win_a
-//	"draw"/"doubleLose" → 同名
+//	"win" → caller is the winner: A wins → win_a, B wins → win_b
+//	"lose" → caller is the loser: A loses → win_b, B loses → win_a
+//	"draw"/"doubleLose" → same name
 func mapPVPResult(r string, callerIsA bool) (string, error) {
 	switch r {
 	case "win":
@@ -1330,21 +1330,21 @@ func mapPVPResult(r string, callerIsA bool) (string, error) {
 	}
 }
 
-// TreasuryStats 公开只读的 PvP 国库/销毁统计（无需鉴权，供国际站介绍页展示）
-// fee_treasury/fee_burn 目前仅为 MVP 记账口径（未真实转账/销毁），详见 SettlePVP 注释。
+// TreasuryStats public read-only PvP treasury/destruction statistics (no authentication required, for display on the international station introduction page)
+// fee_treasury/fee_burn is currently only the MVP accounting standard (not actually transferred/destroyed), see SettlePVP notes for details.
 type TreasuryStats struct {
-	TotalTreasury int64                `json:"total_treasury"` // 历史累计国库收入
-	TotalBurn     int64                `json:"total_burn"`     // 历史累计销毁数量
-	TotalVolume   int64                `json:"total_volume"`   // 历史累计 PvP 质押流水（双方本金合计）
-	TotalMatches  int64                `json:"total_matches"`  // 历史累计已结算场次
+	TotalTreasury int64                `json:"total_treasury"` //Historical cumulative treasury revenue
+	TotalBurn     int64                `json:"total_burn"`     //Historical cumulative number of destroyed items
+	TotalVolume   int64                `json:"total_volume"`   //Historical accumulated PvP staking turnover (total principal of both parties)
+	TotalMatches  int64                `json:"total_matches"`  //Historical accumulated settled events
 	TodayTreasury int64                `json:"today_treasury"`
 	TodayBurn     int64                `json:"today_burn"`
 	TodayMatches  int64                `json:"today_matches"`
-	Daily         []TreasuryDailyPoint `json:"daily"`          // 最近 StatsDailyWindowDays 天，按日期升序
-	TierBreakdown []TierStat           `json:"tier_breakdown"` // 按档位（gold/platinum/diamond）拆分的历史累计
+	Daily         []TreasuryDailyPoint `json:"daily"`          //Most recent StatsDailyWindowDays days, ascending date order
+	TierBreakdown []TierStat           `json:"tier_breakdown"` //Historical accumulation split by gear (gold/platinum/diamond)
 }
 
-// TierStat 按 PVP 档位拆分的历史累计数据
+// TierStat historical cumulative data split by PVP tier
 type TierStat struct {
 	Tier     string `json:"tier"`
 	Matches  int64  `json:"matches"`
@@ -1353,17 +1353,17 @@ type TierStat struct {
 	Volume   int64  `json:"volume"`
 }
 
-// TreasuryDailyPoint 按天聚合的国库/销毁数据点
+// TreasuryDailyPoint Treasury/Destruction data points aggregated by day
 type TreasuryDailyPoint struct {
-	Date     string `json:"date"` // YYYY-MM-DD（DB 服务端会话本地时区，与 settled_at 写入侧一致）
+	Date     string `json:"date"` //YYYY-MM-DD (DB server session local time zone, consistent with settled_at writing side)
 	Matches  int64  `json:"matches"`
 	Treasury int64  `json:"treasury"`
 	Burn     int64  `json:"burn"`
 	Volume   int64  `json:"volume"`
 }
 
-// GetTreasuryStats 查询全局 PvP 国库/销毁数据：历史累计 + 近期每日趋势。
-// 只统计 status='settled' 的房间（含平局/超时兜底退款场次，因平局也收 2.5% 手续费）。
+// GetTreasuryStats Query global PvP treasury/destroy data: historical cumulative + recent daily trend.
+// Only rooms with status='settled' are counted (including draw/overtime refunds, because a 2.5% handling fee is also charged for draws).
 func (s *IronFistService) GetTreasuryStats(ctx context.Context) (*TreasuryStats, error) {
 	st := &TreasuryStats{}
 
@@ -1375,9 +1375,9 @@ func (s *IronFistService) GetTreasuryStats(ctx context.Context) (*TreasuryStats,
 		return nil, err
 	}
 
-	// settled_at 由 SettlePVP/SweepTimeoutPVPMatched 用 CURRENT_TIMESTAMP(3) 写入（服务端会话本地
-	// 时区），故这里用 CURDATE()/CURDATE() 而非 UTC_DATE() 比较，与写入侧保持同一时区参照，
-	// 避免服务端会话时区非 UTC 时"今日"和按天分桶系统性偏移。
+	// settled_at is written by SettlePVP/SweepTimeoutPVPMatched using CURRENT_TIMESTAMP(3) (server session local
+	// time zone), so CURDATE()/CURDATE() is used instead of UTC_DATE() for comparison, keeping the same time zone reference as the writing side,
+	// Avoid systematic offset of "today" and bucketing by day when the server session time zone is non-UTC.
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(fee_treasury), 0), COALESCE(SUM(fee_burn), 0), COUNT(*)
 		FROM ironfist_pvp_rooms
@@ -1416,7 +1416,7 @@ func (s *IronFistService) GetTreasuryStats(ctx context.Context) (*TreasuryStats,
 		return nil, err
 	}
 
-	// 按锚点日期倒推 StatsDailyWindowDays 天补零，确保零活动日也有数据点（供前端画连续折线图）
+	// Push back by the anchor date and add zeros to StatsDailyWindowDays days to ensure that there are data points on zero activity days (for the front-end to draw continuous line charts)
 	st.Daily = make([]TreasuryDailyPoint, StatsDailyWindowDays)
 	for i := 0; i < StatsDailyWindowDays; i++ {
 		ds := anchor.AddDate(0, 0, i-(StatsDailyWindowDays-1)).Format("2006-01-02")
@@ -1450,7 +1450,7 @@ func (s *IronFistService) GetTreasuryStats(ctx context.Context) (*TreasuryStats,
 	return st, tierRows.Err()
 }
 
-// ensureFistAccountTx 在事务内确保 fist_accounts 行存在（与 FistService.ensureAccount 等价）
+// ensureFistAccountTx ensures fist_accounts row exists within transaction (equivalent to FistService.ensureAccount)
 func (s *IronFistService) ensureFistAccountTx(ctx context.Context, tx *sql.Tx, userID uint64) error {
 	_, err := tx.ExecContext(ctx,
 		`INSERT IGNORE INTO fist_accounts (user_id) VALUES (?)`, userID)
@@ -1461,7 +1461,7 @@ func pvpRoomRef(roomID uint64) string {
 	return fmt.Sprintf("ironfist_pvp_room:%d", roomID)
 }
 
-// writeFistTx 在事务内写一条带来源引用的 fist_transactions 流水。
+// writeFistTx writes a fist_transactions pipeline with source references within the transaction.
 func (s *IronFistService) writeFistTx(ctx context.Context, tx *sql.Tx, userID uint64, amount int64, txType, refID, remark string) error {
 	var balanceAfter int64
 	if err := tx.QueryRowContext(ctx,

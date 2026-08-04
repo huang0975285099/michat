@@ -30,28 +30,28 @@ register(process.env.SERVICE_WORKER_FILE, {
   },
 
   async updated (/* registration */) {
-    // 与「我」页横幅口径统一：仅当后端 latest 版本号确实高于当前版本时才提示，
-    // 避免同版本重新构建/部署也弹「发现新版本」
+    // The same caliber as the "Me" page banner: it will only prompt if the latest version number of the backend is indeed higher than the current version.
+    // Avoid re-building/deployment of the same version and "discover new version"
     try {
       const info = await fetchVersionInfo()
       const latest = info.latest || ''
-      if (!latest || !APP_VERSION) return                  // 版本信息缺失则不弹
-      if (cmpVersion(APP_VERSION, latest) >= 0) return     // 已是最新 / 同版本重构建 → 不弹
-      // 低于 min_supported 属于强制更新范围，交给 MainLayout 的硬性弹窗，软提示不重复弹
+      if (!latest || !APP_VERSION) return                  //If the version information is missing, it will not play.
+      if (cmpVersion(APP_VERSION, latest) >= 0) return     //Already the latest / rebuilt with the same version → will not play
+      // Lower than min_supported belongs to the forced update range and is handed over to the hard pop-up window of MainLayout. The soft prompt will not pop up repeatedly.
       if (info.min_supported && cmpVersion(APP_VERSION, info.min_supported) < 0) return
       Notify.create({
         type: 'info',
-        message: '发现新版本',
-        caption: '点击刷新即可更新到最新版',
+        message: 'new version found',
+        caption: 'Click Refresh to update to the latest version',
         timeout: 0,
         position: 'top',
         actions: [
-          { label: '刷新', color: 'white', handler: () => window.location.reload() },
-          { label: '稍后', color: 'white', handler: () => {} }
+          { label: 'Refresh', color: 'white', handler: () => window.location.reload() },
+          { label: 'later', color: 'white', handler: () => {} }
         ]
       })
     } catch {
-      // 拉取版本信息失败：不弹，避免误弹（更新仍由「我」页横幅 / 强制弹窗兜底）
+      // Failed to pull version information: no pop-up to avoid accidental pop-ups (updates are still covered by the "Me" page banner/forced pop-up window)
     }
   },
 

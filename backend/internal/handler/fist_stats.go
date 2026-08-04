@@ -8,8 +8,8 @@ import (
 	"e2eechat/internal/service"
 )
 
-// FistStatsHandler 聚合 PvE 发放 + PvP 国库/销毁的公开透明度统计，
-// 供国际站 $FIST 介绍页展示，无需鉴权。
+// FistStatsHandler aggregates public transparency statistics of PvE issuance + PvP treasury/destroy,
+// For display on the $FIST introduction page of the international station, no authentication is required.
 type FistStatsHandler struct {
 	fistSvc     *service.FistService
 	ironFistSvc *service.IronFistService
@@ -20,8 +20,8 @@ func NewFistStatsHandler(fistSvc *service.FistService, ironFistSvc *service.Iron
 }
 
 // GET /api/fist/stats
-// 公开只读：当前流通量/玩家数、PvE 历史与近30天发放趋势、PvP 国库与销毁收入近30天趋势。
-// 全部为跨用户聚合数据，不含任何单个用户的可识别信息。
+// Public read-only: current circulation volume/number of players, PvE history and distribution trends in the past 30 days, PvP treasury and destruction revenue trends in the past 30 days.
+// All data is aggregated across users and does not contain any identifiable information about individual users.
 func (h *FistStatsHandler) GetStats(c *gin.Context) {
 	ctx := c.Request.Context()
 

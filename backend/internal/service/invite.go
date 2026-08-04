@@ -14,7 +14,7 @@ import (
 
 var ErrInviteCodeInvalid = errors.New("invite code invalid or expired")
 
-// chatIdPattern 匹配 chat_id 格式，如 1234-ABCD（4位数字-4位字母数字）
+// chatIdPattern matches the chat_id format, such as 1234-ABCD (4 digits - 4 alphanumeric)
 var chatIdPattern = regexp.MustCompile(`^\d{4}-[A-Z0-9]{4}$`)
 
 type InviteService struct {
@@ -26,7 +26,7 @@ func NewInviteService(redis *rdb.Client, friendSvc *FriendService) *InviteServic
 	return &InviteService{redis: redis, friendSvc: friendSvc}
 }
 
-// GenerateCode 生成邀请码，存入 Redis，值为邀请者的 chat_id
+// GenerateCode generates an invitation code and stores it in Redis. The value is the inviter's chat_id.
 func (s *InviteService) GenerateCode(ctx context.Context, inviterChatID string) (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -40,10 +40,10 @@ func (s *InviteService) GenerateCode(ctx context.Context, inviterChatID string) 
 	return code, nil
 }
 
-// ValidateCode 验证邀请码，返回邀请者的 chat_id（验证后不删除，允许多次使用）。
-// 若 code 本身是 chat_id 格式（XXXX-XXXX），则直接查数据库验证用户存在，永久有效。
+// ValidateCode verifies the invitation code and returns the inviter's chat_id (it will not be deleted after verification and is allowed to be used multiple times).
+// If the code itself is in the chat_id format (XXXX-XXXX), the database will be directly checked to verify the existence of the user, which is permanently valid.
 func (s *InviteService) ValidateCode(ctx context.Context, code string) (string, error) {
-	// 直接用 chat_id 作为邀请参数，永久有效
+	// Use chat_id directly as the invitation parameter, which is permanently valid
 	if chatIdPattern.MatchString(code) {
 		_, _, err := s.friendSvc.GetUserIDByChatID(ctx, code)
 		if err != nil {
@@ -52,7 +52,7 @@ func (s *InviteService) ValidateCode(ctx context.Context, code string) (string, 
 		return code, nil
 	}
 
-	// 旧式随机邀请码，查 Redis（向后兼容）
+	// Old random invitation code, check Redis (backwards compatible)
 	val, err := s.redis.Get(ctx, pkgredis.InviteCodeKey(code)).Result()
 	if err == rdb.Nil {
 		return "", ErrInviteCodeInvalid
@@ -63,21 +63,21 @@ func (s *InviteService) ValidateCode(ctx context.Context, code string) (string, 
 	return val, nil
 }
 
-// CreateFriendRequestWithInvite 使用邀请码创建好友申请
-// 返回邀请者的 chat_id（用于 WebSocket 通知）
+// CreateFriendRequestWithInvite Use invitation code to create friend request
+// Returns the inviter's chat_id (used for WebSocket notifications)
 func (s *InviteService) CreateFriendRequestWithInvite(ctx context.Context, code string, newUserID uint64) (string, error) {
 	inviterChatID, err := s.ValidateCode(ctx, code)
 	if err != nil {
 		return "", err
 	}
 
-	// 获取邀请者的 user_id
+	// Get the user_id of the inviter
 	_, inviterID, err := s.friendSvc.GetUserIDByChatID(ctx, inviterChatID)
 	if err != nil {
 		return "", err
 	}
 
-	// 创建好友申请（新用户向邀请者发起）
+	// Create a friend application (initiated by new users to the inviter)
 	if err = s.friendSvc.SendRequest(ctx, newUserID, inviterID); err != nil {
 		return "", err
 	}

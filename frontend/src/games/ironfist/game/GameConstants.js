@@ -1,17 +1,17 @@
-// 铁拳 - 常量定义（数值见 docs/ironfist.md 第四/五/十/十五节）
+// Iron Fist - constant definition (see docs/ironfist.md Section 4/5/10/15 for values)
 
-// 游戏阶段（playing 内部子状态）
+// Game stage (playing internal substate)
 export const PHASE = {
   ROUND_START: 'round_start',
   DECIDING: 'deciding',
   LOCKED: 'locked',
   RESOLVING: 'resolving',
   WAITING_CONFIRM: 'waiting_confirm',
-  WAITING_RECONNECT: 'waiting_reconnect', // PvP：对手掉线，等待重连
+  WAITING_RECONNECT: 'waiting_reconnect', //PvP: Opponent disconnects, waiting to reconnect
   GAME_OVER: 'game_over',
 }
 
-// 动作类型
+// action type
 export const ACTION = {
   ATTACK: 'attack',
   DEFEND: 'defend',
@@ -21,58 +21,58 @@ export const ACTION = {
 
 export const ACTIONS = [ACTION.ATTACK, ACTION.DEFEND, ACTION.CHARGE, ACTION.COUNTER]
 
-// 动作展示信息（HUD 用）
+// Action display information (for HUD)
 export const ACTION_META = {
-  [ACTION.ATTACK]:  { icon: '⚔️', name: '攻击', hint: '12 伤害' },
-  [ACTION.DEFEND]:  { icon: '🛡️', name: '防御', hint: '减伤 60%' },
-  [ACTION.CHARGE]:  { icon: '⚡', name: '蓄力', hint: '攻击×2' },
-  [ACTION.COUNTER]: { icon: '🔄', name: '反击', hint: '克制攻击' },
+  [ACTION.ATTACK]:  { icon: '⚔️', name: 'attack', hint: '12 damage' },
+  [ACTION.DEFEND]:  { icon: '🛡️', name: 'defense', hint: 'Damage reduction 60%' },
+  [ACTION.CHARGE]:  { icon: '⚡', name: 'Accumulate strength', hint: 'attack×2' },
+  [ACTION.COUNTER]: { icon: '🔄', name: 'counterattack', hint: 'Restrain attacks' },
 }
 
-// 数值常量
+// Numeric constant
 export const INITIAL_HP = 100
 export const BASE_DAMAGE = 12
-export const DEFEND_REDUCTION = 0.4   // 防御减伤系数
-export const CHARGE_MULTIPLIER = 2    // 蓄力倍率
-export const LOW_HP_THRESHOLD = 30    // 残血强化阈值（攻击方）
-export const LOW_HP_BUFF = 1.1        // 残血强化倍率
-export const SHIELD_HP_THRESHOLD = 20 // 残血护盾阈值（被攻击方）
-export const SHIELD_RATIO = 0.6       // 残血护盾伤害上限比例
-export const CHARGE_HOLD_LIMIT = 2    // 蓄力标记最多保留 2 个可用回合，未攻击消耗则失效
+export const DEFEND_REDUCTION = 0.4   //Defense damage reduction coefficient
+export const CHARGE_MULTIPLIER = 2    //Charge multiplier
+export const LOW_HP_THRESHOLD = 30    //Residual blood enhancement threshold (attacker)
+export const LOW_HP_BUFF = 1.1        //Residual blood enhancement multiplier
+export const SHIELD_HP_THRESHOLD = 20 //Residual health shield threshold (attacked party)
+export const SHIELD_RATIO = 0.6       //Residual health shield damage upper limit ratio
+export const CHARGE_HOLD_LIMIT = 2    //The charge mark will remain available for up to 2 turns and will become invalid if it is not consumed by an attack.
 
-// 僵局检测
-export const STALE_NO_DMG_LIMIT = 5   // 连续无伤害回合上限
-export const STALE_ENV_DMG = 5        // 僵局环境伤害基数
-export const MAX_ROUNDS = 20          // 总回合上限
-export const BOTH_CHARGED_LIMIT = 2   // 双方同时蓄力标记僵局上限
+// deadlock detection
+export const STALE_NO_DMG_LIMIT = 5   //Maximum number of consecutive damage-free rounds
+export const STALE_ENV_DMG = 5        //Deadlock environment damage base
+export const MAX_ROUNDS = 20          //Total round limit
+export const BOTH_CHARGED_LIMIT = 2   //Both sides charged up at the same time to mark the upper limit of the deadlock.
 
-// 回合时间
-export const ROUND_SECONDS = 30       // 决策倒计时
-export const OPPONENT_GRACE_MS = 33_000 // PvP 收方等待对方动作宽限（30s + 3s）
+// round time
+export const ROUND_SECONDS = 30       //Decision countdown
+export const OPPONENT_GRACE_MS = 33_000 //PvP The receiving side waits for the opponent's action grace (30s + 3s)
 
-// 断线重连（方案 B：服务端 action 流暂存 + 本地重放）
-export const RECONNECT_WINDOW_MS = 60_000 // 对手掉线后等待重连上限：60 秒
-export const IRONFIST_ACTIONS_TTL_MS = 30 * 60 * 1000 // 与后端 IronFistActionsTTL 对齐：30 分钟
-// localStorage 持久化 key 前缀（用于本回合已选动作的续传）
+// Disconnection and reconnection (Plan B: server-side action stream temporary storage + local replay)
+export const RECONNECT_WINDOW_MS = 60_000 //The upper limit for the opponent to wait to reconnect after disconnecting: 60 seconds
+export const IRONFIST_ACTIONS_TTL_MS = 30 * 60 * 1000 //Alignment with backend IronFistActionsTTL: 30 minutes
+// localStorage persistence key prefix (used for resuming the selected action in this round)
 export const LS_PENDING_KEY = (roomId) => `ironfist:pending:${roomId}`
-// localStorage 持久化本回合 DECIDING 起始时间戳（本端时钟）：刷新重连后据此恢复倒计时，
-// 避免重连方拿到全新 30s、与对手时间不同步。详见 docs/ironfist-pvp.md 断线重连节。
+// localStorage persists the DECIDING starting timestamp of this round (local clock): the countdown will be resumed accordingly after refreshing and reconnecting.
+// This prevents the reconnected party from getting a new 30s and being out of sync with the opponent's time. For details, see docs/ironfist-pvp.md Disconnection and Reconnection section.
 export const LS_ROUND_KEY = (roomId) => `ironfist:round:${roomId}`
 
-// 伤害表：[玩家动作][对手动作] = { playerDmg, opponentDmg }
-// 注意：蓄力 ×2、残血强化、残血护盾不在此表中，由 resolveRound() 按乘区顺序额外计算
+// Damage table: [player action][opponent action] = { playerDmg, opponentDmg }
+// Note: Charge ×2, remaining health enhancement, and remaining health shield are not in this table, and are additionally calculated by resolveRound() in the order of multiplication zones.
 //
-// 【对称性约束 — PvP 确定性的前提】
-// 必须满足 DT[a][b].playerDmg === DT[b][a].opponentDmg（对所有 a,b）。
-// 否则 PvP 两端从各自视角结算同一回合会得出不同 HP（desync），
-// PvE 也会因"谁被当作 player"而数值不公。
-// 取整后的权威值见 docs/ironfist.md 第七节 Step3：蓄力被打断=18、反击成功=20。
+// [Symmetry constraints—the prerequisite for PvP certainty]
+// Must satisfy DT[a][b].playerDmg === DT[b][a].opponentDmg (for all a,b).
+// Otherwise, both ends of PvP will get different HP (desync) when settling the same round from their respective perspectives.
+// PvE can also be numerically unfair depending on who is considered the player.
+// For the rounded authority value, see docs/ironfist.md Section 7 Step3: The charge is interrupted = 18, the counterattack is successful = 20.
 export const DAMAGE_TABLE = {
   attack: {
     attack:  { playerDmg: 12, opponentDmg: 12 },
     defend:  { playerDmg: 0,  opponentDmg: 5  },
-    charge:  { playerDmg: 0,  opponentDmg: 18 }, // 打断蓄力=18（对称 charge/attack.pd）
-    counter: { playerDmg: 20, opponentDmg: 0  }, // 被反击=20（对称 counter/attack.od）
+    charge:  { playerDmg: 0,  opponentDmg: 18 }, //Interrupt charge=18 (symmetrical charge/attack.pd)
+    counter: { playerDmg: 20, opponentDmg: 0  }, //Counterattacked=20 (symmetrical counter/attack.od)
   },
   defend: {
     attack:  { playerDmg: 5,  opponentDmg: 0  },

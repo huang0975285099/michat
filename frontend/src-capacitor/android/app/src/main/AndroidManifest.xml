@@ -37,7 +37,7 @@
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
 
-        <!-- 极光推送配置 -->
+        <!-- Aurora push configuration -->
         <meta-data
             android:name="JPUSH_APPKEY"
             android:value="${JPUSH_APPKEY}"
@@ -47,7 +47,7 @@
             android:value="${APP_CHANNEL}"
             tools:replace="android:value" />
 
-        <!-- 极光推送事件接收器 -->
+        <!-- Aurora push event receiver -->
         <receiver
             android:name=".JPushEventReceiver"
             android:exported="false">
@@ -64,7 +64,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- JPush 所需权限 -->
+    <!-- JPush required permissions -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
 

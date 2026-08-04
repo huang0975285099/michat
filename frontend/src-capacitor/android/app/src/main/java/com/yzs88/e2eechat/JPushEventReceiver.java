@@ -13,7 +13,7 @@ public class JPushEventReceiver extends JPushMessageReceiver {
 
     private static final String TAG = "JPushEventReceiver";
 
-    /** JPush 注册成功，拿到 RegistrationID */
+    /** JPush registered successfully and got RegistrationID */
     @Override
     public void onRegister(Context context, String registrationId) {
         Log.d(TAG, "Registered, regId: " + registrationId);
@@ -21,11 +21,11 @@ public class JPushEventReceiver extends JPushMessageReceiver {
                 .edit()
                 .putString(ChatServicePlugin.PREF_REG_ID, registrationId)
                 .apply();
-        // 通知前端（若 App 已打开）
+        // Notification frontend (if the app is open)
         ChatServicePlugin.onRegistrationIdReceived(registrationId);
     }
 
-    /** 用户点击通知栏 */
+    /** User clicks on the notification bar */
     @Override
     public void onNotifyMessageOpened(Context context, NotificationMessage message) {
         Log.d(TAG, "Notification tapped, extras: " + message.notificationExtras);
@@ -42,18 +42,18 @@ public class JPushEventReceiver extends JPushMessageReceiver {
             Log.w(TAG, "Failed to parse notification extras", e);
         }
 
-        // 唤起 App 主页面
+        // Call up the App main page
         Intent intent = new Intent(context, MainActivity.class);
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         context.startActivity(intent);
     }
 
-    /** 通知到达时（App 在前台），抑制通知显示 */
+    /** When a notification arrives (App is in the foreground), suppress notification display */
     @Override
     public void onNotifyMessageArrived(Context context, NotificationMessage message) {
         if (ChatServicePlugin.appInForeground) {
-            // App 在前台，通过 WebSocket 直接收消息，不需要系统通知
-            // JPush 5.x 暂无法在此处取消通知，通知仍会显示，但用户体验可接受
+            // App is in the foreground and receives messages directly through WebSocket without system notification.
+            // JPush 5.x currently cannot cancel notifications here. The notifications will still be displayed, but the user experience is acceptable.
             Log.d(TAG, "App in foreground, notification will show but WS handles message");
         }
     }

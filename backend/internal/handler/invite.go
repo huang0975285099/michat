@@ -19,7 +19,7 @@ func NewInviteHandler(svc *service.InviteService) *InviteHandler {
 }
 
 // POST /api/invite/generate
-// 生成邀请码，返回 invite_code
+// Generate invitation code and return invite_code
 func (h *InviteHandler) Generate(c *gin.Context) {
 	chatID := c.GetString(middleware.CtxChatID)
 
@@ -32,7 +32,7 @@ func (h *InviteHandler) Generate(c *gin.Context) {
 }
 
 // GET /api/invite/validate?code=xxx
-// 验证邀请码，返回邀请者的 chat_id 和 nickname（公开信息）
+// Verify the invitation code and return the inviter's chat_id and nickname (public information)
 func (h *InviteHandler) Validate(c *gin.Context) {
 	code := c.Query("code")
 	if code == "" {

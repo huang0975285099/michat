@@ -5,8 +5,8 @@
             class="text-center text-grey q-mt-xl"
         >
             <q-icon name="chat_bubble_outline" size="60px" class="q-mb-md" />
-            <div>暂无聊天记录</div>
-            <div class="text-caption">去好友列表开始聊天吧</div>
+            <div>No chat history yet</div>
+            <div class="text-caption">Go to your friends list and start chatting</div>
         </div>
 
         <q-card v-else bordered>
@@ -24,7 +24,7 @@
                 <q-item-section>
                     <div class="row items-center q-gutter-xs">
                         <q-item-label>{{ chat.nickname }}</q-item-label>
-                        <q-badge v-if="chat.deregistered" color="grey-5" label="已注销" style="font-size:10px" />
+                        <q-badge v-if="chat.deregistered" color="grey-5" label="Logged out" style="font-size:10px" />
                         <q-icon
                             v-if="chat.online"
                             name="circle"
@@ -59,7 +59,7 @@
                             class="text-negative items-center q-gutter-xs"
                         >
                             <q-icon name="delete" size="sm" />
-                            <span>删除对话</span>
+                            <span>Delete conversation</span>
                         </q-item>
                     </q-list>
                 </q-menu>
@@ -83,18 +83,18 @@ const router = useRouter();
 const chatStore = useChatStore();
 const identity = useIdentityStore();
 const friends = ref([]);
-const friendMap = ref({}); // { chatId: friend } 用于快速查找
+const friendMap = ref({}); //{ chatId: friend } for quick search
 const onlineMap = ref({}); // { chatId: boolean }
-// 本页 getFriends 是否已返回。未返回前不判定「已注销」，改用 identity 的启动期缓存
-// 显示昵称，避免首帧 friendMap 为空导致整列表闪现 chatID + 已注销 徽章。
+// Whether getFriends of this page has been returned. Do not determine "logged out" before returning, use identity's startup cache instead
+// Display the nickname to avoid the empty friendMap in the first frame causing the entire list to flash the chatID + logged out badge.
 const friendsLoaded = ref(false);
 
 const menuChat = ref(null);
 
 onActivated(async () => {
     await chatStore.loadAllMessages();
-    // 加载完所有消息后立即清理已过期的阅后即焚消息，
-    // 避免会话列表显示即将删除的陈旧条目
+    // After loading all messages, immediately clear the expired messages that will disappear after reading.
+    // Avoid session list showing stale entries about to be deleted
     chatStore.checkExpiredMessages();
     const { data } = await friendApi.getFriends();
     friends.value = data;
@@ -118,8 +118,8 @@ function handleStatus(payload) {
 
 function deleteChat() {
     $q.dialog({
-        title: "删除对话",
-        message: `删除与「${menuChat.value.nickname}」的聊天记录？此操作不可恢复。`,
+        title: "Delete conversation",
+        message: `delete with「${menuChat.value.nickname}」's chat history？This operation is irreversible。`,
         cancel: true,
         persistent: true,
     }).onOk(async () => {
@@ -129,7 +129,7 @@ function deleteChat() {
 }
 
 const recentChats = computed(() => {
-    // 收集所有有消息的 chatId
+    // Collect all chatIds with messages
     const chatIds = new Set();
     for (const cid in chatStore.messages) {
         if (chatStore.messages[cid].length > 0) {
@@ -146,13 +146,13 @@ const recentChats = computed(() => {
 
         result.push({
             chatId,
-            // 优先用本页最新的好友数据；未加载时回退到 identity 启动期缓存的昵称/公钥，
-            // 使首帧即显示正确昵称而非 chatID。
+            // Priority is given to the latest friend data on this page; when it is not loaded, it falls back to the nickname/public key cached during the identity startup period.
+            // Make the first frame display the correct nickname instead of the chatID.
             nickname: friend ? friend.nickname : identity.getFriendName(chatId),
-            // 仅在本页 getFriends 返回后才判定「已注销」，避免加载期误标。
+            // Only determine "logged out" after getFriends returns on this page to avoid mislabeling during loading.
             deregistered: friendsLoaded.value && !friend,
             pubkey: friend ? friend.public_key : identity.getFriendPubKey(chatId) || "",
-            lastMessage: last?.text || "点击开始聊天",
+            lastMessage: last?.text || "Click to start chatting",
             ts: last?.ts || 0,
             unread: unreadCount,
             online: !!onlineMap.value[chatId],

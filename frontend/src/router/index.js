@@ -26,7 +26,7 @@ const router = createRouter({
   routes
 })
 
-// load() 只调用一次：应用启动时
+// load() is only called once: when the app starts
 let loaded = false
 router.beforeEach(async (to) => {
   if (!loaded) {
@@ -34,9 +34,9 @@ router.beforeEach(async (to) => {
     await store.load()
     loaded = true
   }
-  // init 页无需身份验证
+  // init page does not require authentication
   if (to.path === '/init') return true
-  // 首页始终可访问，isReady 状态由页面自身读取
+  // The homepage is always accessible, the isReady status is read by the page itself
   if (to.path === '/') return true
   const store = useIdentityStore()
   if (!store.isReady) return '/init'

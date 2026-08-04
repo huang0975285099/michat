@@ -21,7 +21,7 @@ type FriendRequest struct {
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 
-	// 查询时附带的关联信息
+	// Related information attached to the query
 	FromUser *User `json:"from_user,omitempty"`
 	ToUser   *User `json:"to_user,omitempty"`
 }

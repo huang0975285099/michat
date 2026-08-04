@@ -16,20 +16,20 @@ import (
 	"e2eechat/internal/ws"
 )
 
-// WS 并发连接上限：防连接洪水耗尽 socket / goroutine / 内存。
-// 手机为主 + 运营商 CGNAT：大量真实用户共用一个出口 IP，故单 IP 上限放宽，
-// 仅作单机异常洪水兜底；真正的精细管控靠按用户(authRL)与按连接(msgLimiter)的限流。
+// WS concurrent connection upper limit: prevent connection flooding from exhausting socket/goroutine/memory.
+// Mainly mobile phone + operator CGNAT: A large number of real users share an export IP, so the upper limit of a single IP is relaxed.
+// It is only used to protect against abnormal floods on a single machine; real fine control relies on per-user (authRL) and per-connection (msgLimiter) current limiting.
 const (
-	maxWSConns      = 50000 // 全局并发连接上限（按单机容量设，超量直接拒新连）
-	maxWSConnsPerIP = 500   // 单 IP 并发连接上限（CGNAT 下众多手机共用 IP）
+	maxWSConns      = 50000 //The upper limit of global concurrent connections (set according to the capacity of a single machine, if the limit is exceeded, new connections will be directly rejected)
+	maxWSConnsPerIP = 500   //The upper limit of concurrent connections for a single IP (many mobile phones share IP under CGNAT)
 )
 
-// IsLocalDevOrigin 判断 origin 是否为应始终放行的本地开发 / 原生壳来源：
-//   - file:// / capacitor://（移动端原生壳，无标准 http origin）
-//   - 任意端口的 http(s)://localhost、127.0.0.1、[::1]（本地调试）
+// IsLocalDevOrigin determines whether origin is a local development/native shell origin that should always be allowed:
+// - file:// / capacitor:// (mobile terminal native shell, no standard http origin)
+// - http(s)://localhost, 127.0.0.1, [::1] on any port (local debugging)
 //
-// 用精确 host 比对而非前缀匹配，避免 https://localhost.evil.com 之类的绕过。
-// CheckOrigin 与 corsMiddleware 共用此判断。
+// Use exact host comparison instead of prefix matching to avoid bypasses such as https://localhost.evil.com.
+// CheckOrigin and corsMiddleware share this judgment.
 func IsLocalDevOrigin(origin string) bool {
 	if strings.HasPrefix(origin, "file://") || strings.HasPrefix(origin, "capacitor://") {
 		return true
@@ -38,7 +38,7 @@ func IsLocalDevOrigin(origin string) bool {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return false
 	}
-	switch u.Hostname() { // Hostname() 已去掉端口与 IPv6 方括号
+	switch u.Hostname() { //Hostname() has removed the port and IPv6 square brackets
 	case "localhost", "127.0.0.1", "::1":
 		return true
 	}
@@ -51,10 +51,10 @@ type WSHandler struct {
 	allowedOrigins map[string]struct{}
 	allowAll       bool
 
-	// 并发连接计数（建连已被上游限流，非热路径，用互斥锁简单且无计数竞态）。
+	// Concurrent connection count (connection establishment has been limited by the upstream, non-hot path, simple to use mutex lock and no counting race).
 	connMu     sync.Mutex
-	curConns   int            // 当前全局并发连接数
-	connsPerIP map[string]int // ip → 当前该 IP 并发连接数
+	curConns   int            //The current number of global concurrent connections
+	connsPerIP map[string]int //ip → Current number of concurrent connections for this IP
 }
 
 func NewWSHandler(hub *ws.Hub, svc *service.IdentityService, allowedOrigins []string) *WSHandler {
@@ -69,8 +69,8 @@ func NewWSHandler(hub *ws.Hub, svc *service.IdentityService, allowedOrigins []st
 	return h
 }
 
-// acquireConn 尝试为来自 ip 的新连接占用名额：超过全局或单 IP 上限则返回 false。
-// 成功时须在连接结束时调用对应的 releaseConn。
+// acquireConn attempts to take up quota for new connections from ip: returns false if the global or per-IP limit is exceeded.
+// If successful, the corresponding releaseConn must be called at the end of the connection.
 func (h *WSHandler) acquireConn(ip string) bool {
 	h.connMu.Lock()
 	defer h.connMu.Unlock()
@@ -92,7 +92,7 @@ func (h *WSHandler) releaseConn(ip string) {
 		h.curConns--
 	}
 	if h.connsPerIP[ip] <= 1 {
-		delete(h.connsPerIP, ip) // 归零即删除，防止 IP 条目无界增长
+		delete(h.connsPerIP, ip) //Delete when reset to zero to prevent unbounded growth of IP entries.
 	} else {
 		h.connsPerIP[ip]--
 	}
@@ -117,13 +117,13 @@ func (h *WSHandler) upgrader() websocket.Upgrader {
 
 // GET /ws  — token is sent via the first WebSocket message, not in the URL.
 func (h *WSHandler) Serve(c *gin.Context) {
-	// 连接数上限：升级前即拦截，避免为超额连接分配资源。
+	// Maximum number of connections: intercept before upgrading to avoid allocating resources for excessive connections.
 	ip := c.ClientIP()
 	if !h.acquireConn(ip) {
 		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many connections"})
 		return
 	}
-	// 未成功移交给读写 goroutine 前（升级/认证失败等），由本 defer 释放名额。
+	// Before being successfully transferred to the read-write goroutine (upgrade/authentication failure, etc.), this defer will release the quota.
 	handedOff := false
 	defer func() {
 		if !handedOff {

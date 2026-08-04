@@ -15,8 +15,8 @@ type windowCounter struct {
 	reset time.Time
 }
 
-// RateLimiter 固定窗口限流。默认按 IP，可通过 NewRateLimiterFunc 自定义键
-// （如按已认证用户 chatID，避免共享 NAT 下多用户互相挤占额度）。
+// RateLimiter fixed window current limit. The default is IP, the key can be customized through NewRateLimiterFunc
+// (For example, press the authenticated user chatID to avoid multiple users occupying each other's quota under shared NAT).
 type RateLimiter struct {
 	clients sync.Map
 	limit   int
@@ -29,14 +29,14 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	return &RateLimiter{limit: limit, window: window, keyFn: func(c *gin.Context) string { return c.ClientIP() }}
 }
 
-// NewRateLimiterFunc 与 NewRateLimiter 相同，但用 keyFn 提取限流键。
+// NewRateLimiterFunc Same as NewRateLimiter, but uses keyFn to extract the rate limiting key.
 func NewRateLimiterFunc(limit int, window time.Duration, keyFn func(*gin.Context) string) *RateLimiter {
 	return &RateLimiter{limit: limit, window: window, keyFn: keyFn}
 }
 
 func (rl *RateLimiter) Limit() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 惰性触发清理，避免长期运行时 clients 持续膨胀。
+		// Lazy trigger cleanup to avoid continued expansion of clients during long-running operations.
 		if rl.reqN.Add(1)%1024 == 0 {
 			rl.cleanupStale()
 		}
@@ -64,8 +64,8 @@ func (rl *RateLimiter) Limit() gin.HandlerFunc {
 	}
 }
 
-// cleanupStale 删除长期不活跃的 IP 计数器：
-// 若一个条目的窗口结束后又超过 1 个 window 都没有新请求，则回收。
+// cleanupStale deletes long-term inactive IP counters:
+// If there are no new requests for more than 1 window after the window of an entry ends, it will be recycled.
 func (rl *RateLimiter) cleanupStale() {
 	now := time.Now()
 	rl.clients.Range(func(key, value any) bool {

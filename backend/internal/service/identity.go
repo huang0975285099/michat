@@ -34,23 +34,23 @@ const (
 
 var (
 	nicknameColors = []string{
-		// 🎨 颜色系（偏柔和）
+		// 🎨 Color (softer)
 		"蔚蓝的", "天蓝的", "湖蓝的", "薄荷绿的",
 		"柠檬黄的", "暖橙的", "樱粉的", "玫瑰粉的",
 		"薰衣草紫的", "奶油白的", "象牙白的",
 		"银灰的", "香槟金的", "琥珀色的", "翡翠色的",
 
-		// ✨ 气质类（最推荐）
+		// ✨ Temperament type (most recommended)
 		"温柔的", "可爱的", "安静的", "慵懒的",
 		"闪闪的", "柔软的", "甜甜的", "暖暖的",
 		"清新的", "干净的", "纯真的", "治愈的",
 
-		// 🌙 氛围感
+		// 🌙 Atmosphere
 		"神秘的", "梦幻的", "浪漫的", "孤独的",
 		"自由的", "勇敢的", "快乐的", "悲伤的",
 		"迷路的", "发光的", "透明的", "安然的",
 
-		// 🌿 文艺感（高级一点）
+		// 🌿 Literary and artistic sense (more advanced)
 		"风中的", "雨后的", "夜里的", "清晨的",
 		"黄昏的", "星空下的", "云朵里的",
 		"森林中的", "海边的",
@@ -77,7 +77,7 @@ func NewIdentityService(db *sql.DB, redis *rdb.Client) *IdentityService {
 	return &IdentityService{db: db, redis: redis}
 }
 
-// Init 创建新身份，返回 (user, sessionToken, error)
+// Init creates a new identity and returns (user, sessionToken, error)
 func (s *IdentityService) Init(ctx context.Context) (*model.User, string, error) {
 	chatID, err := genChatID()
 	if err != nil {
@@ -111,7 +111,7 @@ func (s *IdentityService) Init(ctx context.Context) (*model.User, string, error)
 	return user, token, nil
 }
 
-// UploadPublicKey 上传公钥，完成注册
+// UploadPublicKey Upload the public key and complete the registration
 func (s *IdentityService) UploadPublicKey(ctx context.Context, chatID, publicKey string) error {
 	var isReady bool
 	err := s.db.QueryRowContext(ctx, `SELECT is_ready FROM users WHERE chat_id = ?`, chatID).Scan(&isReady)
@@ -131,7 +131,7 @@ func (s *IdentityService) UploadPublicKey(ctx context.Context, chatID, publicKey
 	return err
 }
 
-// GetByChatID 查询用户
+// GetByChatID query user
 func (s *IdentityService) GetByChatID(ctx context.Context, chatID string) (*model.User, error) {
 	u := &model.User{}
 	err := s.db.QueryRowContext(ctx,
@@ -144,21 +144,21 @@ func (s *IdentityService) GetByChatID(ctx context.Context, chatID string) (*mode
 	return u, err
 }
 
-// UpdateNickname 修改昵称
+// UpdateNickname Modify nickname
 func (s *IdentityService) UpdateNickname(ctx context.Context, chatID, nickname string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE users SET nickname = ? WHERE chat_id = ?`, nickname, chatID)
 	return err
 }
 
-// UpdateLastSeen 更新最后在线时间
+// UpdateLastSeen updates the last online time
 func (s *IdentityService) UpdateLastSeen(ctx context.Context, chatID string) {
 	now := time.Now()
 	s.db.ExecContext(ctx, `UPDATE users SET last_seen = ? WHERE chat_id = ?`, now, chatID) //nolint
 }
 
-// issueSession 生成 session token，值为 "chatID:gen"，写入 Redis
+// issueSession generates session token with value "chatID:gen" and writes it to Redis
 func (s *IdentityService) issueSession(ctx context.Context, chatID string) (string, error) {
-	// 获取当前 session 版本号
+	// Get the current session version number
 	genStr, err := s.redis.Get(ctx, pkgredis.SessionGenKey(chatID)).Result()
 	var gen int64
 	if err == nil {
@@ -174,7 +174,7 @@ func (s *IdentityService) issueSession(ctx context.Context, chatID string) (stri
 	return token, s.redis.Set(ctx, pkgredis.SessionKey(token), val, pkgredis.SessionTTL).Err()
 }
 
-// ValidateSession 校验 token，返回 chat_id；版本号不匹配时视为已失效
+// ValidateSession verifies the token and returns chat_id; if the version number does not match, it is deemed to have expired.
 func (s *IdentityService) ValidateSession(ctx context.Context, token string) (string, error) {
 	val, err := s.redis.Get(ctx, pkgredis.SessionKey(token)).Result()
 	if err == rdb.Nil {
@@ -184,16 +184,16 @@ func (s *IdentityService) ValidateSession(ctx context.Context, token string) (st
 		return "", err
 	}
 
-	// val 格式: "chatID:gen"
+	// val format: "chatID:gen"
 	idx := strings.LastIndex(val, ":")
 	if idx < 0 {
-		// 兼容旧格式（无版本号），直接返回
+		// Compatible with the old format (no version number), return directly
 		return val, nil
 	}
 	chatID := val[:idx]
 	gen, _ := strconv.ParseInt(val[idx+1:], 10, 64)
 
-	// 校验版本号
+	// Verify version number
 	curGenStr, err := s.redis.Get(ctx, pkgredis.SessionGenKey(chatID)).Result()
 	if err != nil && err != rdb.Nil {
 		return "", err
@@ -208,17 +208,17 @@ func (s *IdentityService) ValidateSession(ctx context.Context, token string) (st
 	return chatID, nil
 }
 
-// revokeAllSessions 递增版本号，使该用户所有旧 session 立即失效
+// revokeAllSessions increments the version number, making all old sessions of this user invalid immediately
 func (s *IdentityService) revokeAllSessions(ctx context.Context, chatID string) error {
 	return s.redis.Incr(ctx, pkgredis.SessionGenKey(chatID)).Err()
 }
 
-// RevokeSession 注销 session（删除 Redis 中的 token）
+// RevokeSession logs out the session (delete the token in Redis)
 func (s *IdentityService) RevokeSession(ctx context.Context, token string) error {
 	return s.redis.Del(ctx, pkgredis.SessionKey(token)).Err()
 }
 
-// DeleteAccount 注销账号：删除好友关系、好友申请、已读回执、用户记录、所有 session
+// DeleteAccount Cancel account: delete friend relationships, friend applications, read receipts, user records, and all sessions
 func (s *IdentityService) DeleteAccount(ctx context.Context, chatID string) error {
 	var userID uint64
 	err := s.db.QueryRowContext(ctx, `SELECT id FROM users WHERE chat_id = ?`, chatID).Scan(&userID)
@@ -235,8 +235,8 @@ func (s *IdentityService) DeleteAccount(ctx context.Context, chatID string) erro
 	}
 	defer tx.Rollback()
 
-	// 已读回执是发件方阅后即焚的 tombstone。阅读方注销后仍需保留，直到发件方
-	// 再次上线同步；只有当前账号本身是发件方时才可一并删除。
+	// Read receipts are tombstones that disappear after the sender reads them. After the reader logs out, it still needs to be retained until the sender
+	// Go online again and synchronize; only if the current account itself is the sender, it can be deleted together.
 	if _, err = tx.ExecContext(ctx, `DELETE FROM message_reads WHERE msg_from = ?`, chatID); err != nil {
 		return err
 	}
@@ -261,7 +261,7 @@ func (s *IdentityService) DeleteAccount(ctx context.Context, chatID string) erro
 	return nil
 }
 
-// GetReauthChallenge 为指定公钥生成一次性挑战码，存入 Redis（5分钟有效）
+// GetReauthChallenge generates a one-time challenge code for the specified public key and stores it in Redis (valid for 5 minutes)
 func (s *IdentityService) GetReauthChallenge(ctx context.Context, publicKey string) (string, error) {
 	var chatID string
 	err := s.db.QueryRowContext(ctx,
@@ -285,9 +285,9 @@ func (s *IdentityService) GetReauthChallenge(ctx context.Context, publicKey stri
 	return nonce, nil
 }
 
-// Reauth 用挑战码+签名验证私钥所有权，颁发新 session_token
+// Reauth uses challenge code + signature to verify private key ownership and issue a new session_token
 func (s *IdentityService) Reauth(ctx context.Context, publicKey, signature, nonce string) (*model.User, string, error) {
-	// 1. 原子消费挑战码（GETDEL 保证一次性使用）
+	// 1. Atomic consumption challenge code (GETDEL guaranteed to be used once)
 	val, err := s.redis.GetDel(ctx, pkgredis.ReauthChallengeKey(nonce)).Result()
 	if err == rdb.Nil {
 		return nil, "", errors.New("invalid or expired challenge")
@@ -297,7 +297,7 @@ func (s *IdentityService) Reauth(ctx context.Context, publicKey, signature, nonc
 	}
 	chatID := val
 
-	// 2. 查询用户
+	// 2. Query users
 	u := &model.User{}
 	err = s.db.QueryRowContext(ctx,
 		`SELECT id, chat_id, nickname, public_key, is_ready, is_admin, created_at, last_seen FROM users WHERE chat_id = ? AND is_ready = 1`,
@@ -310,17 +310,17 @@ func (s *IdentityService) Reauth(ctx context.Context, publicKey, signature, nonc
 		return nil, "", err
 	}
 
-	// 3. 验证公钥与挑战码对应的用户一致
+	// 3. Verify that the public key is consistent with the user corresponding to the challenge code
 	if u.PublicKey != publicKey {
 		return nil, "", errors.New("public key mismatch")
 	}
 
-	// 4. 验证 ECDSA 签名（证明持有私钥）
+	// 4. Verify ECDSA signature (prove possession of private key)
 	if err := verifyECDSASignature(publicKey, nonce, signature); err != nil {
 		return nil, "", err
 	}
 
-	// 5. 吊销旧 session，颁发新 token
+	// 5. Revoke the old session and issue a new token
 	if err := s.revokeAllSessions(ctx, u.ChatID); err != nil {
 		return nil, "", err
 	}
@@ -331,7 +331,7 @@ func (s *IdentityService) Reauth(ctx context.Context, publicKey, signature, nonc
 	return u, token, nil
 }
 
-// verifyECDSASignature 验证 Web Crypto API 产生的 ECDSA P-256 签名（IEEE P1363 格式）
+// verifyECDSASignature Verifies the ECDSA P-256 signature (IEEE P1363 format) generated by the Web Crypto API
 func verifyECDSASignature(publicKeyB64, message, signatureB64 string) error {
 	pubKeyBytes, err := base64.StdEncoding.DecodeString(publicKeyB64)
 	if err != nil {
@@ -350,7 +350,7 @@ func verifyECDSASignature(publicKeyB64, message, signatureB64 string) error {
 	if err != nil {
 		return fmt.Errorf("decode signature: %w", err)
 	}
-	// Web Crypto ECDSA P-256 签名格式为 IEEE P1363: r||s，各 32 字节
+	// Web Crypto ECDSA P-256 signature format is IEEE P1363: r||s, 32 bytes each
 	if len(sigBytes) != 64 {
 		return errors.New("invalid signature length")
 	}
@@ -364,7 +364,7 @@ func verifyECDSASignature(publicKeyB64, message, signatureB64 string) error {
 	return nil
 }
 
-// genChatID 生成 NNNN-AAAA 格式 ID（4位数字-4位大写字母，如 1234-ABCD）
+// genChatID generates NNNN-AAAA format ID (4 digits-4 uppercase letters, such as 1234-ABCD)
 func genChatID() (string, error) {
 	digits := make([]byte, 4)
 	for i := range digits {
@@ -385,7 +385,7 @@ func genChatID() (string, error) {
 	return string(digits) + "-" + string(letters), nil
 }
 
-// genNickname 生成"颜色+动物"格式昵称
+// genNickname generates a nickname in the "color+animal" format
 func genNickname() (string, error) {
 	ci, err := rand.Int(rand.Reader, big.NewInt(int64(len(nicknameColors))))
 	if err != nil {

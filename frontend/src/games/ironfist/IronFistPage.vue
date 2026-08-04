@@ -1,7 +1,7 @@
 <template>
     <q-page class="ironfist-page">
-        <!-- ── 大厅与子视图（菜单已拆分为独立组件） ──────────── -->
-        <!-- 国际版 $FIST 的 @open-fist 入口暂时停用。 -->
+        <!-- ── Lobby and subviews (menu has been split into independent components) ──────────── -->
+        <!-- The @open-fist portal for the international version of $FIST is temporarily disabled. -->
         <IronFistLobby
             v-if="view === 'lobby'"
             @home="goHome"
@@ -12,7 +12,7 @@
             @open-pvp="view = 'pvp'"
             @invite="startInvite"
         />
-        <!-- 国际版 $FIST 介绍页暂时停用。
+        <!-- The international $FIST introduction page is temporarily disabled.
         <IronFistFist v-else-if="view === 'fist'" @back="view = 'lobby'" />
         -->
         <IronFistLedger v-else-if="view === 'ledger'" @back="view = 'lobby'" />
@@ -27,40 +27,40 @@
             @matched="onPVPMatched"
         />
 
-        <!-- ── 邀请中 ───────────────────────────────────────── -->
+        <!-- ── Inviting ───────────────────────────────────── -->
         <div
             v-else-if="view === 'inviting'"
             class="flex flex-center column full-h q-gutter-md q-pa-xl"
         >
             <q-spinner-dots color="purple" size="64px" />
-            <div class="text-h6">等待对方接受…</div>
+            <div class="text-h6">Wait for the other party to accept…</div>
             <div class="text-caption text-grey-5">
                 {{ gameStore.opponentNickname }}
             </div>
             <q-btn
                 flat
                 color="negative"
-                label="取消邀请"
+                label="Cancel invitation"
                 @click="gameStore.cancelInvite()"
             />
         </div>
 
-        <!-- ── 重连中（页面刷新后重入） ─────────────────────── -->
+        <!-- ── Reconnecting (re-entering after refreshing the page) ─────────────────────── -->
         <div
             v-else-if="view === 'reconnecting'"
             class="flex flex-center column full-h q-gutter-md q-pa-xl"
         >
             <q-spinner-dots color="deep-orange" size="64px" />
-            <div class="text-h6">正在重连对局…</div>
-            <div class="text-caption text-grey-5">正在从服务器恢复对局进度</div>
+            <div class="text-h6">Reconnecting to match…</div>
+            <div class="text-caption text-grey-5">Restore game progress from server</div>
         </div>
 
-        <!-- ── 对战 ─────────────────────────────────────────── -->
+        <!-- ── Battle ──────────────────────────────────────── -->
         <div v-else-if="view === 'playing'" class="battle">
-            <!-- ===== 顶部对战 HUD：我方 | 回合+环形倒计时 | 对手 ===== -->
+            <!-- ===== Top battle HUD: Our side | Round + ring countdown | Opponent ===== -->
             <div class="match-hud">
                 <div class="mh-grid">
-                    <!-- 我方 -->
+                    <!-- Our side -->
                     <div
                         class="mh-player mh-player--me"
                         :class="{ 'mh-player--hit': meHit }"
@@ -102,7 +102,7 @@
                         </div>
                     </div>
 
-                    <!-- 中央：回合数 + 环形倒计时（SVG 描边动画） -->
+                    <!-- Center: Number of rounds + circular countdown (SVG stroke animation) -->
                     <div class="mh-center">
                         <div class="mh-round-bar">
                             <span
@@ -118,9 +118,9 @@
                             :class="cdStage ? `cd-ring--${cdStage}` : ''"
                         >
                             <!--
-              SVG 圆环：viewBox 64x64，r=28，周长 ≈ 175.93。
-              stroke-dashoffset 按剩余比例从 0 → 周长 平滑收缩。
-              优势：可做平滑描边过渡、内发光 filter，比 conic-gradient 更精致。
+              SVG ring：viewBox 64x64，r=28，perimeter ≈ 175.93。
+              stroke-dashoffset According to the remaining proportion from 0 → perimeter Smooth shrinkage。
+              Advantages：Smooth stroke transition possible、internal glow filter，Than conic-gradient more refined。
             -->
                             <svg
                                 class="cd-svg"
@@ -145,14 +145,14 @@
                                         </feMerge>
                                     </filter>
                                 </defs>
-                                <!-- 背景圈（淡） -->
+                                <!-- Background circle (light) -->
                                 <circle
                                     cx="32"
                                     cy="32"
                                     r="28"
                                     class="cd-track-circle"
                                 />
-                                <!-- 进度圈 -->
+                                <!-- progress circle -->
                                 <circle
                                     cx="32"
                                     cy="32"
@@ -170,7 +170,7 @@
                             <div class="cd-inner">
                                 <template v-if="phase === 'deciding'">
                                     <span class="cd-num">{{ countdown }}</span>
-                                    <!-- <span class="cd-unit">秒</span> -->
+                                    <!-- <span class="cd-unit">Seconds</span> -->
                                 </template>
                                 <span v-else class="cd-glyph">⚔</span>
                             </div>
@@ -186,7 +186,7 @@
                         </div>
                     </div>
 
-                    <!-- 对手 -->
+                    <!-- opponent -->
                     <div
                         class="mh-player mh-player--opp"
                         :class="{ 'mh-player--hit': oppHit }"
@@ -235,7 +235,7 @@
                 </div>
             </div>
 
-            <!-- 3D 战斗区（出招揭示行作为浮层叠在底部，不占布局、不抖动） -->
+            <!-- 3D combat area (the move reveal row is stacked at the bottom as a floating layer, without occupying the layout or shaking) -->
             <div class="arena-slot">
                 <BattleArena
                     :result="lastResult"
@@ -277,7 +277,7 @@
                 </div>
             </transition>
 
-            <!-- ===== 操作按钮（常驻；非决策态禁用） ===== -->
+            <!-- ===== Operation button (resident; disabled in non-decision-making state) ===== -->
             <div class="control-deck">
                 <div class="hud-action">
                     <button
@@ -304,21 +304,21 @@
                 </div>
             </div>
 
-            <!-- ===== 对手掉线重连遮罩（60s 等待，不允许放弃） ===== -->
+            <!-- ===== Opponent disconnects and reconnects (60s wait, no giving up) ===== -->
             <div v-if="isWaitingReconnect" class="reconnect-overlay">
                 <div class="reconnect-card">
                     <q-spinner-dots color="deep-orange" size="56px" />
-                    <div class="text-h6 q-mt-md">对手网络波动</div>
+                    <div class="text-h6 q-mt-md">Opponent network fluctuations</div>
                     <div class="text-caption text-grey-5 q-mt-xs">
-                        等待对手重连 · 剩余 {{ reconnectCountdown }}s
+                        Wait for opponent to reconnect · Remaining {{ reconnectCountdown }}s
                     </div>
                     <div class="text-caption text-grey-6 q-mt-md">
-                        对局必须分出胜负，请耐心等待
+                        The match must be decided by a winner，please be patient
                     </div>
                 </div>
             </div>
 
-            <!-- ===== 结果遮罩：透明叠加在游戏界面上，背景仍是战斗画面 ===== -->
+            <!-- ===== Result mask: transparently superimposed on the game interface, the background is still the battle screen ===== -->
             <transition name="result-fade">
                 <div
                     v-if="resultType"
@@ -331,27 +331,27 @@
                         <div v-if="resultSub" class="result-sub">
                             {{ resultSub }}
                         </div>
-                        <!-- PvE 胜利 $FIST 奖励 -->
+                        <!-- PvE Victory $FIST Reward -->
                         <div v-if="pveReward" class="pve-reward-badge">
                             <span class="pve-reward-amount">+500 {{ currency }}</span>
                             <span class="pve-reward-progress">
-                                今日 {{ pveReward.todayWins }} /
-                                {{ pveReward.todayMax }} 场
+                                today {{ pveReward.todayWins }} /
+                                {{ pveReward.todayMax }} field
                             </span>
                         </div>
-                        <!-- 每日满 10 场额外奖励 -->
+                        <!-- Additional rewards for reaching 10 games per day -->
                         <div
                             v-if="pveReward && pveReward.bonusAwarded"
                             class="pve-bonus-badge"
                         >
-                            🎉 每日满勤奖励 +{{
+                            🎉 Daily attendance reward +{{
                                 pveReward.bonusAmount.toLocaleString()
                             }}
                             {{ currency }}
                         </div>
                         <q-btn
                             color="purple"
-                            label="返回大厅"
+                            label="Return to lobby"
                             unelevated
                             class="result-btn"
                             @click="backToLobby"
@@ -373,7 +373,7 @@ import { useFistStore } from "src/stores/fist";
 import { ironfistApi } from "src/services/api";
 import { ACHIEVEMENT_MAP } from "./game/ironfistMeta";
 import IronFistLobby from "./components/IronFistLobby.vue";
-// 国际版 $FIST 介绍页暂时停用。
+// The international $FIST introduction page is temporarily disabled.
 // import IronFistFist from "./components/IronFistFist.vue";
 import IronFistLedger from "./components/IronFistLedger.vue";
 import IronFistRecords from "./components/IronFistRecords.vue";
@@ -382,8 +382,8 @@ import IronFistPvpLobby from "./components/IronFistPvpLobby.vue";
 import HealthBar from "./components/HealthBar.vue";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
 import { useRegion } from "./game/useRegion.js";
-// 三期：Babylon.js 3D 渲染层（方案B）。props 接口与一/二期一致，可一行回退。
-// 一期 BattleArena.vue(2D-CSS) / 二期 BattleArenaPhaser.vue 仍保留备用。
+// Phase 3: Babylon.js 3D rendering layer (Option B). The props interface is consistent with the first and second phases, and can be rolled back in one line.
+// The first phase of BattleArena.vue(2D-CSS) / the second phase of BattleArenaPhaser.vue are still reserved.
 import BattleArena from "./components/BattleArena3D.vue";
 import { IronFistGame } from "./game/IronFistGame.js";
 import { GameNet } from "./game/GameNet.js";
@@ -397,10 +397,10 @@ import {
 
 defineOptions({ name: "IronFistPage" });
 
-// 结算后停留时长（ms）：展示揭示行+伤害后自动进入下一回合 / 终局进结果页。
+// Duration of stay after settlement (ms): Automatically enter the next round/final result page after displaying the reveal line + damage.
 const ROUND_HOLD_MS = 2200;
-const END_HOLD_MS = 3200; // 判定平局（超时双方仍有血、非倒地终局）：留足"对峙判和"演出(起手≈1.1s + TIME OVER 横幅≈1.9s)
-const END_HOLD_KO_MS = 3900; // 倒地终局：留足 ko 动画(接触点≈1.1s + ko≈2.6s)播完
+const END_HOLD_MS = 3200; //Determine a draw (both sides still have blood after the timeout, and it ends without falling to the ground): Leave enough time for the "Confrontation and Decision" performance (starting hand≈1.1s + TIME OVER banner≈1.9s)
+const END_HOLD_KO_MS = 3900; //Falling to the ground ending: leave enough ko animation (contact point≈1.1s + ko≈2.6s) to finish
 
 const route = useRoute();
 const router = useRouter();
@@ -409,9 +409,9 @@ const identityStore = useIdentityStore();
 const fistStore = useFistStore();
 const { currency } = useRegion();
 
-// 我方昵称（无昵称时回退到 chatId，再回退到「你」）+ 头像
+// Our nickname (if there is no nickname, it will fall back to chatId, and then fall back to "you") + avatar
 const myName = computed(
-    () => identityStore.nickname || identityStore.chatId || "你",
+    () => identityStore.nickname || identityStore.chatId || "you",
 );
 const myEmoji = "🤖";
 
@@ -421,7 +421,7 @@ const actionList = ACTIONS.map((k) => ({ key: k, ...ACTION_META[k] }));
 const view = ref("lobby");
 const mode = ref("pve");
 
-// 对战状态镜像
+// Battle status mirror
 const round = ref(0);
 const phase = ref("round_start");
 const countdown = ref(ROUND_SECONDS);
@@ -431,23 +431,23 @@ const pCharged = ref(false);
 const oCharged = ref(false);
 const myAction = ref(null);
 const lastResult = ref(null);
-const moveHistory = ref([]); // 每回合出招记录 { round, player, opponent, pDmg, oDmg }
-// 受击瞬间红闪+抖动（受击后短时高亮对应 HUD 列）
+const moveHistory = ref([]); //Records of moves in each round { round, player, opponent, pDmg, oDmg }
+// Red flash + jitter when hit (the corresponding HUD column will be highlighted for a short time after being hit)
 const meHit = ref(false);
 const oppHit = ref(false);
 let meHitTimer = null;
 let oppHitTimer = null;
-const opponentName = ref("对手");
+const opponentName = ref("opponent");
 const opponentEmoji = ref("🤖");
 const opponentChatId = ref("");
 
 const resultType = ref("");
-const errorMsg = ref(""); // resultType==="error" 时的具体提示文案
-const pveReward = ref(null); // PvE 胜利时由 claimPvEReward 填充，结果页展示奖励
-const pvpRoomId = ref(null); // 真实 PVP 撮合房间号（仅 mode=pvp & query.matched=1 时填充）
+const errorMsg = ref(""); //Specific prompt copy when resultType==="error"
+const pveReward = ref(null); //When PvE is won, it is filled in by claimPvEReward, and the reward is displayed on the results page.
+const pvpRoomId = ref(null); //Real PVP matching room number (only populated when mode=pvp & query.matched=1)
 
-// PvP 重连相关
-const reconnectCountdown = ref(0); // 剩余重连等待秒数
+// PvP reconnection related
+const reconnectCountdown = ref(0); //Remaining waiting seconds for reconnection
 let reconnectTicker = null;
 
 let engine = null;
@@ -457,22 +457,22 @@ let confirmTimer = null;
 let pageDisposed = false;
 let pvpStartEpoch = 0;
 
-// ── 计算属性 ──────────────────────────────────────────────
-// 回合胜负判语（从玩家视角给出明确结论 + 配色）
+// ── Computed properties ────────────────────────────────────────────
+// Round victory or defeat decision (clear conclusion from the player’s perspective + color matching)
 const roundVerdict = computed(() => {
     const r = lastResult.value;
     if (!r) return { text: "", tone: "neutral" };
     const { playerDmg: p, opponentDmg: o } = r;
     if (p === 0 && o === 0)
-        return { text: "势均力敌 · 无人受伤", tone: "neutral" };
-    if (o > 0 && p === 0) return { text: "✅ 你压制了对手", tone: "good" };
-    if (p > 0 && o === 0) return { text: "⚠ 你被对手压制", tone: "bad" };
-    if (o > p) return { text: "你略占上风", tone: "good" };
-    if (p > o) return { text: "你处于下风", tone: "bad" };
-    return { text: "两败俱伤", tone: "neutral" };
+        return { text: "evenly matched · no one injured", tone: "neutral" };
+    if (o > 0 && p === 0) return { text: "✅ You overpowered your opponent", tone: "good" };
+    if (p > 0 && o === 0) return { text: "⚠ You are overwhelmed by your opponent", tone: "bad" };
+    if (o > p) return { text: "You have a slight advantage", tone: "good" };
+    if (p > o) return { text: "you are at a disadvantage", tone: "bad" };
+    return { text: "Lose-lose", tone: "neutral" };
 });
 
-// 出招统计（各动作累计使用次数，只显示用过的）
+// Move statistics (accumulated number of uses of each move, only used ones are displayed)
 function buildTally(sideKey) {
     const c = { attack: 0, defend: 0, charge: 0, counter: 0 };
     for (const m of moveHistory.value) {
@@ -487,7 +487,7 @@ function buildTally(sideKey) {
 const myTally = computed(() => buildTally("player"));
 const oppTally = computed(() => buildTally("opponent"));
 
-// 累计输出（本局造成的总伤害，对应参考图头像旁的 ⚔ 数值）
+// Cumulative output (total damage caused in this round, corresponding to the ⚔ value next to the avatar in the reference picture)
 const myDamage = computed(() =>
     moveHistory.value.reduce((s, m) => s + (m.oDmg || 0), 0),
 );
@@ -495,10 +495,10 @@ const oppDamage = computed(() =>
     moveHistory.value.reduce((s, m) => s + (m.pDmg || 0), 0),
 );
 
-// 环形倒计时（SVG stroke-dashoffset）
-//   周长 = 2πr ≈ 175.93（r=28）
-//   决策态：按剩余比例从满圈收缩到 0
-//   非决策态：保持完整一圈静态显示
+// Ring countdown (SVG stroke-dashoffset)
+// Perimeter = 2πr ≈ 175.93 (r=28)
+// Decision state: shrink from full circle to 0 according to the remaining proportion
+// Non-decision state: maintain a complete circle of static display
 const CD_CIRCUMFERENCE = 2 * Math.PI * 28;
 const ringStrokeStyle = computed(() => {
     if (phase.value !== "deciding") {
@@ -510,16 +510,16 @@ const ringStrokeStyle = computed(() => {
     const ratio = Math.max(0, Math.min(1, countdown.value / ROUND_SECONDS));
     return {
         strokeDasharray: CD_CIRCUMFERENCE,
-        // ratio=1（满时）offset=0；ratio=0（耗尽）offset=周长 → 圆环消失
+        // ratio=1 (when full) offset=0; ratio=0 (exhausted) offset=circumference → the ring disappears
         strokeDashoffset: CD_CIRCUMFERENCE * (1 - ratio),
-        // 颜色由 cdStage class 控制，这里只控几何
+        // Color is controlled by cdStage class, here only geometry is controlled
     };
 });
-// 倒计时颜色阶段：与 HealthBar 三段血色严格对齐（按剩余比例划分）
-//   safe(绿)  ratio > 0.6   对应血量 > 60
-//   warn(橙)  0.3 < ratio ≤ 0.6  对应血量 30~60
-//   danger(红) ratio ≤ 0.3   对应血量 ≤ 30
-// 仅决策态生效；非决策态返回空串（无 class，使用默认描边色）
+// Countdown color stage: strictly aligned with the three levels of blood color in the HealthBar (divided according to the remaining proportion)
+// safe(green) ratio > 0.6 corresponds to blood volume > 60
+// warn(orange) 0.3 < ratio ≤ 0.6 corresponding to blood volume 30~60
+// danger (red) ratio ≤ 0.3 corresponds to blood volume ≤ 30
+// Only decision-making states take effect; non-decision-making states return an empty string (no class, use the default stroke color)
 const cdStage = computed(() => {
     if (phase.value !== "deciding") return "";
     const ratio = countdown.value / ROUND_SECONDS;
@@ -530,24 +530,24 @@ const cdStage = computed(() => {
 const phaseLabel = computed(() => {
     switch (phase.value) {
         case "deciding":
-            return myAction.value ? "已出招" : "出招准备中";
+            return myAction.value ? "Moved" : "Preparing for action";
         case "locked":
-            return "等待对手";
+            return "waiting for opponent";
         case "resolving":
-            return "结算中";
+            return "Settling";
         case "waiting_confirm":
-            return "回合结算";
+            return "round settlement";
         case "waiting_reconnect":
-            return "对手重连中";
+            return "Opponent reconnects";
         default:
             return "";
     }
 });
-// 是否处于对手掉线等待重连遮罩态
+// Whether the opponent is offline and waiting to reconnect, masked
 const isWaitingReconnect = computed(() => phase.value === "waiting_reconnect");
 const canAct = computed(() => phase.value === "deciding" && !myAction.value);
 
-// 出招揭示：决策/锁定阶段亮我方招 + 对手「？」；结算阶段双方亮明
+// Move reveal: During the decision-making/locking phase, our move + opponent's "?" will be revealed; during the settlement phase, both sides will reveal
 const resultPhase = computed(
     () =>
         !!lastResult.value &&
@@ -562,33 +562,33 @@ const revealOpp = computed(() =>
 const showReveal = computed(() => !!revealMy.value);
 
 const RESULT_MAP = {
-    win: ["🏆", "胜利！"],
-    lose: ["💀", "失败…"],
-    draw: ["🤝", "平局"],
-    doubleLose: ["💥", "双双力竭"],
-    aborted: ["📡", "对战中断"],
-    error: ["⚠️", "发生错误"],
+    win: ["🏆", "victory！"],
+    lose: ["💀", "failed…"],
+    draw: ["🤝", "draw"],
+    doubleLose: ["💥", "Both exhausted"],
+    aborted: ["📡", "Battle interrupted"],
+    error: ["⚠️", "An error occurred"],
 };
 const resultEmoji = computed(
     () => (RESULT_MAP[resultType.value] || ["🎮", ""])[0],
 );
 const resultText = computed(
-    () => (RESULT_MAP[resultType.value] || ["", "游戏结束"])[1],
+    () => (RESULT_MAP[resultType.value] || ["", "game over"])[1],
 );
 const resultSub = computed(() => {
-    if (resultType.value === "aborted") return "对手长时间未响应，可能已掉线";
+    if (resultType.value === "aborted") return "The opponent did not respond for a long time，May have been disconnected";
     if (resultType.value === "error") return errorMsg.value;
     return "";
 });
 
-// ── 生命周期 ──────────────────────────────────────────────
+// ── Life cycle ───────────────────────────────────────────
 onMounted(() => {
     pageDisposed = false;
     window.addEventListener("beforeunload", handleBeforeUnload);
     const role = route.query.role;
     const matched = route.query.matched;
-    // 通过好友邀请进入（host/guest）或真实 PVP 撮合成功（matched=1）直接开战；
-    // 否则停在大厅，由 IronFistLobby 组件自行拉取余额与好友列表。
+    // Enter through friend invitation (host/guest) or real PVP matching is successful (matched=1) and start the battle directly;
+    // Otherwise, it stops in the lobby, and the IronFistLobby component pulls the balance and friend list by itself.
     if (role === "host" || role === "guest" || matched === "1") {
         startPvp();
     }
@@ -608,8 +608,8 @@ watch(
     },
 );
 
-// 已在本页（大厅或邀请中）时被接受/接收到对方接受而进入对战：
-// 同路径仅 query 变化不会重新挂载组件，onMounted 不会再次触发，需手动开战。
+// Already accepted/received by the opponent while on this page (lobby or invitation) and entered the match:
+// If only the query changes in the same path, the component will not be remounted, and onMounted will not be triggered again, and the battle needs to be started manually.
 watch(
     () => [route.query.role, route.query.matched],
     ([role, matched]) => {
@@ -620,7 +620,7 @@ watch(
     },
 );
 
-// ── 好友邀请（由大厅组件 @invite 触发） ──────────────────────
+// ── Friend invitation (triggered by lobby component @invite) ──────────────────────
 function startInvite(friend) {
     gameStore.invite(
         friend.chat_id,
@@ -630,23 +630,23 @@ function startInvite(friend) {
     view.value = "inviting";
 }
 
-// 真实 PVP 撮合成功（IronFistPvpLobby @matched 触发）：
-// 切换 query 触发 startPvp 重新执行，携带 room_id / 对手信息。
+// Real PVP matching successful (IronFistPvpLobby @matched trigger):
+// Switching query triggers startPvp to be re-executed, carrying room_id / opponent information.
 function onPVPMatched({ roomId, opponent, tier, stake }) {
     const query = {
         matched: "1",
         room_id: String(roomId),
         opponent: opponent?.chat_id,
-        opponent_name: opponent?.nickname || opponent?.chat_id || "对手",
+        opponent_name: opponent?.nickname || opponent?.chat_id || "opponent",
         tier,
         stake: String(stake ?? 0),
     };
     router.replace({ query });
-    // view 切换由 query.matched 的 watcher 驱动；这里直接触发 startPvp 也可。
-    // 同路径 router.replace 不会重新挂载，仍由 query watcher 捕获并开战。
+    // View switching is driven by the watcher of query.matched; startPvp can also be triggered directly here.
+    // Router.replace with the same path will not be remounted, and will still be captured and started by query watcher.
 }
 
-// 对战结束后上报战绩与逐局明细。res 为 gameover 结果（win/lose/draw/doubleLose）
+// After the game, the results and game-by-game details will be reported. res is the gameover result (win/lose/draw/doubleLose)
 async function reportMatchResult(res) {
     try {
         const summary = engine?.getMatchSummary() ?? {
@@ -654,13 +654,13 @@ async function reportMatchResult(res) {
             counterSuccesses: 0,
             rounds: 0,
         };
-        // 好友/人机：未实际开打（0 回合，对手开局即离开导致超时判胜）不记录，
-        // 避免出现"0 回合 · 胜利"这类无意义战绩。真实 PVP（带 room_id）必须照常上报，
-        // 由后端结算与双上报仲裁兜底（双方都弃局会被仲裁为平局并退款）。
+        // Friend/human-machine: The fight has not actually started (0 rounds, the opponent left immediately after the start, resulting in a timeout decision) and no record will be recorded.
+        // Avoid meaningless results such as "0 rounds·victory". Real PVP (with room_id) must be reported as usual,
+        // The game will be settled by the back-end and submitted to arbitration (if both sides abandon the game, the game will be arbitrated as a draw and refunded).
         if (!pvpRoomId.value && summary.rounds === 0) {
             return null;
         }
-        // 逐局明细：从 moveHistory 压成紧凑 JSON 数组
+        // Game-by-game details: compressed from moveHistory into a compact JSON array
         const detail = moveHistory.value.map((m) => ({
             r: m.round,
             p: m.player,
@@ -677,15 +677,15 @@ async function reportMatchResult(res) {
             rounds: summary.rounds,
             opponent_name: opponentName.value,
             detail,
-            // 真实 PVP 携带 room_id，触发后端质押结算（幂等）
+            // Real PVP carries room_id, triggering backend pledge settlement (idempotent)
             room_id: pvpRoomId.value ?? undefined,
         });
-        // 新解锁成就弹层提示
+        // Newly unlocked achievement pop-up prompts
         const newly = data.new_achievements ?? [];
         newly.forEach((code) => {
             const meta = ACHIEVEMENT_MAP[code];
             Notify.create({
-                message: `🏆 解锁成就：${meta?.name ?? code}`,
+                message: `🏆 Unlock achievements：${meta?.name ?? code}`,
                 caption: meta?.desc,
                 color: "amber-9",
                 textColor: "white",
@@ -693,8 +693,8 @@ async function reportMatchResult(res) {
                 timeout: 3000,
             });
         });
-        // 真实 PVP 结算结果展示。双上报仲裁下，先上报方拿到的是 pending（无金额），
-        // 后上报方才触发结算拿到金额。为让双方都看到一致的最终结果，pending 时轮询补齐。
+        // Real PVP settlement results display. Under double-reporting arbitration, the party that reports first gets pending (no amount).
+        // Settlement is triggered and the amount is obtained only after reporting. In order to allow both parties to see the same final result, polling is completed when pending.
         if (data.pvp_settle) {
             const s = data.pvp_settle;
             if (s.settled) {
@@ -705,23 +705,23 @@ async function reportMatchResult(res) {
         }
         return data;
     } catch {
-        // 上报失败静默，不阻塞结果页展示
+        // Reporting failure is silent and does not block the display of the results page.
         return null;
     }
 }
 
-// 渲染 PVP 结算提示并刷新余额。平局退款双方已对等，refund_a 即本方退款额。
+// Render PVP settlement prompt and refresh balance. In the case of a tie, both parties have equal refunds, and refund_a is the refund amount of the party.
 function showPvpSettle(s, res) {
     let txt;
     if (res === "win") {
-        txt = `🏆 胜者通吃 +${s.winner_amount} ${currency.value}`;
+        txt = `🏆 winner takes all +${s.winner_amount} ${currency.value}`;
     } else if (res === "lose") {
-        txt = `💫 本局失利，质押已扣除`;
+        txt = `💫 Lost this round，Pledge has been deducted`;
     } else if (res === "draw") {
-        txt = `🤝 平局退回 ${s.refund_a || 0} ${currency.value}`;
+        txt = `🤝 Returned in a draw ${s.refund_a || 0} ${currency.value}`;
     } else {
-        // doubleLose：双方力竭，各退回
-        txt = `🤝 双方力竭，退回 ${s.refund_a || 0} ${currency.value}`;
+        // doubleLose: Both sides are exhausted and each returns.
+        txt = `🤝 Both sides are exhausted，return ${s.refund_a || 0} ${currency.value}`;
     }
     Notify.create({
         message: txt,
@@ -730,16 +730,16 @@ function showPvpSettle(s, res) {
         position: "top",
         timeout: 4000,
     });
-    // 刷新 $FIST 余额（结算已落库）
+    // Refresh $FIST balance (settlement has been dropped)
     fistStore.fetchAccount?.().catch(() => {});
 }
 
-// 先上报方轮询结算结果：对手上报后房间结算，幂等再请求即可拿到最终金额。
-// 最多 6 次（约 7s），仍未结算则提示稍后查看（兜底由后端超时 sweep 保证退款）。
+// The party that reports first polls the settlement result: the room is settled after the opponent reports, and the final amount can be obtained by idempotent request.
+// Up to 6 times (approximately 7 seconds). If the transaction is not settled yet, you will be prompted to check later (refunds are guaranteed by the backend timeout sweep).
 async function pollPvpSettle(roomId, res, attempt) {
     if (attempt >= 6) {
         Notify.create({
-            message: "结算中，请稍后在账本查看",
+            message: "Settling，Please check in the ledger later",
             color: "deep-orange",
             textColor: "white",
             position: "top",
@@ -750,7 +750,7 @@ async function pollPvpSettle(roomId, res, attempt) {
     }
     await new Promise((r) => setTimeout(r, 1200));
     try {
-        // 幂等再请求：mode=pvp + room_id，统计已去重不会重复计数
+        // Idempotent and then request: mode=pvp + room_id, the statistics have been deduplicated and will not be counted repeatedly.
         const { data } = await ironfistApi.reportMatch({
             mode: "pvp",
             result: res,
@@ -767,48 +767,48 @@ async function pollPvpSettle(roomId, res, attempt) {
             return;
         }
     } catch {
-        // 单次失败忽略，继续重试
+        // Ignore the single failure and continue to try again.
     }
     pollPvpSettle(roomId, res, attempt + 1);
 }
 
-// ── 启动对战 ──────────────────────────────────────────────
+// ──Start the battle───────────────────────────────────────────
 function startPve() {
     mode.value = "pve";
-    opponentName.value = "电脑";
+    opponentName.value = "computer";
     opponentEmoji.value = "🤖";
     opponentChatId.value = "";
-    resultType.value = ""; // 清理上一局结果状态
+    resultType.value = ""; //Clear the result status of the previous round
     engine = new IronFistGame({ mode: "pve" });
     beginBattle();
 }
 
 async function startPvp() {
     const startEpoch = ++pvpStartEpoch;
-    // 通过好友邀请（URL 含 role=host/guest）进入的均为娱乐好友局；
-    // 通过真实 PVP 撮合（query.matched=1）进入的为质押 PVP，需在上报时携带 room_id 触发结算。
+    // Anyone who enters through friend invitation (URL contains role=host/guest) is an entertainment friend game;
+    // Those who enter through real PVP matching (query.matched=1) are pledged PVP and need to bring room_id when reporting to trigger settlement.
     const isFriend =
         route.query.role === "host" || route.query.role === "guest";
     const isRealPVP = route.query.matched === "1";
     mode.value = isFriend ? "friend" : "pvp";
-    // 真实 PVP 的 room_id（用于上报结算）；好友局保持 null
-    // URL query 是字符串，但后端 RoomID *uint64 需要数字，故转换并校验
+    // The room_id of the real PVP (used for reporting and settlement); the friend room remains null
+    // URL query is a string, but the backend RoomID *uint64 requires numbers, so it is converted and verified.
     const parsedRoomId = isRealPVP ? Number(route.query.room_id) : null;
     pvpRoomId.value = Number.isFinite(parsedRoomId) && parsedRoomId > 0
         ? parsedRoomId
         : null;
     if (isRealPVP && pvpRoomId.value == null) {
-        // matched=1 但 room_id 缺失/非法：无法结算，应阻断进入对局而非静默上报空值。
-        // 此时尚未进入 playing 视图，结果遮罩不可见，故用 Notify 明确提示并退回大厅
-        // （已质押的房间由后端 matched 超时按平局退款兜底）。
+        // matched=1 but room_id is missing/illegal: cannot be settled, and should be blocked from entering the game instead of silently reporting a null value.
+        // At this time, the playing view has not been entered, and the result mask is not visible, so use Notify to explicitly prompt and return to the lobby.
+        // (Pledged rooms will be refunded as a draw if matched by the backend overtime).
         Notify.create({
-            message: "匹配信息异常（room_id 缺失），请返回大厅重试",
+            message: "Matching information exception（room_id Missing），Please return to the lobby and try again",
             color: "negative",
             textColor: "white",
             position: "top",
             timeout: 3500,
         });
-        mode.value = "pve"; // 复位，避免残留 pvp 态影响后续
+        mode.value = "pve"; //Reset to avoid residual pvp status affecting subsequent
         pvpRoomId.value = null;
         view.value = "lobby";
         return;
@@ -816,20 +816,20 @@ async function startPvp() {
     opponentName.value =
         route.query.opponent_name ||
         gameStore.opponentNickname ||
-        "对手";
+        "opponent";
     opponentEmoji.value = "🥷";
     opponentChatId.value = route.query.opponent || gameStore.opponentId || "";
-    resultType.value = ""; // 清理上一局结果状态
+    resultType.value = ""; //Clear the result status of the previous round
     await nextTick();
 
-    // roomId 来源：真实 PVP 用 query.room_id；好友局用 query.room。
-    // 两者都用作 GameNet 消息过滤、IronFistGame localStorage pending key、后端 redis key。
+    // roomId source: real PVP uses query.room_id; friend game uses query.room.
+    // Both are used as GameNet message filtering, IronFistGame localStorage pending key, and backend redis key.
     const roomId = route.query.room_id || route.query.room;
     const myChatId = identityStore.chatId;
     const nextNet = new GameNet(route.query.opponent, roomId);
-    // requestReconnect 不能在 WS 尚未完成认证时发送，否则 websocket.send 会直接丢弃。
+    // requestReconnect cannot be sent when WS has not completed authentication, otherwise websocket.send will be discarded directly.
     await nextNet.ready();
-    // 等待连接期间页面可能已经卸载，或新的匹配已替换了本次启动；旧任务不得再创建引擎。
+    // The page may have been unloaded while waiting for a connection, or a new match may have replaced this launch; old tasks may no longer create engines.
     if (pageDisposed || startEpoch !== pvpStartEpoch) {
         nextNet.destroy();
         return;
@@ -837,9 +837,9 @@ async function startPvp() {
     net = nextNet;
     engine = new IronFistGame({ mode: "pvp", net, roomId, myChatId });
 
-    // 每次进入 PvP 房间都先从服务端恢复 action 流。不能只在“自己已有 pending
-    // action”时重放：若对手先出招、我方页面尚未挂载或尚未出招便刷新，对手动作只在
-    // Redis 中，跳过 replay 会让双方永久互等。空 action 流会由 loadReplay 正常启动第 1 回合。
+    // Each time you enter a PvP room, the action stream is restored from the server first. You can’t just say “I already have pending
+    // Replay when "action": If the opponent moves first, our page has not been mounted or is refreshed before the move is made, the opponent's action will only
+    // In Redis, skipping replay will make both parties permanently equal. An empty action stream will start round 1 normally by loadReplay.
     view.value = "reconnecting";
     pHP.value = INITIAL_HP;
     oHP.value = INITIAL_HP;
@@ -858,7 +858,7 @@ function setupEngineListeners() {
         pCharged.value = state.playerCharged;
         oCharged.value = state.opponentCharged;
         myAction.value = null;
-        lastResult.value = null; // 清除上回合结算，避免新回合揭示行残留旧招
+        lastResult.value = null; //Clear the settlement of the previous round to avoid revealing old tricks in the new round.
         view.value = "playing";
         startCountdown(startedAt);
     });
@@ -869,13 +869,13 @@ function setupEngineListeners() {
         if (side === "player") {
             myAction.value = action;
             stopCountdown();
-            // 重连恢复后可能落在 locked 分支（本回合已出招等对方），
-            // 需切到 playing 并停掉重连倒计时，否则视图卡在 reconnecting。
+            // After reconnection is restored, it may fall into the locked branch (the opponent has already made a move this round).
+            // You need to switch to playing and stop the reconnection countdown, otherwise the view will be stuck in reconnecting.
             if (view.value === "reconnecting") view.value = "playing";
             stopReconnectTicker();
         }
     });
-    // 重连重放：用服务端 action 流重建已结算回合的 moveHistory（含出招统计/累计伤害/战绩明细）
+    // Reconnect and replay: Use the server-side action stream to reconstruct the moveHistory of the settled round (including move statistics/accumulated damage/record details)
     engine.on("replay-history", (history) => {
         moveHistory.value = history.map((h) => ({
             round: h.round,
@@ -887,8 +887,8 @@ function setupEngineListeners() {
     });
     engine.on("resolved", (r) => {
         stopCountdown();
-        // 对方重连后若直接结算（_myAction 存在），需停掉重连倒计时；
-        // 重连恢复后落在 resolved 分支也需切到 playing。
+        // If the other party directly settles after reconnecting (_myAction exists), the reconnection countdown needs to be stopped;
+        // Even if you fall on the resolved branch after reconnection and recovery, you need to switch to playing.
         stopReconnectTicker();
         if (view.value === "reconnecting") view.value = "playing";
         lastResult.value = r;
@@ -901,14 +901,14 @@ function setupEngineListeners() {
         });
         pCharged.value = r.playerCharged;
         oCharged.value = r.opponentCharged;
-        // 扣血 + 头像抖动延到「3D 拳头打实那一刻」由战斗区 @impact 回调触发（onArenaImpact），
-        // 与命中特效/飘字同帧呈现；无人掉血的回合不会有 impact，HP 无变化直接同步即可。
+        // The blood deduction + avatar shake is extended to "the moment when the 3D fist hits the ground" and is triggered by the @impact callback in the combat area (onArenaImpact).
+        // It is presented in the same frame as the hit special effects/floating words; there will be no impact in the round when no one loses blood, and the HP can be synchronized directly without any change.
         if (r.playerDmg <= 0 && r.opponentDmg <= 0) {
             pHP.value = r.playerHP;
             oHP.value = r.opponentHP;
         }
         clearTimeout(confirmTimer);
-        // 有人倒地（含双双空血的平局）就走长停留，留足倒地动画
+        // If someone falls to the ground (including a draw where both people are empty of blood), they will stay for a long time and leave enough space for the falling animation.
         const koEnd =
             !!r.gameResult &&
             (r.gameResult === "win" ||
@@ -928,19 +928,19 @@ function setupEngineListeners() {
         teardownTimers();
         stopReconnectTicker();
         if (mode.value === "pvp" || mode.value === "friend") gameStore.reset();
-        // 先落库战绩，再领取与该胜局绑定的一次性 PvE 奖励。上报失败时不调用领奖接口，
-        // 避免奖励与实际战绩脱钩；结果页仍正常展示。
+        // Record the record first, and then claim the one-time PvE reward tied to the victory. When the report fails, the reward interface will not be called.
+        // Avoid decoupling rewards from actual results; the results page will still be displayed normally.
         const report = await reportMatchResult(res);
         if (mode.value === "pve" && res === "win" && report) {
             pveReward.value = await fistStore.claimPvEReward();
         }
-        // 不切换 view：保留 playing 视图作为结果遮罩背景，玩家可看到战斗末态
+        // Do not switch views: keep the playing view as the result mask background, and the player can see the final state of the battle
     });
-    // 对手掉线，进入 60s 重连等待遮罩
+    // The opponent disconnects and enters 60s to reconnect and wait for masking
     engine.on("opponent-disconnected", ({ timeoutMs }) => {
         startReconnectTicker(timeoutMs);
     });
-    // 对手重连后/对手先出招，恢复到本回合决策。携带 startedAt 续算倒计时（不重置为 30s）。
+    // After the opponent reconnects/the opponent makes the move first, the decision-making process of this round resumes. Carry startedAt to continue the countdown (not reset to 30s).
     engine.on("round-resume", ({ round: r, startedAt }) => {
         stopReconnectTicker();
         round.value = r;
@@ -959,32 +959,32 @@ function beginBattle() {
     engine.start();
 }
 
-// ── 操作 ─────────────────────────────────────────────────
+// ── Operation ─────────────────────────────────────────────
 function onAction(action) {
     engine?.selectAction(action);
 }
 
-// 出招按钮：在按下位置生成涟漪后触发动作
-//   仅在能出招时生成涟漪（disabled 状态不响应）
+// Move button: Trigger action after generating ripples at the pressed position
+// Ripples are only generated when moves can be made (disabled state does not respond)
 function onActionBtn(e, action) {
     const btn = e.currentTarget;
     if (btn && !btn.disabled) spawnRipple(btn, e);
     onAction(action);
 }
 
-// 涟漪：通过 CSS 自定义属性把点击坐标传给 ::after 伪元素，触发动画。
-//   不动态插入 DOM，避免 <button> form-control 的内部布局 quirk 把按钮撑高。
+// Ripple: Pass the click coordinates to the ::after pseudo-element through CSS custom properties to trigger the animation.
+// Do not insert DOM dynamically to avoid the internal layout quirk of <button> form-control from raising the button.
 function spawnRipple(btn, e) {
     const rect = btn.getBoundingClientRect();
     const x = (e.clientX ?? rect.left + rect.width / 2) - rect.left;
     const y = (e.clientY ?? rect.top + rect.height / 2) - rect.top;
     btn.style.setProperty("--ripple-x", x + "px");
     btn.style.setProperty("--ripple-y", y + "px");
-    // 重置动画：移除 class → 强制 reflow → 重新加上，让连续点击也能重新触发
+    // Reset animation: remove class → force reflow → add again so that continuous clicks can be retriggered
     btn.classList.remove("rippling");
     void btn.offsetWidth;
     btn.classList.add("rippling");
-    // 动画结束后清理 class（仅挂一次，避免累积监听器）
+    // Clean up the class after the animation ends (only hang it once to avoid accumulating listeners)
     btn.addEventListener(
         "animationend",
         () => btn.classList.remove("rippling"),
@@ -994,9 +994,9 @@ function spawnRipple(btn, e) {
     );
 }
 
-// ── 计时器 ────────────────────────────────────────────────
-// startedAt：本回合 DECIDING 起始时间戳（引擎给出，本端时钟）。据此按真实已耗时续算，
-// 使刷新重连方/对手先出招方不会拿到全新 30s。缺省（如 PvE）则从满 30s 起算。
+// ── Timer ─────────────────────────────────────────────
+// startedAt: DECIDING starting timestamp of this round (given by the engine, local clock). Based on this, the calculation will be continued based on the actual elapsed time.
+// So that the reconnected side/opponent who moves first will not get the new 30s. By default (such as PvE), it starts after 30 seconds.
 function startCountdown(startedAt) {
     stopCountdown();
     const elapsed = startedAt ? (Date.now() - startedAt) / 1000 : 0;
@@ -1005,7 +1005,7 @@ function startCountdown(startedAt) {
         countdown.value -= 1;
         if (countdown.value <= 0) {
             stopCountdown();
-            if (!myAction.value) engine?.selectAction("defend"); // 超时默认防御
+            if (!myAction.value) engine?.selectAction("defend"); //Timeout default defense
         }
     }, 1000);
 }
@@ -1014,7 +1014,7 @@ function stopCountdown() {
     countdownTimer = null;
 }
 
-// 60s 重连等待倒计时 UI（不允许放弃，必须等满窗口或对方重连）
+// 60s reconnection waiting countdown UI (no abandonment allowed, must wait until the window is full or the other party reconnects)
 function startReconnectTicker(timeoutMs = RECONNECT_WINDOW_MS) {
     stopReconnectTicker();
     reconnectCountdown.value = Math.ceil(timeoutMs / 1000);
@@ -1036,9 +1036,9 @@ function teardownTimers() {
     clearTimeout(oppHitTimer);
 }
 
-// 受击 HUD 反馈：玩家/对手任一方本回合掉血则触发短时抖动+红闪
-//   meHit: 我方受击（playerDmg > 0）
-//   oppHit: 对手受击（opponentDmg > 0）
+// HUD feedback when hit: If either player/opponent loses blood this round, a short jitter + red flash will be triggered.
+// meHit: Our side is hit (playerDmg > 0)
+// oppHit: The opponent is hit (opponentDmg > 0)
 function triggerHitFeedback(meHurt, oppHurt) {
     if (meHurt) {
         meHit.value = true;
@@ -1056,8 +1056,8 @@ function triggerHitFeedback(meHurt, oppHurt) {
     }
 }
 
-// 3D 拳头打实那一刻由战斗区 @impact 回调：此刻才扣血 + 头像抖动，
-// 让 HUD 反馈与 3D 命中特效/飘字同帧，不再抢在出拳之前。
+// The moment when the 3D fist hits the ground is called back by @impact in the combat zone: the blood is deducted only at this moment + the avatar shakes,
+// Let the HUD feedback be in the same frame as the 3D hit effects/floating characters, and no longer be in front of the punch.
 function onArenaImpact(r) {
     if (!r) return;
     pHP.value = r.playerHP;
@@ -1065,14 +1065,14 @@ function onArenaImpact(r) {
     triggerHitFeedback(r.playerDmg > 0, r.opponentDmg > 0);
 }
 
-// ── beforeunload：刷新/关闭页面时不发 game_resign ───────────────────────
-// 方案 B 下刷新应走重连路径，而非直接认输：
-//  1) WS 断开 → 对方 grace 超时 → WAITING_RECONNECT（60s）
-//  2) 玩家重开页面 → 检测 localStorage pending → requestReconnect → loadReplay 恢复
-//  3) 60s 内未重连 → 判掉线方负（对局必有结果）
-// 若此处发 resign 会清理 Redis action 日志 + localStorage，导致无法重连，与设计冲突。
+// ── beforeunload: Do not issue game_resign when refreshing/closing the page ────────────────────────
+// Under plan B, the refresh should take the reconnection path instead of admitting defeat directly:
+// 1) WS disconnects → the other party grace times out → WAITING_RECONNECT (60s)
+// 2) The player reopens the page → detects localStorage pending → requestReconnect → loadReplay recovery
+// 3) If the connection is not reconnected within 60s → the disconnected party loses (the game must have a result)
+// If resign is issued here, the Redis action log + localStorage will be cleared, resulting in the inability to reconnect, which conflicts with the design.
 function handleBeforeUnload() {
-    // 故意留空：不认输，交给 60s 重连窗口保证对局结果
+    // Deliberately left blank: do not admit defeat and give the 60s reconnection window to ensure the outcome of the game.
 }
 
 function teardown() {
@@ -1083,13 +1083,13 @@ function teardown() {
     net = null;
 }
 
-// ── 导航 ─────────────────────────────────────────────────
+// ──Navigation─────────────────────────────────────────────
 function backToLobby() {
     teardown();
     router.replace("/games/ironfist");
     resultType.value = "";
     pveReward.value = null;
-    view.value = "lobby"; // 重新挂载 IronFistLobby，会自动刷新余额与好友
+    view.value = "lobby"; //Remounting IronFistLobby will automatically refresh the balance and friends
 }
 
 function goHome() {
@@ -1110,7 +1110,7 @@ function goHome() {
     min-height: 60vh;
 }
 
-/* 对手掉线重连遮罩 */
+/* Opponent disconnects and reconnects to mask */
 .reconnect-overlay {
     position: fixed;
     inset: 0;
@@ -1130,15 +1130,15 @@ function goHome() {
     max-width: 320px;
 }
 
-/* 结果遮罩：半透明叠加，模糊背景但保留战斗画面可见 */
+/* Result mask: semi-transparent overlay, blurring the background but keeping the battle footage visible */
 .result-overlay {
     position: absolute;
     inset: 0;
-    z-index: 1500; /* 高于 HUD 与操作栏，但低于重连遮罩 */
+    z-index: 1500; /* Above the HUD and action bar, but below the reconnection mask */
     display: flex;
     align-items: center;
     justify-content: center;
-    /* 关键：背景半透明 + 模糊，玩家依然能透过看到战斗末态 */
+    /* Key: background translucency + blur, players can still see the final state of the battle through it */
     background: radial-gradient(
         circle at 50% 45%,
         rgba(20, 14, 32, 0.55) 0%,
@@ -1148,7 +1148,7 @@ function goHome() {
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
 }
-/* 按胜负给遮罩叠一层色调（胜利偏金、失败偏红、平局偏紫） */
+/* Add a layer of color to the mask according to the victory or defeat (victory is more golden, failure is redder, and draw is more purple) */
 .result-overlay--win {
     background: radial-gradient(
         circle at 50% 45%,
@@ -1185,7 +1185,7 @@ function goHome() {
     );
 }
 
-/* 居中卡片：无强背景，靠 emoji + 大字 + 按钮，让背景画面透出 */
+/* Centered card: no strong background, rely on emoji + large characters + buttons to let the background image shine through */
 .result-card {
     display: flex;
     flex-direction: column;
@@ -1193,7 +1193,7 @@ function goHome() {
     gap: 14px;
     padding: 28px 36px;
     text-align: center;
-    /* 卡片自身轻透 + 描边，避免与背景糊成一片 */
+    /* The card itself is light and transparent + stroked to avoid blurring with the background */
     background: rgba(20, 16, 32, 0.45);
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 20px;
@@ -1241,7 +1241,7 @@ function goHome() {
     animation: resultTitleIn 0.5s 0.26s both;
 }
 
-/* PvE 胜利奖励提示（结果卡片内） */
+/* PvE victory reward tips (inside the results card) */
 .pve-reward-badge {
     display: flex;
     flex-direction: column;
@@ -1264,7 +1264,7 @@ function goHome() {
     font-size: 11px;
     color: rgba(255, 179, 0, 0.7);
 }
-/* 每日满勤额外奖励徽章 */
+/* Daily attendance extra reward badge */
 .pve-bonus-badge {
     margin: -6px 0 14px;
     padding: 7px 18px;
@@ -1277,7 +1277,7 @@ function goHome() {
     animation: resultEmojiPop 0.55s 0.2s both;
 }
 
-/* 入场：淡入 + 轻微上浮 */
+/* Entry: fade in + slight rise */
 .result-fade-enter-active {
     transition:
         opacity 0.45s ease,
@@ -1317,9 +1317,9 @@ function goHome() {
     }
 }
 
-/* 对战布局 */
+/* Battle layout */
 .battle {
-    position: relative; /* 结果遮罩 / 重连遮罩的定位基准 */
+    position: relative; /* Result mask/reconnect mask positioning reference */
     display: flex;
     flex-direction: column;
     height: 100dvh;
@@ -1327,9 +1327,9 @@ function goHome() {
     gap: 8px;
 }
 
-/* ===== 顶部对战 HUD ===== */
-/* 外层 = 发光渐变描边（蓝→紫→红），用 2px padding 露出作为边框；
-   切角 clip-path 营造设计稿的科技感折角面板。 */
+/* ===== Top Battle HUD ===== */
+/* Outer layer = glowing gradient stroke (blue → purple → red), exposed with 2px padding as the border;
+   Cut corners clip-path Cornered panels that create a sense of technology in the design draft。 */
 .match-hud {
     padding: 2px;
     border-radius: 16px;
@@ -1340,7 +1340,7 @@ function goHome() {
         #8a3f9a 58%,
         #ff5a5a 100%
     );
-    /* clip-path 会裁掉 box-shadow，故用 drop-shadow（贴合切角轮廓、渲染在裁剪外）发光 */
+    /* clip-path will cut off the box-shadow, so use drop-shadow (fit the corner outline and render outside the clipping) to emit light. */
     filter: drop-shadow(0 0 9px rgba(77, 140, 255, 0.4))
         drop-shadow(0 0 9px rgba(255, 90, 90, 0.35))
         drop-shadow(0 5px 12px rgba(0, 0, 0, 0.5));
@@ -1355,7 +1355,7 @@ function goHome() {
         0 16px
     );
 }
-/* 内层 = 深色面板 + 点阵纹理 + 左右蓝/红冷暖辉光，同向切角略微内收 */
+/* Inner layer = dark panel + dot matrix texture + left and right blue/red cool and warm glow, slightly retracted corners in the same direction */
 .mh-grid {
     display: grid;
     grid-template-columns: 1fr auto 1fr;
@@ -1389,7 +1389,7 @@ function goHome() {
         0 15px
     );
 }
-/* 每侧：头像+名字一行 → 全宽血条 → 出招统计 */
+/* Each side: avatar + name line → full width health bar → move statistics */
 .mh-player {
     display: flex;
     flex-direction: column;
@@ -1400,7 +1400,7 @@ function goHome() {
     padding: 2px;
     transition: box-shadow 0.18s;
 }
-/* 受击反馈：抖动 + 红色描边光晕（不改变布局尺寸，避免抖动其他列） */
+/* Hit feedback: dither + red stroke halo (does not change layout size, avoid dithering other columns) */
 .mh-player--hit {
     animation: mhHitShake 0.44s cubic-bezier(0.36, 0.07, 0.19, 0.97);
     box-shadow:
@@ -1452,7 +1452,7 @@ function goHome() {
     align-items: flex-end;
 }
 
-/* 头像 */
+/* avatar */
 .mh-avatar-img {
     border-radius: 50%;
     object-fit: cover;
@@ -1475,7 +1475,7 @@ function goHome() {
         rgba(0, 0, 0, 0.35)
     );
 }
-/* 外层科技虚线环（设计稿头像外的描边圈） */
+/* The outer technology dotted line ring (the stroked circle outside the avatar of the design draft) */
 .mh-avatar::before {
     content: "";
     position: absolute;
@@ -1484,7 +1484,7 @@ function goHome() {
     border: 1px dashed rgba(255, 255, 255, 0.28);
     pointer-events: none;
 }
-/* 上下两段实弧，呼应设计稿环上的高亮缺口 */
+/* The upper and lower solid arcs echo the highlighted gap on the design draft ring. */
 .mh-avatar::after {
     content: "";
     position: absolute;
@@ -1521,7 +1521,7 @@ function goHome() {
     border-bottom-color: #ff8a8a;
     filter: drop-shadow(0 0 4px rgba(255, 90, 90, 0.8));
 }
-/* 蓄力时整圈高亮脉冲 */
+/* Full circle highlight pulse when charging */
 .mh-avatar.charged::after {
     animation: blink 1.1s ease-in-out infinite;
 }
@@ -1552,7 +1552,7 @@ function goHome() {
     font-size: 12px;
 }
 
-/* 血条行：心形图标 + 血条（对手侧镜像） */
+/* Health bar row: heart icon + health bar (mirror on opponent's side) */
 .mh-hpbar {
     display: flex;
     align-items: center;
@@ -1599,7 +1599,7 @@ function goHome() {
     font-size: 11px;
 }
 
-/* 中央：回合 + 环形倒计时 */
+/* Center: Round + Ring Countdown */
 .mh-center {
     display: flex;
     flex-direction: column;
@@ -1607,7 +1607,7 @@ function goHome() {
     gap: 6px;
     padding: 0 2px;
 }
-/* ROUND 徽标：六边形切角 + 两侧蓝/红点缀（设计稿顶部标牌） */
+/* ROUND logo: hexagonal cutaway + blue/red accents on both sides (top sign of design draft) */
 .mh-round-bar {
     display: flex;
     align-items: center;
@@ -1677,7 +1677,7 @@ function goHome() {
     place-items: center;
     border-radius: 50%;
 }
-/* 环外刻度：细密虚线圈，mask 成一圈薄环（设计稿环外的 tick 刻度） */
+/* Scale outside the ring: fine dotted circle, mask into a thin ring (tick scale outside the design draft ring) */
 .cd-ring::before {
     content: "";
     position: absolute;
@@ -1699,7 +1699,7 @@ function goHome() {
     inset: 0;
     width: 100%;
     height: 100%;
-    /* 旋转 -90deg 让 stroke 起点位于顶部 12 点钟方向 */
+    /* Rotate -90deg so that the stroke start point is at the top 12 o'clock position */
     transform: rotate(-90deg);
 }
 .cd-track-circle {
@@ -1712,21 +1712,21 @@ function goHome() {
     stroke: #e7e0ff;
     stroke-width: 4;
     stroke-linecap: round;
-    /* 描边过渡平滑 */
+    /* Smooth stroke transition */
     transition:
         stroke-dashoffset 0.95s linear,
         stroke 0.2s;
 }
-/* 倒计时三阶段描边色：与 HealthBar 三段血色严格对齐（取血条渐变起点色） */
+/* The three-stage stroke color of the countdown: strictly aligned with the three-stage blood color of the HealthBar (take the starting color of the gradient of the health bar) */
 .cd-progress-circle--safe {
     stroke: #43e97b;
-} /* 健康(绿) > 60% */
+} /* Health (green) > 60% */
 .cd-progress-circle--warn {
     stroke: #ffce4d;
-} /* 警告(橙黄) 30~60% */
+} /* Warning (orange) 30~60% */
 .cd-progress-circle--danger {
     stroke: #ff5b5b;
-} /* 危险(红) ≤ 30% */
+} /* Danger (red) ≤ 30% */
 .cd-inner {
     position: relative;
     width: 60px;
@@ -1761,7 +1761,7 @@ function goHome() {
     font-size: 26px;
 }
 
-/* 状态条：胶囊 + 两侧蓝/红呼吸点（设计稿底部「出招准备中」） */
+/* Status bar: capsule + blue/red breathing points on both sides ("Preparing to move" at the bottom of the design draft) */
 .mh-status-bar {
     display: flex;
     align-items: center;
@@ -1799,7 +1799,7 @@ function goHome() {
     min-height: 180px;
 }
 
-/* ===== 出招揭示行（浮层：绝对定位叠在战斗区底部，不占布局/不抖动） ===== */
+/* ===== Move reveal line (floating layer: absolutely positioned at the bottom of the combat area, does not occupy the layout/does not jitter) ===== */
 .reveal-wrap {
     position: absolute;
     left: 0px;
@@ -1825,7 +1825,7 @@ function goHome() {
     background: url(./assets/result.png) no-repeat center/contain;
     height: 120px;
 }
-/* 蓝→红 发光渐变描边（贴合设计稿） */
+/* Blue→Red glowing gradient stroke (fits the design draft) */
 /* .reveal::before {
   content: ''; position: absolute; inset: -2px; border-radius: 18px; z-index: -1;
   background: linear-gradient(90deg, #4d8cff 0%, #8a5cff 50%, #ff5a5a 100%);
@@ -1837,19 +1837,19 @@ function goHome() {
     text-align: center;
 }
 .rv-side--me {
-    /* 60px at max-width(530px) ≈ 11.5%；窄屏按比例收缩，最低 8px */
+    /* 60px at max-width(530px) ≈ 11.5%; narrow screen shrinks proportionally, minimum 8px */
     /* padding: 10px min(60px, 11.5%) 0 min(60px, 11.5%); */
         padding-right: 7%;
     padding-top: 8px;
 }
 .rv-side--opp {
-    /* 60px at max-width(530px) ≈ 11.5%；窄屏按比例收缩，最低 8px */
+    /* 60px at max-width(530px) ≈ 11.5%; narrow screen shrinks proportionally, minimum 8px */
     /* padding: 10px min(60px, 11.5%) 0 min(60px, 11.5%); */
         padding-left: 7%;
     padding-top: 8px;
 }
 .rv-move {
-    /* 最大 24px，窄屏按 vw 缩小，最小 13px */
+    /* Maximum 24px, narrow screen by pressing vw to reduce, minimum 13px */
     font-size: clamp(14px, 4.5vw, 26px);
     font-weight: 900;
     color: #fff;
@@ -1894,7 +1894,7 @@ function goHome() {
     box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15);
 }
 
-/* 浮层淡入淡出（轻微上浮，避免突兀） */
+/* The floating layer fades in and out (floating slightly to avoid being abrupt) */
 .reveal-fade-enter-active,
 .reveal-fade-leave-active {
     transition:
@@ -1907,14 +1907,14 @@ function goHome() {
     transform: translateY(12px);
 }
 
-/* ===== 操作按钮 ===== */
+/* ===== Action Buttons ===== */
 .hud-action {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 10px;
 }
 
-/* 整张卡为彩色渐变 + 立体高光/底影（与设计稿一致） */
+/* The entire card is color gradient + three-dimensional highlight/bottom (consistent with the design draft) */
 .act-btn {
     position: relative;
     display: flex;
@@ -1927,8 +1927,8 @@ function goHome() {
     border-radius: 10px;
     color: #fff;
     cursor: pointer;
-    /* 注意：不给 button 加 overflow:hidden，会触发 form-control 内部布局 quirk 把按钮撑高。
-     涟漪改用 ::after 伪元素 + clip-path 限制范围。 */
+    /* Note: If you don’t add overflow:hidden to the button, the form-control internal layout quirk will be triggered to raise the button.
+     ripple instead ::after Pseudo element + clip-path Limit range。 */
     --ripple-x: 50%;
     --ripple-y: 50%;
     box-shadow:
@@ -1943,8 +1943,8 @@ function goHome() {
     background: transparent;
     border: 1px solid rgba(255, 255, 255, 0.28);
 }
-/* 涟漪：用伪元素绘制白色半透明圆，从点击点扩散后淡出。
-   通过 clip-path 限制在按钮圆角矩形内（替代 overflow:hidden）。 */
+/* Ripple: Use pseudo elements to draw a white translucent circle that spreads from the click point and fades out.
+   Pass clip-path Constrained to the button's rounded rectangle（substitute overflow:hidden）。 */
 .act-btn::after {
     content: "";
     position: absolute;
@@ -1952,7 +1952,7 @@ function goHome() {
     top: var(--ripple-y);
     width: 12px;
     height: 12px;
-    margin: -6px 0 0 -6px; /* 让 left/top 表示涟漪圆心 */
+    margin: -6px 0 0 -6px; /* Let left/top represent the center of the ripple circle */
     border-radius: 50%;
     background: radial-gradient(
         circle,
@@ -2012,7 +2012,7 @@ function goHome() {
         0 6px 14px rgba(0, 0, 0, 0.55);
 }
 
-/* 图标置于半透明深色内嵌框 */
+/* The icon is placed in a semi-transparent dark inline frame */
 .act-frame {
     /* width: 52px; */
     /* height: 52px; */

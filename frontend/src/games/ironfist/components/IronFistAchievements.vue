@@ -9,7 +9,7 @@
                 color="white"
                 @click="$emit('back')"
             />
-            <div class="text-h6 q-ml-sm">🏅 我的成就</div>
+            <div class="text-h6 q-ml-sm">🏅 my achievements</div>
         </div>
 
         <div v-if="loading && !stats" class="text-center q-py-xl">
@@ -39,7 +39,7 @@
                 </div>
             </div>
             <div class="text-caption text-grey-6 q-mt-md text-center">
-                已解锁 {{ stats.achievements.length }} / {{ ACHIEVEMENTS.length }}
+                Unlocked {{ stats.achievements.length }} / {{ ACHIEVEMENTS.length }}
             </div>
         </template>
     </div>
@@ -64,7 +64,7 @@ onMounted(async () => {
         stats.value = data;
     } catch {
         Notify.create({
-            message: "成就数据加载失败",
+            message: "Achievement data loading failed",
             color: "negative",
             textColor: "white",
             position: "top",

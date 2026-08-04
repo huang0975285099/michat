@@ -1,7 +1,7 @@
--- 中国版积分账本修复：
--- 1. 质押与真正的输局分离为 pvp_stake；
--- 2. 修正旧版取消匹配被误标为 pvp_win 的记录；
--- 3. 修正第 10 场 PvE 因 MySQL ON DUPLICATE KEY 赋值顺序少记 500 的每日累计。
+-- Chinese version points ledger repair:
+-- 1. The pledge and the real loss are separated into pvp_stake;
+-- 2. Fixed the old version’s cancellation of matching records that were mistakenly marked as pvp_win;
+-- 3. Corrected the 10th PvE game where the daily accumulation of 500 was missed due to the assignment sequence of MySQL ON DUPLICATE KEY.
 
 USE e2eechat;
 

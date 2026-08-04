@@ -6,9 +6,9 @@ import { fileURLToPath } from "url";
 const platform = process.platform || os.platform();
 const currentDir = fileURLToPath(new URL(".", import.meta.url));
 
-// Windows 上设置 AppUserModelID，确保 Toast 显示正确的应用名而非「electron.app.Electron」
+// Set AppUserModelID on Windows to ensure that Toast displays the correct application name instead of "electron.app.Electron"
 if (platform === "win32") {
-    app.setAppUserModelId("云密");
+    app.setAppUserModelId("Yunmi");
 }
 
 let mainWindow;
@@ -48,7 +48,7 @@ async function createWindow() {
     });
 }
 
-// 渲染进程请求闪烁任务栏
+// Rendering process requests flashing taskbar
 ipcMain.on("flash-window", () => {
     if (mainWindow && !mainWindow.isFocused()) {
         mainWindow.flashFrame(true);
@@ -56,7 +56,7 @@ ipcMain.on("flash-window", () => {
     }
 });
 
-// 渲染进程请求聚焦窗口（点击通知时）
+// Rendering process requests focus window (when notification is clicked)
 ipcMain.on("focus-window", () => {
     if (mainWindow) {
         if (mainWindow.isMinimized()) mainWindow.restore();
@@ -64,13 +64,13 @@ ipcMain.on("focus-window", () => {
     }
 });
 
-// 渲染进程请求弹系统 Toast 通知（仅在窗口未聚焦时弹）
+// The rendering process requests to pop up the system Toast notification (only pops up when the window is not focused)
 ipcMain.on("notify-message", (_event, body) => {
     if (!Notification.isSupported()) return;
     if (mainWindow && mainWindow.isFocused()) return;
     const n = new Notification({
-        title: "云密",
-        body: body || "收到新消息",
+        title: "Yunmi",
+        body: body || "new message received",
         icon: path.resolve(currentDir, "icons/icon.png"),
     });
     n.on("click", () => {

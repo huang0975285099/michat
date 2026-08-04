@@ -1,6 +1,6 @@
 import { connect, on, off, send } from 'src/services/websocket.js'
 
-// 房间作用域的 WebSocket 封装：自动过滤非本房间消息，附带 to/room_id。
+// Room scope WebSocket encapsulation: automatically filter non-room messages, with to/room_id attached.
 export class GameNet {
   constructor(opponentId, roomId) {
     this.opponentId = opponentId

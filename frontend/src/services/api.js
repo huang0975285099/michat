@@ -8,28 +8,28 @@ const api = axios.create({
   timeout: 10000
 })
 
-// 自动附加 session token
+// Automatically attach session token
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('session_token')
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
 
-// 401 → 清除本地状态，跳回登录页
+// 401 → Clear local status and jump back to login page
 api.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err.response?.status === 401 && localStorage.getItem('session_token')) {
       localStorage.removeItem('session_token')
-      Notify.create({ type: 'warning', message: '您已在其他设备登录，当前会话已失效' })
-      // 延迟跳转，让 notify 先显示
+      Notify.create({ type: 'warning', message: 'You are already logged in on another device，The current session has expired' })
+      // Delay the jump and let notify display first
       setTimeout(() => { window.location.href = '/#/init' }, 1500)
     }
     return Promise.reject(err)
   }
 )
 
-// 身份相关
+// Identity related
 export const identityApi = {
   init: (inviteCode = '') => api.post('/identity/init', inviteCode ? { invite_code: inviteCode } : {}),
   challenge: (publicKey) => api.get('/identity/reauth/challenge', { params: { public_key: publicKey } }),
@@ -41,12 +41,12 @@ export const identityApi = {
   updateNickname: (nickname) => api.put('/identity/nickname', { nickname })
 }
 
-// 用户搜索
+// User search
 export const userApi = {
   search: (id) => api.get('/users/search', { params: { id } })
 }
 
-// 好友相关
+// Friends related
 export const friendApi = {
   sendRequest: (toChatId) => api.post('/friends/request', { to_chat_id: toChatId }),
   getRequests: () => api.get('/friends/requests'),
@@ -57,24 +57,24 @@ export const friendApi = {
   getReadReceipts: (peerChatId) => api.get(`/friends/${peerChatId}/read-receipts`)
 }
 
-// 通话 TURN 凭证
+// Call TURN Credentials
 export const callApi = {
   getTurnCredentials: () => api.get('/turn-credentials')
 }
 
-// 邀请相关
+// Invitation related
 export const inviteApi = {
   generate: () => api.post('/invite/generate'),
   validate: (code) => api.get('/invite/validate', { params: { code } })
 }
 
-// 设备推送 token（极光 Registration ID）
+// Device push token (Aurora Registration ID)
 export const deviceApi = {
   save: (regId) => api.post('/device/token', { reg_id: regId }),
   remove: () => api.delete('/device/token')
 }
 
-// $FIST 代币
+// $FIST Token
 export const fistApi = {
   getAccount: () => api.get('/fist/account'),
   claimPvEReward: () => api.post('/fist/pve-reward'),
@@ -82,45 +82,45 @@ export const fistApi = {
     api.get('/fist/transactions', { params: { before_id: beforeId || undefined, limit } })
 }
 
-// 铁拳对战统计与成就
+// Tekken Battle Statistics and Achievements
 export const ironfistApi = {
   getStats: () => api.get('/games/ironfist/stats'),
   reportMatch: (payload) => api.post('/games/ironfist/stats', payload),
   listMatches: (beforeId, limit = 20) =>
     api.get('/games/ironfist/matches', { params: { before_id: beforeId || undefined, limit } }),
-  // 加入 PVP 撮合队列 → 返回 {status:'queued'|'matched', room_id, opponent, tier, stake}
+  // Join the PVP matching queue → return {status:'queued'|'matched', room_id, opponent, tier, stake}
   joinPVPQueue: (tier) => api.post('/games/ironfist/pvp/queue', { tier }),
-  // 主动取消撮合（全额退回质押）
+  // Take the initiative to cancel the matching (refund the pledge in full)
   cancelPVPQueue: () => api.delete('/games/ironfist/pvp/queue'),
-  // 查询当前撮合队列状态 → {status:'idle'|'queued'|'matched', ...}（WS 通知丢失时轮询兜底）
+  // Query the current matching queue status → {status:'idle'|'queued'|'matched', ...} (Polling when WS notification is lost)
   getPVPQueueStatus: () => api.get('/games/ironfist/pvp/queue'),
 }
 
-// 版本信息（公开接口，返回线上最新版本）
+// Version information (public interface, returns the latest online version)
 export const versionApi = {
   get: () => api.get('/version')
 }
 
-// 九州征途（SLG）多人世界
+// Jiuzhou Journey (SLG) Multiplayer World
 export const slgApi = {
-  // 加入世界 → 返回 { world_id, seed, season, spawn_x, spawn_y, is_new_player, state, territories, players }
-  // 满员时返回 403 {error:'world_full'}
+  // Join world → return { world_id, seed, season, spawn_x, spawn_y, is_new_player, state, territories, players }
+  // Returns 403 {error:'world_full'} when full
   join: () => api.post('/games/slg/join'),
-  // 获取世界快照（领地列表 + 在线玩家）
+  // Get a world snapshot (territory list + online players)
   getWorld: () => api.get('/games/slg/world'),
-  // 查询世界状态 { player_count, max_players, full }
+  // Query world status { player_count, max_players, full }
   getStatus: () => api.get('/games/slg/status'),
-  // 保存玩家状态
+  // Save player state
   saveState: (state) => api.put('/games/slg/state', { state }),
-  // 更新领地归属 { x, y, is_city, action: 'claim'|'abandon' }
+  // Update territory ownership { x, y, is_city, action: 'claim'|'abandon' }
   updateTerritory: (payload) => api.post('/games/slg/territory', payload),
-  // 出征/行军开始上报 { march_uid, intent, from, to, path, depart_at_ms, arrive_at_ms, units }
+  // Expedition/march start reporting { march_uid, intent, from, to, path, depart_at_ms, arrive_at_ms, units }
   marchStart: (payload) => api.post('/games/slg/march', payload),
-  // 行军结束上报（到达/驻扎/召回/被消灭后清理）{ march_uid }
+  // Reporting at the end of the march (arrival/station/recall/cleaning up after being eliminated) { march_uid }
   marchEnd: (marchUid) => api.post('/games/slg/march/end', { march_uid: marchUid }),
-  // 玩家部队碰撞遭遇战结果上报 { march_uid, units, status, other_march_uid, other_units, other_status, seed }
+  // Reporting of player unit collision encounter results { march_uid, units, status, other_march_uid, other_units, other_status, seed }
   reportMarchBattle: (payload) => api.post('/games/slg/march/battle', payload),
-  // 管理员重置当前世界（清空所有玩家与领地，下次 Join 创建新世界）
+  // The administrator resets the current world (clears all players and territories, and joins to create a new world next time)
   resetWorld: () => api.post('/games/slg/reset'),
 }
 

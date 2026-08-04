@@ -67,7 +67,7 @@ func main() {
 		log.Fatalf("parse config: %v", err)
 	}
 
-	// 环境变量覆写敏感字段
+	// Environment variables overwrite sensitive fields
 	if v := os.Getenv("JWT_SECRET"); v != "" {
 		cfg.Server.JWTSecret = v
 	}
@@ -83,7 +83,7 @@ func main() {
 	if v := os.Getenv("JPUSH_MASTER_SECRET"); v != "" {
 		cfg.JPush.MasterSecret = v
 	}
-	// 版本信息（在 docker-compose 环境变量里维护，每次发版更新）
+	// Version information (maintained in docker-compose environment variables, updated every time a version is released)
 	if v := os.Getenv("APP_LATEST_VERSION"); v != "" {
 		cfg.Version.Latest = v
 	}
@@ -113,7 +113,7 @@ func main() {
 
 	var rdb *redis.Client
 	if cfg.Redis.Addr == "" || cfg.Redis.Addr == "memory" {
-		// 本地开发：使用内存版 Redis，免安装
+		// Local development: Use the memory version of Redis, no installation required
 		rdb, err = pkgredis.NewInMemory()
 	} else {
 		rdb, err = pkgredis.New(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
@@ -132,30 +132,19 @@ func main() {
 
 	hub := ws.NewHub(rdb, friendSvc, identSvc, messageReadSvc)
 
-	// IronFistHandler 需要 hub 推送 PVP 匹配通知，故在 hub 之后构造
+	// IronFistHandler needs the hub to push PVP matching notifications, so it is constructed after the hub
 	ironFistHandler := handler.NewIronFistHandler(ironFistSvc, hub)
 	fistStatsHandler := handler.NewFistStatsHandler(fistSvc, ironFistSvc)
 
-	// SLG 多人世界服务
-	slgSvc := service.NewSlgService(db)
-	slgHandler := handler.NewSlgHandler(slgSvc, hub)
-
-	// 极光推送（AppKey 和 MasterSecret 均配置时启用）
+	// Aurora Push (enabled when both AppKey and MasterSecret are configured)
 	if cfg.JPush.AppKey != "" && cfg.JPush.MasterSecret != "" {
 		pushSvc := service.NewPushService(db, cfg.JPush.AppKey, cfg.JPush.MasterSecret, cfg.JPush.Enabled)
 		hub.SetPushService(pushSvc)
 		log.Println("JPush push notification enabled")
 	}
 
-	// 启用 PVP 大厅在线列表功能（大厅用户互看头像/余额/场次）
+	// Enable the PVP lobby online list function (lobby users can view each other’s avatars/balances/games)
 	hub.SetIronFistService(ironFistSvc)
-
-	// 启用 SLG 多人世界实时同步
-	hub.SetSlgService(slgSvc)
-
-	// 注入 AI 扩张广播回调（服务端权威 AI，所有玩家共享同一份）+ 启动 AI 扩张定时器
-	slgSvc.SetBroadcastAI(hub.BroadcastSLGAIEvent)
-	slgSvc.StartAITicker()
 
 	identHandler := handler.NewIdentityHandler(identSvc, inviteSvc, friendSvc, hub)
 	userHandler := handler.NewUserHandler(identSvc)
@@ -167,11 +156,11 @@ func main() {
 	deviceHandler := handler.NewDeviceHandler(db)
 	versionHandler := handler.NewVersionHandler(cfg.Version.Latest, cfg.Version.MinSupported, cfg.Version.URL, cfg.Version.Notes)
 
-	// 限流（手机为主 + 运营商 CGNAT：按 IP 的阈值放宽，主防线放在按用户 authRL）：
-	//   - publicRL：未认证公开接口 100 次/分钟/IP（同 IP 多手机的版本检查/登录突发）
-	//   - authRL  ：已认证接口 120 次/分钟/用户（按 chatID，完全不受共享 IP 影响）
-	// WS 建连的“按 IP 速率”限流交给边缘 nginx（有突发平滑、用真实 IP），后端不再
-	// 叠加速率限流以免 CGNAT 下重连风暴误伤；后端用并发连接数上限（见 ws.go）兜底。
+	// Current limiting (mainly mobile phone + operator CGNAT: relax the threshold by IP, the main line of defense is based on user authRL):
+	// - publicRL: Unauthenticated public interface 100 times/minute/IP (version check/login burst for multiple phones with the same IP)
+	// - authRL: Authenticated interface 120 times/minute/user (by chatID, not affected by shared IP at all)
+	// The "according to IP rate" current limit for WS connection establishment is handed over to edge nginx (with burst smoothing and real IP), and the backend no longer
+	// Superimpose rate limiting to avoid accidental damage caused by reconnection storms under CGNAT; the backend uses the upper limit on the number of concurrent connections (see ws.go) to protect against accidental damage.
 	publicRL := middleware.NewRateLimiter(100, time.Minute)
 	authRL := middleware.NewRateLimiterFunc(120, time.Minute, func(c *gin.Context) string {
 		if id := c.GetString(middleware.CtxChatID); id != "" {
@@ -181,7 +170,7 @@ func main() {
 	})
 
 	r := gin.Default()
-	// 后端只在 nginx 反代之后暴露，信任私网代理以便 ClientIP() 取到 XFF 中的真实客户端 IP。
+	// The backend is only exposed after nginx backend, trusting the private network proxy so that ClientIP() can get the real client IP in XFF.
 	if err := r.SetTrustedProxies([]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/32"}); err != nil {
 		log.Fatalf("set trusted proxies: %v", err)
 	}
@@ -189,17 +178,17 @@ func main() {
 
 	api := r.Group("/api")
 	{
-		// 无需鉴权（有限流）
+		// No authentication required (limited flow)
 		open := api.Group("", publicRL.Limit())
 		open.POST("/identity/init", identHandler.Init)
 		open.GET("/identity/reauth/challenge", identHandler.GetReauthChallenge)
 		open.POST("/identity/reauth", identHandler.Reauth)
 		open.GET("/invite/validate", inviteHandler.Validate)
 		open.GET("/version", versionHandler.Get)
-		// $FIST 生态透明度统计（国际站介绍页用，纯聚合数据，无需鉴权）
+		// $FIST ecological transparency statistics (for international station introduction page, purely aggregated data, no authentication required)
 		open.GET("/fist/stats", fistStatsHandler.GetStats)
 
-		// 需要鉴权（按用户限流）
+		// Authentication is required (current limit based on user)
 		auth := api.Group("", middleware.Auth(identSvc), authRL.Limit())
 		auth.PUT("/identity/pubkey", identHandler.UploadPubkey)
 		auth.PUT("/identity/nickname", identHandler.UpdateNickname)
@@ -219,34 +208,24 @@ func main() {
 		auth.POST("/device/token", deviceHandler.SaveToken)
 		auth.DELETE("/device/token", deviceHandler.DeleteTokens)
 
-		// $FIST 代币
+		// $FIST Token
 		auth.GET("/fist/account", fistHandler.GetAccount)
 		auth.POST("/fist/pve-reward", fistHandler.ClaimPvEReward)
 		auth.GET("/fist/transactions", fistHandler.GetTransactions)
 
-		// 铁拳对战统计与成就
+		// Tekken Battle Statistics and Achievements
 		auth.GET("/games/ironfist/stats", ironFistHandler.GetStats)
 		auth.POST("/games/ironfist/stats", ironFistHandler.ReportMatch)
 		auth.GET("/games/ironfist/matches", ironFistHandler.ListMatches)
 
-		// PVP 撮合队列（加入 / 取消）
+		// PVP matchmaking queue (join/cancel)
 		auth.POST("/games/ironfist/pvp/queue", ironFistHandler.EnqueuePVP)
 		auth.DELETE("/games/ironfist/pvp/queue", ironFistHandler.CancelPVPQueue)
 		auth.GET("/games/ironfist/pvp/queue", ironFistHandler.GetPVPQueueStatus)
 
-		// SLG 多人世界
-		auth.POST("/games/slg/join", slgHandler.Join)
-		auth.GET("/games/slg/world", slgHandler.GetWorld)
-		auth.GET("/games/slg/status", slgHandler.GetStatus)
-		auth.PUT("/games/slg/state", slgHandler.SaveState)
-		auth.POST("/games/slg/territory", slgHandler.UpdateTerritory)
-		auth.POST("/games/slg/march", slgHandler.StartMarch)
-		auth.POST("/games/slg/march/end", slgHandler.EndMarch)
-		auth.POST("/games/slg/march/battle", slgHandler.ReportMarchBattle)
-		auth.POST("/games/slg/reset", slgHandler.ResetWorld)
 	}
 
-	// 启动定时任务：自动拒绝超过 7 天未处理的好友申请
+	// Start a scheduled task: automatically reject friend requests that have not been processed for more than 7 days
 	go func() {
 		autoReject := func() {
 			if err := friendSvc.AutoRejectExpired(context.Background()); err != nil {
@@ -261,7 +240,7 @@ func main() {
 		}
 	}()
 
-	// 启动定时任务：清理超过 7 天的已读回执，避免 message_reads 表无限增长
+	// Start a scheduled task: clean up read receipts older than 7 days to avoid unlimited growth of the message_reads table
 	go func() {
 		cleanup := func() {
 			n, err := messageReadSvc.DeleteOldReadReceipts(context.Background(), 7)
@@ -279,10 +258,10 @@ func main() {
 		}
 	}()
 
-	// 启动定时任务：每 1 分钟扫描超时的 PVP 房间并退款兜底
-	//   - matching 超时：客户端崩溃/失联未取消，全额退给 A
-	//   - matched 超时：双方/单方断线未上报结果、或 WS 匹配通知丢失导致一方未开局，
-	//     按平局退款，避免质押永久锁定
+	// Start a scheduled task: scan overtimed PVP rooms every 1 minute and refund the money
+	// - Matching timeout: client crashes/lost connection but not canceled, full refund to A
+	// - matched timeout: both parties/one party are disconnected and fail to report the results, or the WS matching notification is lost and one party does not start the game.
+	// Refund on a draw basis to avoid permanent lock-in of pledges
 	go func() {
 		sweep := func() {
 			if n, err := ironFistSvc.SweepTimeoutPVPQueues(context.Background()); err != nil {
@@ -296,7 +275,7 @@ func main() {
 				log.Printf("[cron] swept %d timeout pvp matched rooms", n)
 			}
 		}
-		// 启动后等 1 分钟再首次执行，避免启动瞬间误判
+		// Wait 1 minute after startup before executing it for the first time to avoid misjudgment at startup.
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
@@ -309,11 +288,11 @@ func main() {
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	log.Printf("E2EE Chat server listening on %s", addr)
 
-	// 显式配置超时，防 Slowloris 等慢速攻击占满连接/goroutine。
-	//   - ReadHeaderTimeout：读完请求头的上限（慢速攻击核心防线）
-	//   - ReadTimeout：读完整个请求的上限（WS 升级后 gorilla 自管 deadline，不受影响）
-	//   - IdleTimeout：keep-alive 空闲回收
-	//   - 不设 WriteTimeout：WS 为长连接，统一写超时会误杀（gorilla 每次写自带 deadline）
+	// Explicitly configure timeouts to prevent slow attacks such as Slowloris from filling up connections/goroutines.
+	// - ReadHeaderTimeout: the upper limit of reading the request header (slow attack core defense line)
+	// - ReadTimeout: the upper limit for reading the entire request (gorilla will manage the deadline after WS upgrade and will not be affected)
+	// - IdleTimeout: keep-alive idle recycling
+	// - No WriteTimeout: WS is a long connection, and a unified write timeout will cause accidental killing (gorilla has its own deadline for each write)
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           r,

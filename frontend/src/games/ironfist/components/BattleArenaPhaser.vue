@@ -1,8 +1,8 @@
 <template>
   <!--
-    二期 战斗表现层（Phaser 单 canvas）。
-    与一期 BattleArena.vue 保持同一组 props（result / 蓄力态），可直接互换。
-    渲染无关引擎(IronFistGame)与 HUD 不需改动。见 docs 第二十二节。
+    Phase II Combat presentation layer（Phaser Single canvas）。
+    with the first issue BattleArena.vue keep the same group props（result / Charged state），Directly interchangeable。
+    Render agnostic engine(IronFistGame)with HUD No changes required。see docs Chapter 22。
   -->
   <div ref="containerRef" class="arena-canvas" />
 </template>
@@ -12,10 +12,10 @@ import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { createBattleRenderer } from '../game/BattleRenderer.js'
 
 const props = defineProps({
-  result: { type: Object, default: null },   // 最近一次结算结果
+  result: { type: Object, default: null },   //Last settlement result
   playerCharged: { type: Boolean, default: false },
   opponentCharged: { type: Boolean, default: false },
-  playerEmoji: { type: String, default: '🥊' },     // 兼容一期接口（矢量斗士不使用）
+  playerEmoji: { type: String, default: '🥊' },     //Compatible with the first phase interface (not used by Vector Fighter)
   opponentEmoji: { type: String, default: '🤖' },
 })
 
@@ -43,7 +43,7 @@ onUnmounted(() => {
   scene = null
 })
 
-// 结算结果到来即播放；场景未就绪则暂存，就绪后补播
+// The settlement result will be played as soon as it arrives; if the scene is not ready, it will be temporarily saved and will be replayed when it is ready.
 watch(() => props.result, (r) => {
   if (!r) return
   if (scene) scene.playRound(r)

@@ -1,6 +1,6 @@
 <template>
     <div v-if="visible" class="video-call">
-        <!-- 远端画面（铺满） -->
+        <!-- Remote screen (full) -->
         <video
             ref="remoteEl"
             class="remote-video"
@@ -8,13 +8,13 @@
             playsinline
         />
 
-        <!-- 呼叫中 / 等待对方画面时的占位 -->
+        <!-- Placeholder when calling/waiting for the other party’s screen -->
         <div v-if="showPlaceholder" class="placeholder column flex-center">
             <q-spinner-dots color="white" size="40px" />
             <div class="text-white q-mt-md">{{ statusText }}</div>
         </div>
 
-        <!-- 顶部信息 -->
+        <!-- Top information -->
         <div class="top-bar">
             <div class="text-white text-subtitle1">{{ peerName }}</div>
             <div v-if="callStore.state === 'active'" class="text-white text-caption">
@@ -22,7 +22,7 @@
             </div>
         </div>
 
-        <!-- 本地画面（小窗） -->
+        <!-- Local screen (small window) -->
         <video
             ref="localEl"
             class="local-video"
@@ -31,7 +31,7 @@
             muted
         />
 
-        <!-- 底部控制栏 -->
+        <!-- bottom control bar -->
         <div class="controls">
             <q-btn
                 round size="lg"
@@ -40,7 +40,7 @@
                 :text-color="muted ? 'white' : 'black'"
                 @click="toggleMute"
             >
-                <q-tooltip>{{ muted ? '取消静音' : '静音' }}</q-tooltip>
+                <q-tooltip>{{ muted ? 'Unmute' : 'mute' }}</q-tooltip>
             </q-btn>
             <q-btn
                 round size="lg"
@@ -49,19 +49,19 @@
                 :text-color="callStore.cameraOn ? 'black' : 'white'"
                 @click="toggleCamera"
             >
-                <q-tooltip>{{ callStore.cameraOn ? '关闭摄像头' : '开启摄像头' }}</q-tooltip>
+                <q-tooltip>{{ callStore.cameraOn ? 'Turn off camera' : 'Turn on camera' }}</q-tooltip>
             </q-btn>
             <q-btn
                 round size="lg" icon="flip_camera_ios" color="white" text-color="black"
                 @click="callStore.switchCamera()"
             >
-                <q-tooltip>切换摄像头</q-tooltip>
+                <q-tooltip>Switch camera</q-tooltip>
             </q-btn>
             <q-btn
                 round size="lg" icon="call_end" color="negative"
                 @click="callStore.hangup()"
             >
-                <q-tooltip>挂断</q-tooltip>
+                <q-tooltip>Hang up</q-tooltip>
             </q-btn>
         </div>
     </div>
@@ -78,7 +78,7 @@ const muted = ref(false);
 const duration = ref(0);
 let timer = null;
 
-// 仅视频通话且处于呼叫/通话中时显示（来电由 IncomingCallDialog 处理）
+// Shown only for video calls and during a call/conversation (incoming calls are handled by IncomingCallDialog)
 const visible = computed(
     () => callStore.media === "video" &&
         (callStore.state === "calling" || callStore.state === "active")
@@ -92,11 +92,11 @@ const showPlaceholder = computed(
 );
 const statusText = computed(() => {
     if (callStore.connectionStatus === "reconnecting") {
-        return `网络中断，正在恢复（${callStore.reconnectSeconds}秒）`;
+        return `Network outage，Recovering（${callStore.reconnectSeconds}seconds）`;
     }
-    if (callStore.state === "calling") return `正在呼叫 ${peerName.value}...`;
-    if (callStore.connectionStatus === "connecting") return "正在建立安全连接...";
-    return "等待对方画面...";
+    if (callStore.state === "calling") return `Calling ${peerName.value}...`;
+    if (callStore.connectionStatus === "connecting") return "Establishing secure connection...";
+    return "Waiting for the other party screen...";
 });
 
 watch(
@@ -113,10 +113,10 @@ watch(
     }
 );
 
-// 组件挂载/显示后绑定已有的流（srcObject 不能用模板绑定，需手动赋值）
+// Bind the existing stream after the component is mounted/displayed (srcObject cannot be bound using templates and needs to be assigned manually)
 watch(visible, async (v) => {
     if (v) {
-        // 等 DOM 渲染出 video 元素后再绑定已有的流
+        // Wait for the DOM to render the video element and then bind the existing stream.
         await nextTick();
         if (localEl.value) localEl.value.srcObject = callStore.localStream;
         if (remoteEl.value) remoteEl.value.srcObject = callStore.remoteStream;
@@ -198,7 +198,7 @@ function formatDuration(secs) {
     border-radius: 8px;
     border: 1px solid rgba(255, 255, 255, 0.4);
     background: #222;
-    transform: scaleX(-1); /* 本地预览镜像，符合直觉 */
+    transform: scaleX(-1); /* Local preview image, intuitive */
 }
 .controls {
     position: absolute;

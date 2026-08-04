@@ -43,15 +43,6 @@ var ironfistPvpReportsSQL string
 //go:embed 011_fist_tx_pvp_refund.sql
 var fistTxPvpRefundSQL string
 
-//go:embed 012_slg_worlds.sql
-var slgWorldsSQL string
-
-//go:embed 013_slg_shared_ai.sql
-var slgSharedAiSQL string
-
-//go:embed 014_slg_marches.sql
-var slgMarchesSQL string
-
 //go:embed 015_ironfist_pve_reward_claim.sql
 var ironfistPveRewardClaimSQL string
 
@@ -64,19 +55,22 @@ var messageDeliveriesSQL string
 //go:embed 018_message_read_tombstones.sql
 var messageReadTombstonesSQL string
 
-// AutoMigrate 自动执行建表 SQL，幂等（IF NOT EXISTS）。
-// MySQL 1060（列已存在）、1061（索引已存在）和 1091（待删除键已不存在）
-// 被视为已完成，静默跳过。
+//go:embed 019_drop_slg_tables.sql
+var dropSlgTablesSQL string
+
+// AutoMigrate automatically executes table creation SQL, idempotent (IF NOT EXISTS).
+// MySQL 1060 (column already exists), 1061 (index already exists) and 1091 (key to be deleted no longer exists)
+// Considered completed and silently skipped.
 func AutoMigrate(db *sql.DB) error {
-	migrations := []string{initSQL, messageReadsSQL, deviceTokensSQL, fistTokenSQL, ironfistStatsSQL, ironfistMatchesSQL, ironfistFriendModeSQL, ironfistPvpMatchmakingSQL, ironfistMatchPvpRoomSQL, ironfistPvpReportsSQL, fistTxPvpRefundSQL, slgWorldsSQL, slgSharedAiSQL, slgMarchesSQL, ironfistPveRewardClaimSQL, ironfistPointsLedgerFixSQL, messageDeliveriesSQL, messageReadTombstonesSQL}
+	migrations := []string{initSQL, messageReadsSQL, deviceTokensSQL, fistTokenSQL, ironfistStatsSQL, ironfistMatchesSQL, ironfistFriendModeSQL, ironfistPvpMatchmakingSQL, ironfistMatchPvpRoomSQL, ironfistPvpReportsSQL, fistTxPvpRefundSQL, ironfistPveRewardClaimSQL, ironfistPointsLedgerFixSQL, messageDeliveriesSQL, messageReadTombstonesSQL, dropSlgTablesSQL}
 	for _, sql := range migrations {
 		for _, stmt := range splitStatements(sql) {
 			if _, err := db.Exec(stmt); err != nil {
 				var myErr *mysql.MySQLError
 				if errors.As(err, &myErr) && (myErr.Number == 1060 || myErr.Number == 1061 || myErr.Number == 1091) {
-					// 1060 = ER_DUP_FIELDNAME (ADD COLUMN 已存在)
-					// 1061 = ER_DUP_KEY_NAME  (ADD INDEX 已存在)
-					// 1091 = ER_CANT_DROP_FIELD_OR_KEY（兼容新库上已不存在的旧外键）
+					// 1060 = ER_DUP_FIELDNAME (ADD COLUMN already exists)
+					// 1061 = ER_DUP_KEY_NAME (ADD INDEX already exists)
+					// 1091 = ER_CANT_DROP_FIELD_OR_KEY (compatible with old foreign keys that no longer exist on the new library)
 					continue
 				}
 				preview := stmt
@@ -106,7 +100,7 @@ func splitStatements(src string) []string {
 		}
 		stmt := strings.Join(lines, "\n")
 		upper := strings.ToUpper(stmt)
-		// 跳过 CREATE DATABASE 和 USE，已由 pkg/mysql 处理
+		// Skip CREATE DATABASE and USE, already handled by pkg/mysql
 		if strings.HasPrefix(upper, "CREATE DATABASE") || strings.HasPrefix(upper, "USE ") {
 			continue
 		}

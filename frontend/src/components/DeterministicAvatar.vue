@@ -15,10 +15,10 @@
 </template>
 
 <script>
-// 模块级缓存：跨所有组件实例共享（必须放在普通 <script> 块，<script setup> 的顶层
-// 代码会被编进 setup()，每个实例各执行一次，无法共享）。
-// 会话内 seed 通常只有 2 个（自己/对方），配合此缓存，SHA-256 + canvas 绘制
-// 对每个 (seed,size) 全程只执行一次。值为「生成中的 Promise」或「完成后的 dataURL」。
+// Module-level cache: shared across all component instances (must be placed at the top level of a normal <script> block, <script setup>
+// The code will be compiled into setup(), executed once for each instance, and cannot be shared).
+// There are usually only 2 seeds in the session (self/other party). With this cache, SHA-256 + canvas drawing
+// Execute exactly once for each (seed,size). The value is "generating Promise" or "completed dataURL".
 const avatarCache = new Map()
 </script>
 
@@ -40,7 +40,7 @@ async function load() {
   let url
   const cached = avatarCache.get(key)
   if (cached) {
-    // 可能是已完成的 dataURL，也可能是仍在生成中的 Promise
+    // This may be a completed dataURL or a Promise that is still being generated
     url = await cached
   } else {
     const promise = generate(props.seed, props.size)
@@ -54,17 +54,17 @@ async function load() {
       return
     }
   }
-  // 竞态保护：await 期间 props.seed/size 可能已变，避免写入过期头像
+  // Race protection: props.seed/size may have changed during await to avoid writing expired avatars
   if (`${props.seed}@${props.size}` === key) src.value = url
 }
 
 /**
- * 根据 seed 生成确定性头像，返回 dataURL（离屏绘制，不进 DOM）
- * 算法：
- * 1. 用 SHA-256 哈希将 seed 转为确定性字节
- * 2. 取前 3 字节作为主色（RGB）
- * 3. 取第 4 字节决定背景色方案
- * 4. 用剩余字节生成对称的几何图案（3×3 网格）
+ * Generate a deterministic avatar based on the seed and return the dataURL (off-screen drawing, without entering the DOM)
+ * Algorithm:
+ * 1. Use SHA-256 hash to convert seed into deterministic bytes
+ * 2. Take the first 3 bytes as the main color (RGB)
+ * 3. Take the 4th byte to determine the background color scheme
+ * 4. Use the remaining bytes to generate a symmetrical geometric pattern (3×3 grid)
  */
 async function generate(seed, size) {
   const canvas = document.createElement('canvas')
@@ -72,15 +72,15 @@ async function generate(seed, size) {
   canvas.height = size
   const ctx = canvas.getContext('2d')
 
-  // 1. 生成确定性哈希
+  // 1. Generate deterministic hash
   const encoder = new TextEncoder()
   const hashBuf = await crypto.subtle.digest('SHA-256', encoder.encode(seed))
   const hash = new Uint8Array(hashBuf)
 
-  // 2. 主色（前 3 字节 → RGB）
+  // 2. Primary color (first 3 bytes → RGB)
   const r = hash[0], g = hash[1], b = hash[2]
 
-  // 3. 背景色（从主色调暗或调亮）
+  // 3. Background color (darken or lighten from main color)
   const bgVariant = hash[3] % 3
   const bgColor = bgVariant === 0
     ? `rgb(${Math.round(r * 0.15)}, ${Math.round(g * 0.15)}, ${Math.round(b * 0.15)})`
@@ -88,14 +88,14 @@ async function generate(seed, size) {
     ? `rgb(${Math.round(r * 0.9)}, ${Math.round(g * 0.9)}, ${Math.round(b * 0.9)})`
     : '#ffffff'
 
-  // 4. 绘制背景
+  // 4. Draw the background
   ctx.fillStyle = bgColor
   ctx.fillRect(0, 0, size, size)
 
-  // 5. 绘制对称几何图案
+  // 5. Draw symmetrical geometric patterns
   const gridSize = 3
   const cellSize = size / gridSize
-  const patternBytes = hash.slice(4, 13) // 9 字节控制 3×3 网格
+  const patternBytes = hash.slice(4, 13) //9 bytes control 3×3 grid
 
   ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
   ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.6)`
@@ -115,15 +115,15 @@ async function generate(seed, size) {
       ctx.rotate(((byte % 4) * Math.PI) / 4)
 
       switch (shapeType) {
-        case 0: // 圆形
+        case 0: //round
           ctx.beginPath()
           ctx.arc(0, 0, sz, 0, Math.PI * 2)
           ctx.fill()
           break
-        case 1: // 方形
+        case 1: //square
           ctx.fillRect(-sz, -sz, sz * 2, sz * 2)
           break
-        case 2: // 菱形
+        case 2: //rhombus
           ctx.beginPath()
           ctx.moveTo(0, -sz)
           ctx.lineTo(sz, 0)
@@ -132,7 +132,7 @@ async function generate(seed, size) {
           ctx.closePath()
           ctx.fill()
           break
-        case 3: // 三角形
+        case 3: //triangle
           ctx.beginPath()
           ctx.moveTo(0, -sz)
           ctx.lineTo(sz, sz * 0.7)
@@ -140,13 +140,13 @@ async function generate(seed, size) {
           ctx.closePath()
           ctx.fill()
           break
-        case 4: { // 十字
+        case 4: { //cross
           const w = sz * 0.35
           ctx.fillRect(-w, -sz, w * 2, sz * 2)
           ctx.fillRect(-sz, -w, sz * 2, w * 2)
           break
         }
-        case 5: // 圆环
+        case 5: //ring
           ctx.beginPath()
           ctx.arc(0, 0, sz, 0, Math.PI * 2)
           ctx.stroke()
@@ -156,12 +156,12 @@ async function generate(seed, size) {
     }
   }
 
-  // 6. 外圈边框（用哈希字节决定颜色）
+  // 6. Outer border (use hash bytes to determine color)
   ctx.strokeStyle = `rgb(${hash[13] % 128 + 64}, ${hash[14] % 128 + 64}, ${hash[15] % 128 + 64})`
   ctx.lineWidth = Math.max(2, size / 40)
   ctx.strokeRect(0, 0, size, size)
 
-  // 7. 圆角裁剪
+  // 7. Round corner cutting
   roundCanvas(ctx, size)
 
   return canvas.toDataURL('image/png')

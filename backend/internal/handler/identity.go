@@ -28,13 +28,13 @@ func NewIdentityHandler(svc *service.IdentityService, inviteSvc *service.InviteS
 }
 
 // POST /api/identity/init
-// 首次进入：服务端生成 chat_id + nickname，返回 session_token
-// 可选 invite_code：使用邀请码注册后自动发送好友申请
+// First time entry: The server generates chat_id + nickname and returns session_token
+// Optional invite_code: Automatically send friend application after registering with invitation code
 func (h *IdentityHandler) Init(c *gin.Context) {
 	var body struct {
 		InviteCode string `json:"invite_code"`
 	}
-	_ = c.ShouldBindJSON(&body) // 忽略错误，invite_code 是可选的
+	_ = c.ShouldBindJSON(&body) //Ignore errors, invite_code is optional
 
 	user, token, err := h.svc.Init(c.Request.Context())
 	if err != nil {
@@ -42,27 +42,27 @@ func (h *IdentityHandler) Init(c *gin.Context) {
 		return
 	}
 
-	// 处理邀请码
+	// Process invitation code
 	var inviterChatID string
 	if body.InviteCode != "" && h.inviteSvc != nil {
 		inviterChatID, err = h.inviteSvc.CreateFriendRequestWithInvite(c.Request.Context(), body.InviteCode, user.ID)
 		if err == nil && h.hub != nil {
-			// 实时通知邀请者
+			// Notify invitees in real time
 			h.hub.NotifyFriendRequest(inviterChatID, user.ChatID)
 		}
-		// 邀请码无效不阻止注册，只是不创建好友申请
+		// Invalid invitation code does not prevent registration, but does not create a friend application
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
 		"chat_id":         user.ChatID,
 		"nickname":        user.Nickname,
 		"session_token":   token,
-		"inviter_chat_id": inviterChatID, // 返回邀请者的 chat_id，前端可显示提示
+		"inviter_chat_id": inviterChatID, //Returns the inviter's chat_id, and the front end can display a prompt
 	})
 }
 
 // PUT /api/identity/pubkey
-// 上传公钥，完成注册（需要 session token）
+// Upload the public key and complete the registration (session token required)
 func (h *IdentityHandler) UploadPubkey(c *gin.Context) {
 	chatID := c.GetString(middleware.CtxChatID)
 
@@ -87,7 +87,7 @@ func (h *IdentityHandler) UploadPubkey(c *gin.Context) {
 }
 
 // GET /api/identity/me
-// 查询自己的身份信息
+// Check your identity information
 func (h *IdentityHandler) Me(c *gin.Context) {
 	chatID := c.GetString(middleware.CtxChatID)
 	user, err := h.svc.GetByChatID(c.Request.Context(), chatID)
@@ -99,7 +99,7 @@ func (h *IdentityHandler) Me(c *gin.Context) {
 }
 
 // DELETE /api/identity/me
-// 注销账号：删除用户、好友关系、所有 session
+// Log out of account: delete users, friend relationships, and all sessions
 func (h *IdentityHandler) DeleteAccount(c *gin.Context) {
 	chatID := c.GetString(middleware.CtxChatID)
 	if err := h.svc.DeleteAccount(c.Request.Context(), chatID); err != nil {
@@ -110,7 +110,7 @@ func (h *IdentityHandler) DeleteAccount(c *gin.Context) {
 }
 
 // DELETE /api/identity/logout
-// 注销 session（删除服务端 Redis token）
+// Log out of session (delete server Redis token)
 func (h *IdentityHandler) Logout(c *gin.Context) {
 	token := extractToken(c)
 	if token != "" {
@@ -120,7 +120,7 @@ func (h *IdentityHandler) Logout(c *gin.Context) {
 }
 
 // GET /api/identity/reauth/challenge
-// 获取挑战码（用于私钥签名验证）
+// Get challenge code (for private key signature verification)
 func (h *IdentityHandler) GetReauthChallenge(c *gin.Context) {
 	publicKey := c.Query("public_key")
 	if publicKey == "" {
@@ -140,7 +140,7 @@ func (h *IdentityHandler) GetReauthChallenge(c *gin.Context) {
 }
 
 // POST /api/identity/reauth
-// 凭公钥+挑战码签名换取新 session_token（私钥恢复场景）
+// Use the public key + challenge code signature to exchange for a new session_token (private key recovery scenario)
 func (h *IdentityHandler) Reauth(c *gin.Context) {
 	var body struct {
 		PublicKey string `json:"public_key" binding:"required"`
@@ -164,7 +164,7 @@ func (h *IdentityHandler) Reauth(c *gin.Context) {
 }
 
 // PUT /api/identity/nickname
-// 修改昵称，长度限制 1-8 个字符
+// Modify nickname, length limit is 1-8 characters
 func (h *IdentityHandler) UpdateNickname(c *gin.Context) {
 	chatID := c.GetString(middleware.CtxChatID)
 	var body struct {

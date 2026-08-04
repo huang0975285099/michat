@@ -5,21 +5,21 @@
             <div class="hero-content">
                 <img
                     :src="logoUrl"
-                    alt="云密"
+                    alt="Yunmi"
                     width="120"
                     style="border-radius: 20px"
                 />
-                <div class="hero-title">云密</div>
-                <!-- <div style="margin: 0 0 16px 0">只为隐私安全而生</div>
+                <div class="hero-title">Yunmi</div>
+                <!-- <div style="margin: 0 0 16px 0">Only for privacy and security</div>
                 <p class="hero-subtitle">
-                    基于私有化安全通信架构 + 端到端加密打造，严守最小数据原则，严控数据流转边界。
-                    核心通信数据仅留存于用户本地设备，服务端仅负责安全转发，杜绝第三方窥探、数据泄露与非法抓取，私密信息仅由通信双方掌控。
+                    Based on privatized secure communication architecture + Built with end-to-end encryption，Strictly adhere to the minimum data principle，Strictly control data flow boundaries。
+                    Core communication data is only retained on the user’s local device，The server is only responsible for secure forwarding，Prevent third-party snooping、Data leakage and illegal scraping，Private information is controlled only by the communicating parties。
                 </p> -->
                 <q-btn
                     unelevated
                     color="primary"
                     size="lg"
-                    :label="identity.isReady ? '进入' : '获取邀请码'"
+                    :label="identity.isReady ? 'enter' : 'Get invitation code'"
                     class="hero-btn"
                     @click="
                         identity.isReady
@@ -32,7 +32,7 @@
 
         <!-- Core Capabilities Section -->
         <!-- <section class="core-capabilities">
-            <h2 class="section-title">核心能力</h2>
+            <h2 class="section-title">core competencies</h2>
             <div class="capabilities-list">
                 <div class="capability-item">
                     <div class="capability-icon">
@@ -43,10 +43,10 @@
                         />
                     </div>
                     <div class="capability-content">
-                        <h3 class="capability-title">端到端安全加密（E2EE）</h3>
+                        <h3 class="capability-title">End-to-end secure encryption（E2EE）</h3>
                         <p class="capability-desc">
-                            采用现代密码学协议（ECDH 密钥交换 + AES-256-GCM 高强度加密），单条消息独立会话密钥，全程加密传输。
-                            仅收发双方可解密查看，有效抵御抓包、窃听、数据窃取等风险。
+                            Use modern cryptographic protocols（ECDH key exchange + AES-256-GCM Strong encryption），Single message independent session key，Fully encrypted transmission。
+                            Only the sending and receiving parties can decrypt and view it.，Effectively resist packet capture、eavesdrop、Data theft and other risks。
                         </p>
                     </div>
                 </div>
@@ -55,9 +55,9 @@
                         <q-icon name="cloud_off" size="32px" color="primary" />
                     </div>
                     <div class="capability-content">
-                        <h3 class="capability-title">极简轻量化服务架构</h3>
+                        <h3 class="capability-title">Minimalist and lightweight service architecture</h3>
                         <p class="capability-desc">
-                            服务器仅参与消息转发，不存储可读数据，不记录用户行为日志，最大限度缩小数据暴露范围。
+                            The server only participates in message forwarding，No readable data is stored，Do not record user behavior logs，Minimize data exposure。
                         </p>
                     </div>
                 </div>
@@ -70,9 +70,9 @@
                         />
                     </div>
                     <div class="capability-content">
-                        <h3 class="capability-title">加密文件安全传输</h3>
+                        <h3 class="capability-title">Secure transfer of encrypted files</h3>
                         <p class="capability-desc">
-                            各类文件全程加密流转，传输、临时缓存全链路保护，杜绝敏感文件外泄。
+                            All types of documents are encrypted and transferred throughout the process，transmission、Temporary cache full link protection，Prevent leakage of sensitive documents。
                         </p>
                     </div>
                 </div>
@@ -81,9 +81,9 @@
                         <q-icon name="timer" size="32px" color="orange" />
                     </div>
                     <div class="capability-content">
-                        <h3 class="capability-title">阅后即焚 无痕沟通</h3>
+                        <h3 class="capability-title">Burn after reading Traceless communication</h3>
                         <p class="capability-desc">
-                            自定义消息销毁时效，阅读后自动清理，不在设备或网络中留下长期痕迹。
+                            Customize message destruction time limit，Automatically clean up after reading，Leave no long-lasting traces on your device or network。
                         </p>
                     </div>
                 </div>
@@ -96,11 +96,11 @@
                         />
                     </div>
                     <div class="capability-content">
-                        <h3 class="capability-title">截屏防护 风险提醒</h3>
+                        <h3 class="capability-title">Screen capture protection Risk reminder</h3>
                         <p class="capability-desc">
-                            多终端适配隐私防护机制，支持截屏行为检测与风险提醒，多维度守护会话隐私。<span
+                            Multi-terminal adaptation privacy protection mechanism，Supports screenshot behavior detection and risk reminders，Protect session privacy in multiple dimensions。<span
                                 class="capability-note"
-                                >（※ 不同系统能力存在差异）</span
+                                >（※ Different systems have different capabilities）</span
                             >
                         </p>
                     </div>
@@ -114,9 +114,9 @@
                         />
                     </div>
                     <div class="capability-content">
-                        <h3 class="capability-title">纯净无追踪体验</h3>
+                        <h3 class="capability-title">Pure tracking-free experience</h3>
                         <p class="capability-desc">
-                            无广告推送、无用户画像采集、无后台行为追踪；加密私钥本地独立存储，充分保障用户数据自主权。
+                            No advertising push、No user portrait collection、No background behavior tracking；Encrypted private key local independent storage，Fully protect user data autonomy。
                         </p>
                     </div>
                 </div>
@@ -127,7 +127,7 @@
             class="features"
             style="background-color: #f5f7fa; overflow: hidden"
         >
-            <h2 class="section-title">核心特性</h2>
+            <h2 class="section-title">Core features</h2>
             <div class="features-grid">
                 <q-card class="feature-card">
                     <q-card-section class="text-center">
@@ -137,9 +137,9 @@
                             color="primary"
                             class="q-mb-md"
                         />
-                        <div class="text-h6 q-mb-sm">军工级加密标准</div>
+                        <div class="text-h6 q-mb-sm">Military-grade encryption standards</div>
                         <div class="text-body2 text-grey">
-                            P-256 椭圆曲线密钥协商 + 高阶对称加密，搭配动态会话密钥更新，强化前向安全防护
+                            P-256 Elliptic Curve Key Agreement + High-order symmetric encryption，Paired with dynamic session key updates，Strengthen forward security protection
                         </div>
                     </q-card-section>
                 </q-card>
@@ -152,9 +152,9 @@
                             color="orange"
                             class="q-mb-md"
                         />
-                        <div class="text-h6 q-mb-sm">消息自主管控</div>
+                        <div class="text-h6 q-mb-sm">Autonomous message control</div>
                         <div class="text-body2 text-grey">
-                            支持消息编辑、撤回、销毁，全程由用户自主掌控会话内容
+                            Support message editing、Withdraw、destroy，The user controls the entire session content
                         </div>
                     </q-card-section>
                 </q-card>
@@ -167,9 +167,9 @@
                             color="deep-orange"
                             class="q-mb-md"
                         />
-                        <div class="text-h6 q-mb-sm">隐私优先架构</div>
+                        <div class="text-h6 q-mb-sm">Privacy first architecture</div>
                         <div class="text-body2 text-grey">
-                            从设计之初即遵循“最小数据原则”：不收集、不分析、不存储。
+                            Followed from the beginning of the design“minimal data principle”：Do not collect、No analysis、Not stored。
                         </div>
                     </q-card-section>
                 </q-card>
@@ -178,32 +178,32 @@
 
         <!-- How It Works Section -->
         <!-- <section class="how-it-works">
-            <h2 class="section-title">如何使用</h2>
+            <h2 class="section-title">How to use</h2>
             <div class="steps">
                 <div class="step">
                     <div class="step-number">1</div>
                     <div class="step-content">
-                        <div class="text-h6 q-mb-sm">邀请准入</div>
+                        <div class="text-h6 q-mb-sm">Invite admission</div>
                         <div class="text-body2 text-grey">
-                            通过专属邀请链接完成注册，保障社群私密环境
+                            Complete registration via exclusive invitation link，Protect the privacy environment of the community
                         </div>
                     </div>
                 </div>
                 <div class="step">
                     <div class="step-number">2</div>
                     <div class="step-content">
-                        <div class="text-h6 q-mb-sm">安全身份</div>
+                        <div class="text-h6 q-mb-sm">secure identity</div>
                         <div class="text-body2 text-grey">
-                            自动生成专属加密身份与唯一 Chat ID，私钥本地封存，不外流、不上传
+                            Automatically generate exclusive encrypted identities and unique Chat ID，Private key local storage，No leakage、Do not upload
                         </div>
                     </div>
                 </div>
                 <div class="step">
                     <div class="step-number">3</div>
                     <div class="step-content">
-                        <div class="text-h6 q-mb-sm">私密沟通</div>
+                        <div class="text-h6 q-mb-sm">private communication</div>
                         <div class="text-body2 text-grey">
-                            添加好友即可开启加密会话，全程隐私防护，安全聊天
+                            Add friends to start an encrypted session，Full privacy protection，Safe Chat
                         </div>
                     </div>
                 </div>
@@ -212,16 +212,16 @@
 
         <!-- Download Section -->
         <!-- <section class="download-section">
-            <h2 class="section-title">立即下载</h2>
-            <p class="download-subtitle">多端同步，随时随地安全通信</p>
+            <h2 class="section-title">Download now</h2>
+            <p class="download-subtitle">Multi-terminal synchronization，Secure communication anytime, anywhere</p>
             <div class="download-grid">
                 <div class="download-card">
                     <div class="download-icon windows-icon">
                         <svg viewBox="0 0 24 24" width="36" height="36" fill="white"><path d="M3 12V6.75l6-1.32v6.57H3zm17-9v8.75h-7V3.69L20 3zM3 13h6v6.57l-6-1.32V13zm17 .25V22l-7-1.31V13.25H20z"/></svg>
                     </div>
                     <div class="download-platform">Windows</div>
-                    <div class="download-desc">适用于 Windows 10 及以上</div>
-                    <q-btn unelevated color="primary" class="download-btn" icon="download" label="下载 .exe" :disable="!downloadUrls.windows" @click="downloadFile(downloadUrls.windows)" />
+                    <div class="download-desc">Applicable to Windows 10 and above</div>
+                    <q-btn unelevated color="primary" class="download-btn" icon="download" label="Download .exe" :disable="!downloadUrls.windows" @click="downloadFile(downloadUrls.windows)" />
                 </div>
 
                 <div class="download-card">
@@ -229,8 +229,8 @@
                         <q-icon name="android" size="36px" color="white" />
                     </div>
                     <div class="download-platform">Android</div>
-                    <div class="download-desc">适用于 Android 7.0 及以上</div>
-                    <q-btn unelevated color="positive" class="download-btn" icon="download" label="下载 .apk" :disable="!downloadUrls.apk" @click="downloadFile(downloadUrls.apk)" />
+                    <div class="download-desc">Applicable to Android 7.0 and above</div>
+                    <q-btn unelevated color="positive" class="download-btn" icon="download" label="Download .apk" :disable="!downloadUrls.apk" @click="downloadFile(downloadUrls.apk)" />
                 </div>
 
                 <div class="download-card ios-unavailable">
@@ -239,10 +239,10 @@
                     </div>
                     <div class="download-platform">
                         iOS
-                        <q-badge color="orange" label="暂不支持" class="q-ml-xs" style="vertical-align: middle" />
+                        <q-badge color="orange" label="Not supported yet" class="q-ml-xs" style="vertical-align: middle" />
                     </div>
                     <div class="download-desc">iPhone / iPad</div>
-                    <q-btn unelevated color="grey-5" class="download-btn" icon="info" label="使用说明" @click="showIosDialog = true" />
+                    <q-btn unelevated color="grey-5" class="download-btn" icon="info" label="Instructions for use" @click="showIosDialog = true" />
                 </div>
 
                 <div class="download-card ios-unavailable">
@@ -251,10 +251,10 @@
                     </div>
                     <div class="download-platform">
                         macOS
-                        <q-badge color="orange" label="暂不支持" class="q-ml-xs" style="vertical-align: middle" />
+                        <q-badge color="orange" label="Not supported yet" class="q-ml-xs" style="vertical-align: middle" />
                     </div>
-                    <div class="download-desc">请使用浏览器访问网页版</div>
-                    <q-btn unelevated color="grey-5" class="download-btn" icon="language" label="打开网页" @click="openWebVersion" />
+                    <div class="download-desc">Please use your browser to access the web version</div>
+                    <q-btn unelevated color="grey-5" class="download-btn" icon="language" label="Open web page" @click="openWebVersion" />
                 </div>
             </div>
         </section> -->
@@ -262,80 +262,80 @@
         <!-- Footer -->
         <!-- <footer class="footer">
             <div class="footer-content">
-                <div class="text-subtitle2">云密 - 只为安全而生</div>
+                <div class="text-subtitle2">Yunmi - Just for safety</div>
                 <div class="text-caption text-grey q-mt-sm">
-                    基于端到端加密与零信任架构设计，确保所有数据仅存在于用户设备中
+                    Designed based on end-to-end encryption and zero-trust architecture，Ensure all data exists only on user devices
                 </div>
             </div>
         </footer> -->
 
-        <!-- iOS 使用说明弹窗 -->
+        <!-- iOS user guide pop-up window -->
         <!-- <q-dialog v-model="showIosDialog">
             <q-card style="min-width: 320px; max-width: 420px">
                 <q-card-section class="row items-center q-pb-none">
-                    <div class="text-h6">iOS 使用方式</div>
+                    <div class="text-h6">iOS Usage</div>
                     <q-space />
                     <q-btn icon="close" flat round dense v-close-popup />
                 </q-card-section>
                 <q-card-section>
                     <div class="text-body2 text-grey q-mb-md">
-                        云密目前暂不提供 iOS 原生应用，但您可以通过 Safari 浏览器将网页版添加到主屏幕，获得接近原生应用的体验。
+                        Yunmi is currently not available iOS native application，But you can pass Safari Browser adds web version to home screen，Get an experience close to native apps。
                     </div>
                     <div class="ios-steps">
                         <div class="ios-step">
                             <div class="ios-step-num">1</div>
                             <div>
-                                <div class="ios-step-title">用 Safari 打开网站</div>
-                                <div class="ios-step-desc text-grey">请确保使用 <strong>Safari</strong> 浏览器，其他浏览器不支持此功能</div>
+                                <div class="ios-step-title">use Safari Open website</div>
+                                <div class="ios-step-desc text-grey">Please make sure to use <strong>Safari</strong> Browser，Other browsers do not support this feature</div>
                             </div>
                         </div>
                         <div class="ios-step">
                             <div class="ios-step-num">2</div>
                             <div>
-                                <div class="ios-step-title">点击底部分享按钮</div>
-                                <div class="ios-step-desc text-grey">点击 Safari 底部工具栏中间的 <strong>分享</strong> 图标（方框加箭头）</div>
+                                <div class="ios-step-title">Click the share button at the bottom</div>
+                                <div class="ios-step-desc text-grey">Click Safari in the middle of the bottom toolbar <strong>Share</strong> icon（box with arrow）</div>
                             </div>
                         </div>
                         <div class="ios-step">
                             <div class="ios-step-num">3</div>
                             <div>
-                                <div class="ios-step-title">添加到主屏幕</div>
-                                <div class="ios-step-desc text-grey">在弹出菜单中向下滚动，选择 <strong>添加到主屏幕</strong>，然后点击右上角"添加"</div>
+                                <div class="ios-step-title">Add to home screen</div>
+                                <div class="ios-step-desc text-grey">Scroll down in the popup menu，Choose <strong>Add to home screen</strong>，Then click on the upper right corner"add"</div>
                             </div>
                         </div>
                     </div>
                     <q-banner dense rounded class="bg-orange-1 text-orange-9 q-mt-md" style="font-size: 13px">
                         <template #avatar><q-icon name="info" /></template>
-                        添加后可从主屏幕直接打开，支持全屏显示，体验更接近原生 App
+                        Once added, it can be opened directly from the home screen，Support full screen display，Experience closer to native App
                     </q-banner>
                 </q-card-section>
                 <q-card-actions align="right">
-                    <q-btn flat label="知道了" color="primary" v-close-popup />
+                    <q-btn flat label="Got it" color="primary" v-close-popup />
                 </q-card-actions>
             </q-card>
         </q-dialog> -->
 
-        <!-- 获取邀请码对话框 -->
+        <!-- Get invitation code dialog box -->
         <q-dialog v-model="showInviteDialog">
             <q-card style="min-width: 320px">
                 <q-card-section>
-                    <div class="text-h6">获取邀请码</div>
+                    <div class="text-h6">Get invitation code</div>
                     <div class="text-body2 text-grey q-mb-md">
-                        云密采用邀请制注册，请从已有用户处获取邀请链接。
+                        Yunmi adopts invitation-based registration，Please get the invitation link from an existing user。
                     </div>
                     <div class="text-caption text-grey q-mb-md">
-                        已有账号？
+                        Already have an account？
                         <q-btn
                             flat
                             dense
                             color="primary"
-                            label="恢复身份"
+                            label="restore identity"
                             @click="goToInit"
                         />
                     </div>
                 </q-card-section>
                 <q-card-actions align="right">
-                    <q-btn flat label="关闭" v-close-popup />
+                    <q-btn flat label="close" v-close-popup />
                 </q-card-actions>
             </q-card>
         </q-dialog>
@@ -368,7 +368,7 @@ function downloadFile(url) {
 }
 
 onMounted(async () => {
-    // 已登录用户自动跳转到聊天页面，无需手动点击"进入"
+    // Logged-in users automatically jump to the chat page without manually clicking "Enter"
     if (identity.isReady) {
         router.replace("/chats");
     }
@@ -650,7 +650,7 @@ function goToChats() {
     border-radius: 8px;
 }
 
-/* iOS 步骤样式 */
+/* iOS step styles */
 .ios-steps {
     display: flex;
     flex-direction: column;

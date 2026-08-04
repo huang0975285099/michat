@@ -20,11 +20,11 @@ export const useFistStore = defineStore('fist', () => {
       todayMax.value = data.today_max
       todayEarned.value = data.today_earned
     } catch {
-      // 静默失败，不阻塞游戏
+      // Fail silently, without blocking the game
     }
   }
 
-  // 返回 { todayWins, todayMax, balance } 供结果页展示，达限或出错返回 null
+  // Return { todayWins, todayMax, balance } for display on the results page, return null if the limit is reached or an error occurs.
   async function claimPvEReward() {
     try {
       const { data } = await fistApi.claimPvEReward()
@@ -41,12 +41,12 @@ export const useFistStore = defineStore('fist', () => {
         bonusAmount: data.bonus_amount,
       }
     } catch (e) {
-      // 429 = 今日已达 10 次上限，静默忽略
+      // 429 = The limit of 10 times has been reached today, silently ignore
       return null
     }
   }
 
-  // 分页加载流水，reset=true 从头加载
+  // Paging loading flow, reset=true to load from scratch
   async function fetchTransactions(reset = false) {
     if (!reset && !txHasMore.value) return
     const beforeId = reset ? undefined : transactions.value.at(-1)?.id
@@ -56,7 +56,7 @@ export const useFistStore = defineStore('fist', () => {
       transactions.value = reset ? list : [...transactions.value, ...list]
       txHasMore.value = list.length === 20
     } catch {
-      // 静默失败
+      // Silently fails
     }
   }
 

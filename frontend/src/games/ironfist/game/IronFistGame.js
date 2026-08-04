@@ -1,6 +1,6 @@
-// 铁拳 - 游戏核心引擎（状态机 + 结算编排，渲染无关）
-// 渲染层/UI 通过 on(event, cb) 订阅事件驱动动画，不直接读内部状态。
-// 见 docs/ironfist.md 第十三/十五节（逻辑与渲染解耦）
+// Tekken - the core engine of the game (state machine + settlement arrangement, rendering independent)
+// The rendering layer/UI subscribes to event-driven animation through on(event, cb) and does not directly read the internal state.
+// See docs/ironfist.md Section 13/15 (Decoupling logic and rendering)
 
 import { PHASE, ACTION, ACTIONS, MAX_ROUNDS, OPPONENT_GRACE_MS, RECONNECT_WINDOW_MS, LS_PENDING_KEY, LS_ROUND_KEY } from './GameConstants.js'
 import { resolveRound, initialState } from './resolve.js'
@@ -11,9 +11,9 @@ export class IronFistGame {
   /**
    * @param {object} opts
    * @param {'pve'|'pvp'} opts.mode
-   * @param {object} [opts.net]  PvP 网络层（GameNet 实例），需有 on/send
-   * @param {string} [opts.roomId]  PvP 房间 ID（用于 localStorage 持久化本回合动作）
-   * @param {string} [opts.myChatId]  PvP 自己的 chat_id（用于重放时区分双方动作）
+   * @param {object} [opts.net] PvP network layer (GameNet instance), requires on/send
+   * @param {string} [opts.roomId] PvP room ID (used for localStorage to persist actions of this round)
+   * @param {string} [opts.myChatId] PvP’s own chat_id (used to distinguish the actions of both parties during replay)
    */
   constructor({ mode = 'pve', net = null, roomId = null, myChatId = null } = {}) {
     this.mode = mode
@@ -28,13 +28,13 @@ export class IronFistGame {
     this._myAction = null
     this._oppAction = null
     this._aiHistory = { consecutiveChargeInterrupted: 0 }
-    this._counterSuccesses = 0 // 本场反击成功次数（用于「反击大师」成就）
-    this._pendingOppByRound = new Map() // PvP: 提前到达的对方动作按 round 暂存
+    this._counterSuccesses = 0 //The number of successful counterattacks in this game (used for the "Counterattack Master" achievement)
+    this._pendingOppByRound = new Map() //PvP: The opponent's actions that arrive early are temporarily saved by round.
     this._listeners = {}
     this._disposed = false
-    this._graceTimer = null             // PvP: 已出招后等待对方动作的宽限计时器
-    this._reconnectTimer = null         // PvP: 对方掉线后等待重连的计时器（60s）
-    this._roundStartedAt = 0            // 本回合 DECIDING 起始时间戳（本端时钟），用于倒计时锚定与重连恢复
+    this._graceTimer = null             //PvP: Grace timer to wait for the opponent's action after making a move
+    this._reconnectTimer = null         //PvP: timer to wait for reconnection after the opponent disconnects (60s)
+    this._roundStartedAt = 0            //This round’s DECIDING start timestamp (local clock), used for countdown anchoring and reconnection recovery
 
     if (this.mode === 'pve') this._opponentName = 'AI'
 
@@ -45,13 +45,13 @@ export class IronFistGame {
         if (this.phase === PHASE.GAME_OVER) return
         this._clearGrace()
         this._clearReconnectTimer()
-        this._setPhase(PHASE.GAME_OVER) // 停止本地倒计时/selectAction，避免对局结束后仍可操作
+        this._setPhase(PHASE.GAME_OVER) //Stop the local countdown/selectAction to avoid being able to operate after the game is over
         this._emit('gameover', 'win')
       })
     }
   }
 
-  // ── 事件 ────────────────────────────────────────────────────────────────
+  // ──Events────────────────────────────────────────────────────────
   on(event, cb) {
     (this._listeners[event] ||= []).push(cb)
     return () => {
@@ -68,7 +68,7 @@ export class IronFistGame {
     this._emit('phase', phase)
   }
 
-  // ── 流程 ────────────────────────────────────────────────────────────────
+  // ──Process ──────────────────────────────────────────────────────────
   start() {
     this._startRound()
   }
@@ -78,14 +78,14 @@ export class IronFistGame {
     this.round += 1
     this._myAction = null
     this._oppAction = null
-    // 锚定本回合 DECIDING 起始时刻（本端时钟）。此处是回合真正开始，记新时间戳并持久化，
-    // 以便本端刷新重连后据此恢复倒计时，而非拿到全新 30s。
+    // Anchor the DECIDING start time of this round (local clock). This is where the round actually starts, a new timestamp is recorded and persisted,
+    // This is so that the countdown can be resumed after the local client refreshes and reconnects, instead of getting a new 30s.
     this._markRoundStart(Date.now())
     this._setPhase(PHASE.ROUND_START)
     this._emit('round-start', { round: this.round, state: { ...this.state }, startedAt: this._roundStartedAt })
     this._setPhase(PHASE.DECIDING)
 
-    // PvP：若对方动作已提前到达，立即取用
+    // PvP: If the opponent's action has arrived in advance, take it immediately
     const buffered = this._pendingOppByRound.get(this.round)
     if (buffered) {
       this._pendingOppByRound.delete(this.round)
@@ -93,14 +93,14 @@ export class IronFistGame {
     }
   }
 
-  /** 本地玩家选择动作（DECIDING 阶段有效）。超时由 UI 调用 selectAction('defend')。 */
+  /** Local player selects actions (valid during DECIDING phase). The timeout is determined by the UI calling selectAction('defend'). */
   selectAction(action) {
     if (this.phase !== PHASE.DECIDING || this._myAction || !ACTIONS.includes(action)) return
     this._myAction = action
     this._emit('locked', { side: 'player', action })
 
     if (this.mode === 'pvp' && this.net) {
-      // 持久化本回合动作（用于刷新重连后续传，详见 docs 第十四节方案 B）
+      // Persist the actions of this round (used for refreshing, reconnecting and subsequent uploads, see docs Section 14 Plan B for details)
       if (this.roomId) {
         try {
           localStorage.setItem(LS_PENDING_KEY(this.roomId), JSON.stringify({
@@ -108,11 +108,11 @@ export class IronFistGame {
             action,
             ts: Date.now(),
           }))
-        } catch { /* localStorage 不可用时降级：仅依赖服务端 action 流 */ }
+        } catch { /* Downgrade when localStorage is unavailable: rely only on server-side action flow */ }
       }
       this.net.send('ironfist_action', { round: this.round, action, ts: Date.now() })
     } else if (this.mode === 'pve') {
-      // AI 即时决策（模拟同时选择）
+      // AI instant decision-making (simulating simultaneous choices)
       this._oppAction = aiDecide(
         { hp: this.state.opponentHP, charged: this.state.opponentCharged },
         { hp: this.state.playerHP, charged: this.state.playerCharged },
@@ -123,14 +123,14 @@ export class IronFistGame {
     if (this._oppAction) {
       this._resolve()
     } else {
-      this._setPhase(PHASE.LOCKED) // 等待对方（PvP）
+      this._setPhase(PHASE.LOCKED) //Wait for each other (PvP)
       if (this.mode === 'pvp') this._startGrace()
     }
   }
 
-  // PvP：本地已出招后，若对方在宽限期内仍未送达动作，视为掉线，
-  // 进入 WAITING_RECONNECT 等待重连（60s），而非直接中断对局。
-  // PVP 一旦开始就必须有结果，60s 内未重连 → 判对方负（己方 win）。
+  // PvP: After a move has been made locally, if the other party has not delivered the move within the grace period, it will be deemed to be offline.
+  // Enter WAITING_RECONNECT to wait for reconnection (60s) instead of directly interrupting the game.
+  // Once PVP starts, there must be a result. If there is no reconnection within 60 seconds → the opponent will be judged as a loser (your side wins).
   _startGrace() {
     this._clearGrace()
     this._graceTimer = setTimeout(() => {
@@ -145,14 +145,14 @@ export class IronFistGame {
     if (this._graceTimer) { clearTimeout(this._graceTimer); this._graceTimer = null }
   }
 
-  // 60s 重连窗口：对方未重连 → 判对方负（己方 win）。
-  // 期间不允许"放弃等待认输"，必须等满窗口或对方重连（PVP 一定要有结果）。
+  // 60s reconnection window: The other party does not reconnect → the other party loses (our side wins).
+  // During this period, "giving up and waiting to admit defeat" is not allowed. You must wait for the window to be full or the other party to reconnect (PVP must have a result).
   _startReconnectWait() {
     this._clearReconnectTimer()
     this._reconnectTimer = setTimeout(() => {
       if (this._disposed || this.phase !== PHASE.WAITING_RECONNECT) return
       this._setPhase(PHASE.GAME_OVER)
-      this._emit('gameover', 'win') // 对方判负
+      this._emit('gameover', 'win') //The opponent loses
     }, RECONNECT_WINDOW_MS)
   }
 
@@ -162,59 +162,59 @@ export class IronFistGame {
 
   _onNetAction(payload) {
     if (this._disposed) return
-    // 对局已结束：丢弃任何后续动作，避免重结算翻转已定结果
-    // （60s 重连窗口超时判负后，对方延迟重连补发动作会在此被拦截）
+    // The game is over: discard any subsequent actions to avoid re-settlement and overturning the determined result.
+    // (After the 60s reconnection window times out and is judged as a loss, the opponent’s delayed reconnection reissue action will be intercepted here)
     if (this.phase === PHASE.GAME_OVER) return
     const { round, action } = payload
     if (!Number.isInteger(round) || round < 1 || round > MAX_ROUNDS) return
     if (!ACTIONS.includes(action)) return
 
-    // 收到对方任何消息 = 对方已重连（如果在 WAITING_RECONNECT）
+    // Received any message from the other party = The other party has reconnected (if in WAITING_RECONNECT)
     if (this.phase === PHASE.WAITING_RECONNECT) {
       this._clearReconnectTimer()
       this._clearGrace()
     }
 
-    // 丢弃过期/异常未来动作，避免 _pendingOppByRound 无界增长（内存泄漏修复）
+    // Discard expired/abnormal future actions to avoid unbounded growth of _pendingOppByRound (memory leak fix)
     if (round < this.round) return
     if (round > this.round + 1) return
 
     if (round !== this.round) {
-      // 提前到达的下一回合动作，暂存
+      // The actions of the next round that arrive early are temporarily stored.
       this._pendingOppByRound.set(round, action)
       return
     }
-    // 每方每回合的第一条合法动作即锁定。后端也执行原子幂等校验；此处是纵深防护，
-    // 避免旧服务端或异常重放允许同回合后发消息覆盖已经收到的动作。
+    // Each side's first legal action of each round is locked. The backend also performs atomic idempotent checks; this is defense in depth,
+    // Avoiding old server or abnormal replay allows messages sent later in the same round to overwrite already received actions.
     if (this._oppAction) return
     this._oppAction = action
     if (this._myAction) {
       this._resolve()
     } else {
-      // 对方已选，我还没选 → 回到 DECIDING 让本端继续选。
-      // 携带已锚定的本回合起始时间，避免 UI 把倒计时重置为全新 30s（对手先出招时尤甚）。
+      // The other party has chosen, but I haven’t chosen yet → Return to DECIDING and let me continue to choose.
+      // Carry an anchored start time of the round to avoid the UI resetting the countdown to a new 30s (especially if the opponent moves first).
       this._setPhase(PHASE.DECIDING)
       this._emit('round-resume', { round: this.round, startedAt: this._roundStartedAt })
     }
   }
 
   /**
-   * 收到服务端返回的 ironfist_replay（自己发起 ironfist_reconnect 后）。
-   * 用 replayGame 重放出当前状态，恢复到中断回合。
+   * Receive ironfist_replay returned from the server (after initiating ironfist_reconnect yourself).
+   * Use replayGame to replay the current state and return to the interrupted round.
    */
   _onReplay(payload) {
     if (this._disposed) return
     const { actions } = payload
     if (!this.myChatId) {
-      console.warn('[IronFistGame] loadReplay 需要 myChatId 才能区分双方动作')
+      console.warn('[IronFistGame] loadReplay need myChatId To distinguish the actions of both parties')
       return
     }
     this.loadReplay(actions, this.myChatId)
   }
 
   /**
-   * 从 action 历史重放并恢复状态。供 _onReplay 内部调用，也可由外部主动调用。
-   * 详见 docs/ironfist.md 第十四节方案 B。
+   * Replay and restore state from action history. For _onReplay to be called internally or actively called externally.
+   * See docs/ironfist.md for details, Section 14 Plan B.
    */
   loadReplay(actionLog, myChatId) {
     this._clearGrace()
@@ -227,13 +227,13 @@ export class IronFistGame {
     } = replayGame(actionLog, myChatId)
 
     this.state = state
-    // 恢复回合级派生数据：重放已完成回合时重算反击成功数与逐回合历史，
-    // 否则重连后 _counterSuccesses 归零（漏判「反击大师」成就）、UI moveHistory 缺失。
+    // Restore turn-level derived data: recalculate the number of counterattack successes and turn-by-turn history when replaying a completed turn,
+    // Otherwise, _counterSuccesses will be reset to zero after reconnection (the "Counterattack Master" achievement will be missed), and UI moveHistory will be missing.
     this._counterSuccesses = counterSuccesses
     if (history.length) this._emit('replay-history', history)
 
     if (lastResult?.gameResult) {
-      // 重放过程中游戏已结束（最后一回合结算出胜负）
+      // The game has ended during replay (the winner is determined in the last round)
       this.lastResult = lastResult
       this.round = completedRounds
       this._setPhase(PHASE.GAME_OVER)
@@ -243,13 +243,13 @@ export class IronFistGame {
     }
 
     if (pendingRound != null) {
-      // 本回合进行中（双方动作未齐）
+      // This round is in progress (both sides have not completed their actions)
       this.round = pendingRound
       this._myAction = pendingPlayerAction
       this._oppAction = pendingOpponentAction
 
-      // localStorage 兜底：若服务端没收到我本回合动作（掉线前没发出去），
-      // 从本地恢复（重发统一由下面的通知逻辑处理，避免重复发送）
+      // localStorage: If the server does not receive my action this round (it did not send it out before going offline),
+      // Recover from local (resends are handled by the notification logic below to avoid repeated sending)
       if (!this._myAction && this.roomId) {
         try {
           const saved = JSON.parse(localStorage.getItem(LS_PENDING_KEY(this.roomId)) || 'null')
@@ -259,32 +259,32 @@ export class IronFistGame {
         } catch { /* ignore */ }
       }
 
-      // 重连恢复后通知对方：重发本回合已选动作，让对方从 WAITING_RECONNECT 恢复。
-      // 否则对方仍在 WAITING_RECONNECT，收到后续 round 动作只暂存不恢复，形成死锁。
+      // After the reconnection is restored, notify the opponent: Resend the selected actions of this round and let the opponent recover from WAITING_RECONNECT.
+      // Otherwise, the other party is still in WAITING_RECONNECT and will only temporarily store and not restore the subsequent round action, resulting in a deadlock.
       if (this._myAction && this.mode === 'pvp' && this.net) {
         this.net.send('ironfist_action', { round: this.round, action: this._myAction, ts: Date.now() })
       }
 
       if (this._myAction && this._oppAction) {
-        // 双方都已选（极端：双方都掉线但服务端有两边动作），直接结算
+        // Both parties have chosen (extreme: both parties are offline but the server has actions on both sides), direct settlement
         this._resolve()
       } else if (this._myAction) {
-        // 我已选，等对方
+        // I have chosen, waiting for the other party
         this._setPhase(PHASE.LOCKED)
         this._emit('locked', { side: 'player', action: this._myAction })
-        // 对方可能也掉线了，启动 grace
+        // The other party may also be offline, activate grace
         if (this.mode === 'pvp') this._startGrace()
       } else {
-        // 对方已选等我 / 都未选 → 进入决策。
-        // 该回合在刷新前已开始：恢复持久化的起始时间戳，倒计时按真实已耗时续算，
-        // 不发新 30s（取不到则回退为 now）。
+        // The other party has chosen to wait for me/no one has chosen → Enter decision-making.
+        // The round has started before refreshing: the persistence starting timestamp is restored, and the countdown is continued based on the actual elapsed time.
+        // No new information will be issued for 30s (if it cannot be retrieved, it will fall back to now).
         const startedAt = this._restoreRoundStart(this.round)
         this._setPhase(PHASE.DECIDING)
         this._emit('round-start', { round: this.round, state: { ...this.state }, startedAt })
       }
     } else {
-      // 没有进行中的 round，所有已选动作都已结算，开始下一 round
-      // 先对齐 round 计数器（completedRounds 是最后结算的 round 号）
+      // There is no round in progress, all selected actions have been resolved, and the next round begins
+      // Align the round counter first (completedRounds is the last settled round number)
       this.round = completedRounds
       this._myAction = null
       this._oppAction = null
@@ -293,8 +293,8 @@ export class IronFistGame {
   }
 
   /**
-   * 主动请求重连（页面挂载时检测到未完成对局调用）。
-   * 服务端返回 ironfist_replay 后由 _onReplay 处理。
+   * Actively request reconnection (uncompleted game call detected when the page is mounted).
+   * The server returns ironfist_replay and is processed by _onReplay.
    */
   requestReconnect() {
     if (this.mode !== 'pvp' || !this.net) return
@@ -310,18 +310,18 @@ export class IronFistGame {
     const oppAction = this._oppAction
     const result = resolveRound(myAction, oppAction, this.state)
 
-    // PvE：追踪 AI 蓄力被打断历史
+    // PvE: Tracking AI charge interruption history
     if (this.mode === 'pve') {
       const aiInterrupted = oppAction === ACTION.CHARGE && result.opponentDmg > 0
       trackAiHistory(this._aiHistory, oppAction, aiInterrupted)
     }
 
-    // 追踪本方反击成功（counter vs attack = 反击命中），用于「反击大师」成就
+    // Track the success of your own counterattack (counter vs attack = counterattack hit), used for the "Counterattack Master" achievement
     if (myAction === ACTION.COUNTER && oppAction === ACTION.ATTACK) {
       this._counterSuccesses += 1
     }
 
-    // 提交新状态
+    // Submit new status
     this.state = {
       playerHP: result.playerHP,
       opponentHP: result.opponentHP,
@@ -338,7 +338,7 @@ export class IronFistGame {
     this._setPhase(PHASE.WAITING_CONFIRM)
   }
 
-  /** 玩家点击「下一回合」，或 confirm 超时自动调用。 */
+  /** The player clicks "Next Round", or confirm is called automatically after timeout. */
   confirmNextRound() {
     if (this.phase !== PHASE.WAITING_CONFIRM) return
     if (this.lastResult?.gameResult) {
@@ -351,9 +351,9 @@ export class IronFistGame {
   }
 
   /**
-   * 返回本场对局摘要（供上报战绩与成就判定用）。
-   * 不含 result：result 由 gameover 事件回调参数提供（认输/超时判负等场景下
-   * lastResult.gameResult 不可靠）。
+   * Return to the game summary (for reporting results and achievement determination).
+   * Excludes result: result is provided by the gameover event callback parameter (in scenarios such as admitting defeat/timeout judgment, etc.
+   * lastResult.gameResult is unreliable).
    */
   getMatchSummary() {
     return {
@@ -372,7 +372,7 @@ export class IronFistGame {
     this._emit('gameover', 'lose')
   }
 
-  /** 清理 localStorage 中本房间的 pending action（对局结束/认输时调用）。 */
+  /** Clean up the pending action of this room in localStorage (called when the game ends/admits defeat). */
   _clearPendingAction() {
     if (!this.roomId) return
     try {
@@ -381,19 +381,19 @@ export class IronFistGame {
     } catch { /* ignore */ }
   }
 
-  /** 记录本回合 DECIDING 起始时间戳，并持久化（PvP）以支撑刷新重连后的倒计时恢复。 */
+  /** Record the DECIDING start timestamp of this round and persist it (PvP) to support countdown recovery after refresh and reconnection. */
   _markRoundStart(ts) {
     this._roundStartedAt = ts
     if (this.mode !== 'pvp' || !this.roomId) return
     try {
       localStorage.setItem(LS_ROUND_KEY(this.roomId), JSON.stringify({ round: this.round, ts }))
-    } catch { /* localStorage 不可用时降级：重连回退为全新倒计时 */ }
+    } catch { /* Downgrade when localStorage is unavailable: reconnect and fall back to a new countdown */ }
   }
 
   /**
-   * 读取持久化的本回合起始时间戳。仅当存储的 round 与目标 round 一致时有效，
-   * 用于刷新重连恢复"进行中回合"的倒计时（本端同一时钟，无跨端时钟漂移）。
-   * 取不到则返回 now，使重连方退回为全新倒计时（不优于但不会更糟）。
+   * Read the persistent start timestamp of this round. Valid only if the stored round is consistent with the target round,
+   * Used to refresh the countdown for reconnection recovery "round in progress" (the local end has the same clock, no cross-end clock drift).
+   * If it cannot be obtained, it will return to now, so that the reconnecting party will return to a new countdown (not better but not worse).
    */
   _restoreRoundStart(round) {
     if (this.roomId) {

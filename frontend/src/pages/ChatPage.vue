@@ -1,6 +1,6 @@
 <template>
   <q-page ref="pageEl" class="column">
-    <!-- 顶部好友信息 -->
+    <!-- Top friend information -->
     <div class="row items-center q-pa-sm q-gutter-sm bg-grey-2">
       <deterministic-avatar :seed="friendChatId" :size="32" />
       <div class="col">
@@ -8,35 +8,35 @@
         
       </div>
       <q-icon name="circle" :color="friendOnline ? 'positive' : 'grey-4'" size="12px">
-        <q-tooltip>{{ friendOnline ? '在线' : '离线' }}</q-tooltip>
+        <q-tooltip>{{ friendOnline ? 'online' : 'Offline' }}</q-tooltip>
       </q-icon>
       <q-btn
         flat round dense icon="call" color="grey-7"
         :disable="callStore.state !== 'idle'"
         @click="callStore.startCall(friendChatId, friendNickname, 'audio')"
       >
-        <q-tooltip>语音通话</q-tooltip>
+        <q-tooltip>voice call</q-tooltip>
       </q-btn>
       <q-btn
         flat round dense icon="videocam" color="grey-7"
         :disable="callStore.state !== 'idle'"
         @click="callStore.startCall(friendChatId, friendNickname, 'video')"
       >
-        <q-tooltip>视频通话</q-tooltip>
+        <q-tooltip>video call</q-tooltip>
       </q-btn>
       <!-- <q-btn flat round dense icon="more_vert">
         <q-menu anchor="bottom right" self="top right">
           <q-list dense style="min-width: 140px">
             <q-item clickable v-close-popup @click="clearHistory" class="text-negative items-center q-gutter-xs">
               <q-icon name="delete_sweep" size="sm" />
-              <span>清空聊天记录</span>
+              <span>Clear chat history</span>
             </q-item>
           </q-list>
         </q-menu>
       </q-btn> -->
     </div>
 
-    <!-- 消息列表（虚拟滚动：仅渲染视口内的消息，长历史也保持流畅） -->
+    <!-- Message list (virtual scrolling: only render messages within the viewport, long history remains smooth) -->
     <q-virtual-scroll
       ref="virtualScrollEl"
       :items="messages"
@@ -51,12 +51,12 @@
         :class="msg.mine ? 'justify-end' : 'justify-start'"
         :style="{ paddingTop: shouldCompact(messages, idx) ? '2px' : '8px' }"
       >
-        <!-- 对方消息：头像在左 -->
+        <!-- Message from the other party: The avatar is on the left -->
         <template v-if="!msg.mine">
           <deterministic-avatar v-if="!shouldCompact(messages, idx)" :seed="friendChatId" :size="28" class="avatar-side q-mr-xs" />
           <div v-else class="avatar-placeholder" />
           <div class="q-pa-sm bubble-theirs" :class="{ 'bubble-burn': msg.burnAfterRead }">
-            <!-- 文件消息 -->
+            <!-- file message -->
             <template v-if="msg.type === 'file'">
               <img v-if="isMsgImage(msg) && msg.objectUrl" :src="msg.objectUrl" class="file-img" @click="imagePreview = { show: true, url: msg.objectUrl }" />
               <video v-else-if="isMsgVideo(msg) && msg.objectUrl" :src="msg.objectUrl" controls class="file-video" />
@@ -67,10 +67,10 @@
                   <div class="file-size">{{ formatFileSize(msg.filesize) }}</div>
                 </div>
                 <a v-if="msg.objectUrl" :href="msg.objectUrl" :download="msg.filename" class="file-dl" @click.stop>⬇️</a>
-                <span v-else class="file-expired">已过期</span>
+                <span v-else class="file-expired">Expired</span>
               </div>
             </template>
-            <!-- 普通文字消息 -->
+            <!-- Ordinary text message -->
             <template v-else>
               <div>{{ msg.text }}</div>
             </template>
@@ -78,28 +78,28 @@
               <span>{{ formatTime(msg.ts) }}</span>
               <q-icon v-if="msg.burnAfterRead" name="local_fire_department" size="14px" color="orange">
                 <q-tooltip v-if="msg.burnAt">{{ formatBurnCountdown(msg.burnAt) }}</q-tooltip>
-                <q-tooltip v-else>阅读后2小时自动删除</q-tooltip>
+                <q-tooltip v-else>After reading2Automatically delete after hours</q-tooltip>
               </q-icon>
             </div>
             <!-- <q-menu context-menu v-if="msg.type !== 'file'">
               <q-list dense style="min-width: 100px">
                 <q-item v-if="canRecall(msg)" clickable v-close-popup @click="recall(msg)" class="text-negative items-center q-gutter-xs">
                   <q-icon name="undo" size="sm" />
-                  <span>双方删除</span>
+                  <span>Delete both sides</span>
                 </q-item>
                 <q-item v-else clickable v-close-popup @click="deleteMsg(msg)" class="text-negative items-center q-gutter-xs">
                   <q-icon name="delete" size="sm" />
-                  <span>为我删除</span>
+                  <span>Delete for me</span>
                 </q-item>
               </q-list>
             </q-menu> -->
           </div>
         </template>
 
-        <!-- 我的消息：头像在右 -->
+        <!-- My message: Avatar is on the right -->
         <template v-else>
           <div class="q-pa-sm bubble-mine" :class="{ 'bubble-burn': msg.burnAfterRead }">
-            <!-- 文件消息 -->
+            <!-- file message -->
             <template v-if="msg.type === 'file'">
               <img v-if="isMsgImage(msg) && msg.objectUrl" :src="msg.objectUrl" class="file-img" @click="imagePreview = { show: true, url: msg.objectUrl }" />
               <video v-else-if="isMsgVideo(msg) && msg.objectUrl" :src="msg.objectUrl" controls class="file-video" />
@@ -110,10 +110,10 @@
                   <div class="file-size">{{ formatFileSize(msg.filesize) }}</div>
                 </div>
                 <a v-if="msg.objectUrl" :href="msg.objectUrl" :download="msg.filename" class="file-dl" @click.stop>⬇️</a>
-                <span v-else class="file-expired">已过期</span>
+                <span v-else class="file-expired">Expired</span>
               </div>
             </template>
-            <!-- 普通文字消息 -->
+            <!-- Ordinary text message -->
             <template v-else>
               <div>{{ msg.text }}</div>
             </template>
@@ -121,32 +121,32 @@
               <span>{{ formatTime(msg.ts) }}</span>
               <div>
                 <q-icon v-if="msg.status === 'pending'" name="schedule" size="13px">
-                  <q-tooltip>正在发送</q-tooltip>
+                  <q-tooltip>Sending</q-tooltip>
                 </q-icon>
                 <q-icon v-else-if="msg.status === 'failed'" name="error_outline" size="14px" color="negative">
-                  <q-tooltip>服务器未确认，请检查网络后重发</q-tooltip>
+                  <q-tooltip>Server not confirmed，Please check the network and try again</q-tooltip>
                 </q-icon>
                 <template v-else>
                   <span v-if="msg.read" class="read-status">✔✔</span>
                   <span v-else class="read-status">✔</span>
-                  <q-tooltip v-if="msg.read">对方已读</q-tooltip>
-                  <q-tooltip v-else>服务器已接收，对方未读</q-tooltip>
+                  <q-tooltip v-if="msg.read">The other party has read</q-tooltip>
+                  <q-tooltip v-else>Server has received，The other party has not read</q-tooltip>
                 </template>
               </div>
               <q-icon v-if="msg.burnAfterRead" name="local_fire_department" size="14px" color="orange">
                 <q-tooltip v-if="msg.burnAt">{{ formatBurnCountdown(msg.burnAt) }}</q-tooltip>
-                <q-tooltip v-else>对方未读：对方阅读后2小时自动删除</q-tooltip>
+                <q-tooltip v-else>The other party has not read：After the other party reads2Automatically delete after hours</q-tooltip>
               </q-icon>
             </div>
             <q-menu v-if="msg.status !== 'pending'" context-menu>
               <q-list dense style="min-width: 100px">
                 <q-item v-if="canRecall(msg)" clickable v-close-popup @click="recall(msg)" class="text-negative items-center q-gutter-xs">
                   <q-icon name="undo" size="sm" />
-                  <span>双方删除</span>
+                  <span>Delete both sides</span>
                 </q-item>
                 <q-item v-else clickable v-close-popup @click="deleteMsg(msg)" class="text-negative items-center q-gutter-xs">
                   <q-icon name="delete" size="sm" />
-                  <span>为我删除</span>
+                  <span>Delete for me</span>
                 </q-item>
               </q-list>
             </q-menu>
@@ -157,7 +157,7 @@
       </div>
     </q-virtual-scroll>
 
-    <!-- 文件传输进度条（有进行中的传输时显示） -->
+    <!-- File transfer progress bar (displayed when there is a transfer in progress) -->
     <div v-if="activeTransfer" class="q-px-md q-py-xs bg-blue-1 row items-center q-gutter-sm" style="border-top: 1px solid #bbdefb">
       <q-icon name="attach_file" color="primary" size="18px" />
       <div class="col">
@@ -170,15 +170,15 @@
         />
       </div>
       <span class="text-caption text-grey-7">
-        {{ activeTransfer.status === 'error' ? '失败' : activeTransfer.status === 'done' ? '完成' : activeTransfer.progress + '%' }}
+        {{ activeTransfer.status === 'error' ? 'failed' : activeTransfer.status === 'done' ? 'Complete' : activeTransfer.progress + '%' }}
       </span>
       <q-icon v-if="activeTransfer.status === 'error'" name="error_outline" color="negative" size="18px" />
       <q-icon v-else-if="activeTransfer.status === 'done'" name="check_circle_outline" color="positive" size="18px" />
     </div>
 
-    <!-- 输入栏 -->
+    <!-- Input field -->
     <div class="row q-pa-sm q-gutter-xs items-center bg-white" style="border-top: 1px solid #eee; padding-left: 0;">
-      <!-- 隐藏的文件选择器 -->
+      <!-- Hidden file picker -->
       <input
         ref="fileInputEl"
         type="file"
@@ -186,7 +186,7 @@
         :accept="allowedFileTypes"
         @change="onFileSelected"
       />
-      <!-- 阅后即焚开关 -->
+      <!-- Burn after reading switch -->
       <q-btn
         round
         flat
@@ -194,7 +194,7 @@
         :color="burnMode ? 'orange' : 'grey-5'"
         @click="burnMode = !burnMode"
       >
-        <q-tooltip>{{ burnMode ? '阅后即焚已开启：对方阅读后2小时自动删除' : '开启阅后即焚' }}</q-tooltip>
+        <q-tooltip>{{ burnMode ? 'Burn after reading is enabled：After the other party reads2Automatically delete after hours' : 'Turn on and burn after reading' }}</q-tooltip>
       </q-btn>
       <q-input
         ref="inputEl"
@@ -202,12 +202,12 @@
         outlined
         dense
         rounded
-        placeholder="输入消息..."
+        placeholder="Enter message..."
         class="col"
         @keyup.enter="sendMsg"
         :disable="sending"
       />
-      <!-- 附件按钮 -->
+      <!-- Attachment button -->
       <q-btn
         round
         flat
@@ -216,7 +216,7 @@
         :disable="sending || isTransferring"
         @click="fileInputEl.click()"
       >
-        <q-tooltip>发送文件（最大10MB）</q-tooltip>
+        <q-tooltip>Send files（maximum10MB）</q-tooltip>
       </q-btn>
       <q-btn round flat icon="sentiment_satisfied_alt" color="grey-7">
         <q-menu anchor="top right" self="bottom right" :offset="[0, 8]" max-height="260px">
@@ -245,7 +245,7 @@
       />
     </div>
 
-    <!-- 图片全屏预览 -->
+    <!-- Picture full screen preview -->
     <q-dialog v-model="imagePreview.show" maximized>
       <q-card class="bg-black column items-center justify-center" style="cursor: zoom-out" @click="imagePreview.show = false">
         <img :src="imagePreview.url" style="max-width: 100%; max-height: 100vh; object-fit: contain" />
@@ -265,7 +265,7 @@ import { friendApi } from 'src/services/api'
 import { on, off, getServerNow } from 'src/services/websocket'
 import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
 
-// ── 文件工具函数 ────────────────────────────────────────────────
+// ── File utility functions ─────────────────────────────────────────────
 
 const COMPRESSED_EXTENSIONS = new Set(['zip', 'rar', '7z', 'tar', 'gz'])
 
@@ -300,11 +300,11 @@ const chatStore = useChatStore()
 const identityStore = useIdentityStore()
 const callStore = useCallStore()
 
-// chatId 格式验证：NNNN-AAAA（4位数字-4位大写字母）
+// chatId format verification: NNNN-AAAA (4 digits - 4 uppercase letters)
 const CHAT_ID_PATTERN = /^\d{4}-[A-Z]{4}$/
 const friendChatId = route.params.chatId
 if (!CHAT_ID_PATTERN.test(friendChatId)) {
-  $q.notify({ type: 'negative', message: '无效的聊天 ID' })
+  $q.notify({ type: 'negative', message: 'Invalid chat ID' })
   throw new Error('Invalid chatId format')
 }
 const virtualScrollEl = ref(null)
@@ -313,10 +313,10 @@ const inputEl = ref(null)
 const fileInputEl = ref(null)
 const inputText = ref('')
 const sending = ref(false)
-const burnMode = ref(false)  // 阅后即焚模式
-// 初次滚动到底部完成后才显示消息区，避免用户看到从中间跳到最底的抖动
+const burnMode = ref(false)  //Burn after reading mode
+// The message area is displayed only after the initial scroll to the bottom is completed to avoid users seeing jitter when jumping from the middle to the bottom.
 const scrolled = ref(false)
-// 每分钟刷新的服务器校准时间，驱动阅后即焚倒计时显示。
+// The server calibration time is refreshed every minute, and the driver displays a countdown that burns after reading.
 const now = ref(getServerNow())
 let nowTimer = null
 let nudgeTimer = null
@@ -324,7 +324,7 @@ let heightResizeObserver = null
 let rafNudgeId = null
 const imagePreview = ref({ show: false, url: '' })
 
-// 允许的文件类型（用于 input accept 属性）
+// Allowed file types (for input accept attribute)
 const allowedFileTypes = [
   'image/jpeg,image/png,image/gif,image/webp,image/bmp,image/svg+xml',
   'video/mp4,video/webm,video/quicktime',
@@ -340,7 +340,7 @@ const allowedFileTypes = [
   'application/vnd.android.package-archive,.apk'
 ].join(',')
 
-// 当前进行中的传输（发送或接收）
+// Transmission currently in progress (send or receive)
 const activeTransfer = computed(() => {
   const transfers = Object.values(chatStore.fileTransfers)
   return transfers.find(t =>
@@ -359,7 +359,7 @@ const isTransferring = computed(() =>
   )
 )
 
-// ── 表情面板 ────────────────────────────────────────────────────
+// ── Expression Panel ────────────────────────────────────────────────
 const emojiTab = ref('face')
 
 const emojiData = [
@@ -397,7 +397,7 @@ const currentEmojis = computed(() => emojiData.find(c => c.name === emojiTab.val
 
 function insertEmoji(emoji) {
   const native = inputEl.value?.getNativeElement?.()
-  // QInput.getNativeElement() 返回的就是原生 input/textarea；兼容可能返回容器的旧版本。
+  // QInput.getNativeElement() returns the native input/textarea; it is compatible with older versions that may return containers.
   const input = native?.matches?.('input, textarea')
     ? native
     : native?.querySelector?.('input, textarea')
@@ -407,7 +407,7 @@ function insertEmoji(emoji) {
     inputText.value = inputText.value.slice(0, start) + emoji + inputText.value.slice(end)
     nextTick(() => {
       input.focus()
-      // selectionStart/setSelectionRange 使用 UTF-16 code unit 索引，与 String.length 一致。
+      // selectionStart/setSelectionRange uses UTF-16 code unit index, consistent with String.length.
       const pos = start + emoji.length
       input.setSelectionRange(pos, pos)
     })
@@ -416,11 +416,11 @@ function insertEmoji(emoji) {
   }
 }
 
-// 好友信息（从缓存或 API 获取）
+// Friend information (obtained from cache or API)
 const friendNickname = ref('...')
 const friendOnline = ref(false)
 
-// 获取好友公钥：仅从可信来源获取（本地缓存或 API），禁止从 URL 参数注入
+// Obtain friend's public key: only obtain it from trusted sources (local cache or API), prohibit injection from URL parameters
 const friendPubKey = ref(identityStore.getFriendPubKey(friendChatId) || '')
 
 const messages = computed(() => chatStore.getMessages(friendChatId))
@@ -428,22 +428,22 @@ const messages = computed(() => chatStore.getMessages(friendChatId))
 let stopStatus = null
 
 onMounted(async () => {
-  // 先注册状态监听，避免在异步等待期间遗漏状态变更事件
+  // Register status listeners first to avoid missing status change events during asynchronous waiting.
   stopStatus = onStatusUpdate((chatId, online) => {
     if (chatId === friendChatId) {
       friendOnline.value = online
     }
   })
 
-  // 精确设置 q-page 高度：首次同步尝试，再在 nextTick + rAF 后补充一次，
-  // 确保 Quasar 完成布局后 header/footer 尺寸准确
+  // Precisely set the q-page height: the first synchronization attempt, and then add it after nextTick + rAF,
+  // Ensure that the header/footer size is accurate after Quasar completes the layout
   updatePageHeight()
   nextTick(() => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => updatePageHeight())
     })
   })
-  // 监听 header/footer 高度变化（如断线提示条出现/消失）
+  // Monitor header/footer height changes (such as the appearance/disappearance of the disconnection prompt bar)
   const header = document.querySelector('.q-header')
   const footer = document.querySelector('.q-footer')
   if (header || footer) {
@@ -453,21 +453,21 @@ onMounted(async () => {
   }
   window.addEventListener('resize', updatePageHeight)
 
-  // 加载消息——消息一到立即滚动到底，不等待后续网络请求
+  // Loading messages - scroll to the end as soon as the message arrives, without waiting for subsequent network requests
   await chatStore.loadMessages(friendChatId)
 
-  // 等待 DOM 更新、页面高度生效后立即滚动
+  // Wait for the DOM to update and scroll immediately after the page height takes effect.
   nextTick(() => {
     requestAnimationFrame(() => {
-      // 第一次强制滚动到底（opacity:0 不可见状态下执行 vs.scrollTo，确保最后一项渲染进 DOM）
+      // Force the scroll to the end for the first time (execute vs.scrollTo when opacity:0 is invisible to ensure that the last item is rendered into the DOM)
       scrollToBottom()
-      // 再等一帧让浏览器应用 scrollTop，然后显示内容（用户看到的就是底部，不会看到跳动）
+      // Wait another frame for the browser to apply scrollTop, and then display the content (what the user sees is the bottom and will not see the jump)
       requestAnimationFrame(() => {
         scrolled.value = true
-        // 内容可见后逐帧轻量对齐（只设 scrollTop，不调用 vs.scrollTo()），
-        // 修正虚拟滚动实测 item 高度产生的微小偏差
+        // Lightly align frame by frame after the content is visible (only scrollTop is set, vs.scrollTo() is not called),
+        // Correct the slight deviation in the measured item height caused by virtual scrolling
         startRafNudge(30)
-        // 启动 3 秒 nudge 定时器，覆盖异步状态更新（已读回执、在线状态等）导致的弹回
+        // Start a 3-second nudge timer to cover bounces caused by asynchronous status updates (read receipts, online status, etc.)
         let nudgeCount = 0
         nudgeTimer = setInterval(() => {
           nudgeCount++
@@ -482,17 +482,17 @@ onMounted(async () => {
     })
   })
 
-  // 阅后即焚的定时删除检查已移至 MainLayout 应用级生命周期，
-  // 确保用户离开聊天页后倒计时仍能继续推进并按时删除。
+  // The scheduled deletion check for disappearing after reading has been moved to the MainLayout application-level life cycle.
+  // Ensure that the countdown continues after the user leaves the chat page and is deleted on time.
 
-  // 每分钟刷新一次响应式时间，驱动倒计时显示递减
+  // The responsive time is refreshed every minute, and the driver countdown display decreases.
   now.value = getServerNow()
   nowTimer = setInterval(() => { now.value = getServerNow() }, 60000)
 
-  // 以下为不影响首屏布局的异步操作，不阻塞滚动：
-  // 获取好友信息、标记已读、同步已读回执——这些网络请求耗时较长，
-  // 但不会改变消息列表高度（仅更新头像/在线状态/已读标记），
-  // nudgeTimer 会在它们触发响应式更新后自动修正可能的微小偏移。
+  // The following are asynchronous operations that do not affect the layout of the first screen and do not block scrolling:
+  // Obtaining friend information, marking read, and synchronizing read receipts—these network requests take a long time.
+  // But it will not change the message list height (only update the avatar/online status/read mark),
+  // nudgeTimer automatically corrects possible small offsets after they trigger a reactive update.
   fetchFriendInfo()
   chatStore.markAsRead(friendChatId)
   chatStore.syncReadStatus(friendChatId)
@@ -507,15 +507,15 @@ onUnmounted(() => {
   window.removeEventListener('resize', updatePageHeight)
 })
 
-// 仅监听消息条数变化（新增/删除），避免对整个数组做 deep 遍历，
-// 也避免已读回执等字段变更触发不必要的强制滚动
+// Only monitor changes in the number of messages (new/deleted) to avoid deep traversal of the entire array.
+// It also avoids unnecessary forced scrolling caused by changes in fields such as read receipts.
 watch(() => messages.value.length, () => {
   const newMsgs = messages.value
-  // 仅当用户本就在底部附近时才自动滚动，回看历史时不打断
+  // Automatically scroll only when the user is already near the bottom, without interrupting when reviewing history
   if (isNearBottom()) {
     nextTick(() => scrollToBottomReliable())
   }
-  // 有新消息时自动标记为已读
+  // Automatically mark new messages as read
   const unread = newMsgs.filter(m => !m.mine && !m.read)
   if (unread.length > 0) {
     chatStore.markAsRead(friendChatId)
@@ -523,7 +523,7 @@ watch(() => messages.value.length, () => {
 })
 
 /**
- * 通过 API 获取好友公钥（fallback）
+ * Obtain friend's public key through API (fallback)
  */
 async function fetchFriendInfo() {
   try {
@@ -536,21 +536,21 @@ async function fetchFriendInfo() {
       friendOnline.value = !!friend.online
     }
   } catch {
-    $q.notify({ type: 'warning', message: '无法获取对方公钥' })
+    $q.notify({ type: 'warning', message: 'Unable to obtain the counterparty public key' })
   }
 }
 
 /**
- * 监听好友在线状态变更
+ * Monitor friends’ online status changes
  */
 function onStatusUpdate(callback) {
   function handler(payload) {
-    // 安全验证：检查 payload 结构
+    // Security verification: check payload structure
     if (!payload || typeof payload.chat_id !== 'string' || typeof payload.online !== 'boolean') {
       console.warn('[ChatPage] invalid status payload:', payload)
       return
     }
-    // 验证 chat_id 格式
+    // Verify chat_id format
     if (!CHAT_ID_PATTERN.test(payload.chat_id)) {
       console.warn('[ChatPage] invalid chat_id in status:', payload.chat_id)
       return
@@ -561,11 +561,11 @@ function onStatusUpdate(callback) {
   return () => off('status', handler)
 }
 
-// ── 文件发送 ────────────────────────────────────────────────────
+// ── File sending ───────────────────────────────────────────────
 
 function onFileSelected(e) {
   const file = e.target.files?.[0]
-  e.target.value = ''  // 允许重复选同一文件
+  e.target.value = ''  //Allow repeated selection of the same file
   if (!file) return
 
   try {
@@ -576,41 +576,41 @@ function onFileSelected(e) {
   }
 
   $q.dialog({
-    title: '发送文件',
-    message: `确定发送「${file.name}」（${formatFileSize(file.size)}）？\n\n请确保双方网络稳定。如因网络中断，需重新发送。`,
-    cancel: { label: '取消', flat: true },
-    ok: { label: '发送', color: 'primary' },
+    title: 'Send files',
+    message: `OK to send「${file.name}」（${formatFileSize(file.size)}）？\n\nPlease ensure that the network of both parties is stable。If due to network interruption，Need to resend。`,
+    cancel: { label: 'Cancel', flat: true },
+    ok: { label: 'send', color: 'primary' },
     persistent: true
   }).onOk(() => doSendFile(file))
 }
 
 async function doSendFile(file) {
   if (!friendPubKey.value) {
-    $q.notify({ type: 'warning', message: '无法获取对方公钥，请刷新重试' })
+    $q.notify({ type: 'warning', message: 'Unable to obtain the counterparty public key. Please refresh and try again' })
     return
   }
   try {
     await chatStore.sendFile(friendChatId, friendPubKey.value, file, burnMode.value)
   } catch (e) {
-    $q.notify({ type: 'negative', message: '文件发送失败：' + e.message })
+    $q.notify({ type: 'negative', message: 'File sending failed：' + e.message })
   }
 }
 
-// 消息最大长度限制（防止 DoS）
+// Maximum message length limit (to prevent DoS)
 const MAX_MESSAGE_LENGTH = 10000
 
 async function sendMsg(event) {
-  // 中文等输入法按 Enter 确认候选词时不能触发发送。
+  // When pressing Enter to confirm the candidate word in Chinese and other input methods, sending cannot be triggered.
   if (event?.isComposing || event?.keyCode === 229) return
   const text = inputText.value.trim()
   if (!text) return
-  // 安全检查：消息长度限制
+  // Security Check: Message Length Limit
   if (text.length > MAX_MESSAGE_LENGTH) {
-    $q.notify({ type: 'warning', message: `消息过长，最多 ${MAX_MESSAGE_LENGTH} 字符` })
+    $q.notify({ type: 'warning', message: `Message too long，most ${MAX_MESSAGE_LENGTH} character` })
     return
   }
   if (!friendPubKey.value) {
-    $q.notify({ type: 'warning', message: '无法获取对方公钥，请刷新重试' })
+    $q.notify({ type: 'warning', message: 'Unable to obtain the counterparty public key. Please refresh and try again' })
     return
   }
   sending.value = true
@@ -618,18 +618,18 @@ async function sendMsg(event) {
   try {
     const ok = await chatStore.sendMessage(friendChatId, friendPubKey.value, text, burnMode.value)
     if (!ok) {
-      $q.notify({ type: 'warning', message: '消息发送失败，请检查网络' })
+      $q.notify({ type: 'warning', message: 'Message sending failed，Please check the network' })
       inputText.value = text
     }
   } catch (e) {
-    $q.notify({ type: 'negative', message: '消息发送失败：' + e.message })
+    $q.notify({ type: 'negative', message: 'Message sending failed：' + e.message })
     inputText.value = text
   } finally {
     sending.value = false
   }
 }
 
-const RECALL_LIMIT_MS = 144 * 60 * 60 * 1000 // 144小时（6天）内可撤回
+const RECALL_LIMIT_MS = 144 * 60 * 60 * 1000 //Can be withdrawn within 144 hours (6 days)
 
 function canRecall(msg) {
   return Date.now() - msg.ts < RECALL_LIMIT_MS
@@ -645,21 +645,21 @@ function deleteMsg(msg) {
 
 function clearHistory() {
   $q.dialog({
-    title: '清空聊天记录',
-    message: `确定清空与「${friendNickname.value}」的所有聊天记录？此操作不可恢复。`,
+    title: 'Clear chat history',
+    message: `Make sure to clear the「${friendNickname.value}」All chat history of？This operation is irreversible。`,
     cancel: true,
     persistent: true
   }).onOk(async () => {
     await chatStore.clearChatMessages(friendChatId)
-    $q.notify({ type: 'positive', message: '聊天记录已清空' })
+    $q.notify({ type: 'positive', message: 'Chat history has been cleared' })
   })
 }
 
-// 动态计算 q-page 的高度：Quasar QPage 默认只设 min-height，
-// 不给 height 会导致 flex:1 的子元素（虚拟滚动）无法获得确定高度，
-// 从而使整个页面在 body 上滚动、最后一条消息被底部栏遮挡。
-// 精确测量 q-header 和 q-footer 的实际高度（含断线提示条等动态元素），
-// 用 100vh 减去得到 q-page 的确切高度。
+// Dynamically calculate the height of q-page: Quasar QPage only sets min-height by default.
+// Not giving height will cause the child elements of flex:1 (virtual scrolling) to be unable to obtain a certain height.
+// This causes the entire page to scroll on the body and the last message to be obscured by the bottom bar.
+// Accurately measure the actual height of q-header and q-footer (including dynamic elements such as breakage prompts),
+// Subtract 100vh to get the exact height of the q-page.
 function updatePageHeight() {
   const el = pageEl.value?.$el
   if (!el) return
@@ -668,11 +668,11 @@ function updatePageHeight() {
   const headerH = header ? Math.round(header.getBoundingClientRect().height) : 0
   const footerH = footer ? Math.round(footer.getBoundingClientRect().height) : 0
   el.style.height = `calc(100vh - ${headerH + footerH}px)`
-  // 高度变化后，如果用户在底部附近，轻量对齐避免出现间隙
+  // After height change, light alignment to avoid gaps if user is near the bottom
   if (isNearBottom()) nudgeToBottom()
 }
 
-// 取消正在进行的 rAF nudge 循环（用于组件卸载时清理）
+// Cancel the ongoing rAF nudge loop (used for cleanup when components are unloaded)
 function cancelRafNudge() {
   if (rafNudgeId !== null) {
     cancelAnimationFrame(rafNudgeId)
@@ -680,7 +680,7 @@ function cancelRafNudge() {
   }
 }
 
-// 启动 rAF 逐帧轻量对齐（tries 帧后自动停止），用于初始滚动阶段
+// Start rAF frame-by-frame lightweight alignment (stop automatically after tries frames) for initial scrolling phase
 function startRafNudge(tries = 30) {
   cancelRafNudge()
   const tick = (remaining) => {
@@ -699,30 +699,30 @@ function startRafNudge(tries = 30) {
 function scrollToBottom() {
   const vs = virtualScrollEl.value
   if (!vs || !messages.value.length) return
-  // 1) 先让最后一项渲染进 DOM（虚拟滚动只渲染视口内项）
+  // 1) Let the last item be rendered into the DOM first (virtual scrolling only renders the items in the viewport)
   vs.scrollTo(messages.value.length - 1, 'end-force')
-  // 2) scrollTo 只能把最后一项末端对齐视口底，滚不进其后的容器 padding；
-  //    直接压到 scrollHeight 才能贴到真正底部
+  // 2) scrollTo can only align the end of the last item to the bottom of the viewport, and cannot scroll into the padding of the subsequent container;
+  // Press directly to scrollHeight to stick to the real bottom
   const el = vs.$el
   if (el) el.scrollTop = el.scrollHeight
 }
 
-// 轻量对齐：仅设 scrollTop，不调用 vs.scrollTo()，避免触发 q-virtual-scroll
-// 内部的虚拟位置重算（重算会在异步帧里覆盖 scrollTop，造成"弹回"）
+// Lightweight alignment: only set scrollTop, do not call vs.scrollTo(), and avoid triggering q-virtual-scroll
+// Internal virtual position recalculation (recalculation will overwrite scrollTop in asynchronous frames, causing "bounce")
 function nudgeToBottom() {
   const el = virtualScrollEl.value?.$el
   if (el) el.scrollTop = el.scrollHeight
 }
 
-// 虚拟滚动首屏按估算高度定位，跳到底后各项被实测修正会出现「没贴底」的偏差。
-// 初次用 scrollToBottom() 让最后一项进入渲染，之后逐帧用轻量对齐修正，
-// 不再反复调用 vs.scrollTo() 以免触发虚拟滚动内部重算覆盖 scrollTop。
+// The virtual scrolling first screen is positioned according to the estimated height. After jumping to the bottom, each item will be corrected by actual measurement and there will be a deviation of "not touching the bottom".
+// Use scrollToBottom() for the first time to let the last item enter rendering, and then use lightweight alignment correction frame by frame.
+// No longer call vs.scrollTo() repeatedly to avoid triggering virtual scroll internal recalculation to overwrite scrollTop.
 function scrollToBottomReliable(tries = 30) {
   scrollToBottom()
   startRafNudge(tries)
 }
 
-// 用户是否处于（接近）最底部：仅在此情况下新消息才自动滚动，避免回看历史时被强制拉回
+// Whether the user is at (nearly) the bottom: only in this case new messages will be automatically scrolled to avoid being forced back when looking back in history
 function isNearBottom() {
   const el = virtualScrollEl.value?.$el
   if (!el) return true
@@ -734,22 +734,22 @@ function formatTime(ts) {
 }
 
 /**
- * 格式化阅后即焚倒计时
+ * Formatted countdown that will burn after reading
  */
 function formatBurnCountdown(burnAt) {
-  // 依赖响应式 now，使倒计时随定时器自动刷新（不要改成 Date.now()）
+  // Rely on responsive now to automatically refresh the countdown with the timer (do not change to Date.now())
   const remaining = burnAt - now.value
-  if (remaining <= 0) return '即将删除'
+  if (remaining <= 0) return 'About to be deleted'
   const hours = Math.floor(remaining / (60 * 60 * 1000))
   const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000))
   if (hours > 0) {
-    return hours + '小时' + minutes + '分钟后自动删除'
+    return hours + 'hours' + minutes + 'Automatically delete after minutes'
   }
-  return minutes + '分钟后自动删除'
+  return minutes + 'Automatically delete after minutes'
 }
 
 /**
- * 连续消息紧凑显示：隐藏头像，缩小间距
+ * Compact display of continuous messages: hide avatars and reduce spacing
  */
 function shouldCompact(msgs, idx) {
   if (idx === 0) return false

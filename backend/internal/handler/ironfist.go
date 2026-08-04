@@ -22,7 +22,7 @@ func NewIronFistHandler(svc *service.IronFistService, hub *ws.Hub) *IronFistHand
 }
 
 // GET /api/games/ironfist/stats
-// 返回当前用户对战统计与已解锁成就
+// Returns current user battle statistics and unlocked achievements
 func (h *IronFistHandler) GetStats(c *gin.Context) {
 	userID := c.GetUint64(middleware.CtxUserID)
 	view, err := h.svc.GetStats(c.Request.Context(), userID)
@@ -34,8 +34,8 @@ func (h *IronFistHandler) GetStats(c *gin.Context) {
 }
 
 // POST /api/games/ironfist/stats
-// 上报对局结果（win/lose/draw/doubleLose），更新统计并判定成就解锁
-// 返回更新后的统计 + 本次新解锁的成就
+// Report game results (win/lose/draw/doubleLose), update statistics and determine achievement unlocks
+// Return to updated statistics + newly unlocked achievements this time
 func (h *IronFistHandler) ReportMatch(c *gin.Context) {
 	userID := c.GetUint64(middleware.CtxUserID)
 	var req service.ReportMatchRequest
@@ -52,7 +52,7 @@ func (h *IronFistHandler) ReportMatch(c *gin.Context) {
 }
 
 // GET /api/games/ironfist/matches?before_id=xxx&limit=20
-// 逐局对战明细，游标分页，最新在前
+// Game-by-game battle details, cursor paging, latest first
 func (h *IronFistHandler) ListMatches(c *gin.Context) {
 	userID := c.GetUint64(middleware.CtxUserID)
 
@@ -76,7 +76,7 @@ func (h *IronFistHandler) ListMatches(c *gin.Context) {
 }
 
 // POST /api/games/ironfist/pvp/queue  body: { "tier": "gold" | "platinum" | "diamond" }
-// 加入 PVP 撮合队列。返回 queued（已入队，等待匹配）或 matched（立即匹配成功，含房间号与对手档案）。
+// Join the PVP matchmaking queue. Returns queued (queued, waiting for matching) or matched (matched immediately, including room number and opponent file).
 func (h *IronFistHandler) EnqueuePVP(c *gin.Context) {
 	userID := c.GetUint64(middleware.CtxUserID)
 	chatID := c.GetString(middleware.CtxChatID)
@@ -102,9 +102,9 @@ func (h *IronFistHandler) EnqueuePVP(c *gin.Context) {
 		}
 		return
 	}
-	// 立即匹配成功：通知等待方（玩家 A）切到对战页面
+	// Immediate matching is successful: notify the waiting party (player A) to switch to the battle page
 	if res.Status == "matched" && res.Waiting != "" {
-		// 推送给 A 的对手档案为本调用方（玩家 B）的信息
+		// The opponent profile pushed to A is information about the caller (player B)
 		oppProfile, _ := h.svc.GetLobbyUserProfile(c.Request.Context(), chatID)
 		if oppProfile == nil {
 			oppProfile = &service.LobbyUserProfile{ChatID: chatID}
@@ -120,7 +120,7 @@ func (h *IronFistHandler) EnqueuePVP(c *gin.Context) {
 }
 
 // DELETE /api/games/ironfist/pvp/queue
-// 主动取消撮合（仍在匹配中）。已匹配/已结算的房间不会受影响，调用幂等。
+// Actively cancel matching (still in the process of matching). Matched/settled rooms will not be affected and the call is idempotent.
 func (h *IronFistHandler) CancelPVPQueue(c *gin.Context) {
 	chatID := c.GetString(middleware.CtxChatID)
 	_, err := h.svc.CancelPVPQueue(c.Request.Context(), chatID)
@@ -132,7 +132,7 @@ func (h *IronFistHandler) CancelPVPQueue(c *gin.Context) {
 }
 
 // GET /api/games/ironfist/pvp/queue
-// 查询当前撮合队列状态。等待方（玩家 A）在 WS 通知丢失时轮询此接口兜底发现匹配结果。
+// Query the current matching queue status. The waiting party (player A) polls this interface to discover the matching result when the WS notification is lost.
 func (h *IronFistHandler) GetPVPQueueStatus(c *gin.Context) {
 	userID := c.GetUint64(middleware.CtxUserID)
 	res, err := h.svc.GetPVPQueueStatus(c.Request.Context(), userID)

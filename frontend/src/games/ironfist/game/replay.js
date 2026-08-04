@@ -1,19 +1,19 @@
-// 铁拳 - 事件溯源重放工具（方案 B）
-// 服务端只暂存 action 流（无游戏逻辑），客户端用纯函数 resolveRound 重放，
-// 数学上必然得到一致状态。详见 docs/ironfist.md 第十四节。
+// Tekken - Event Sourcing Replay Tool (Option B)
+// The server only temporarily stores the action stream (no game logic), and the client uses the pure function resolveRound to replay it.
+// Mathematically, a consistent state must be obtained. See Section 14 of docs/ironfist.md for details.
 
 import { resolveRound, initialState } from './resolve.js'
 import { ACTION, ACTIONS, MAX_ROUNDS } from './GameConstants.js'
 
 /**
- * 将服务端返回的 action 列表按 round 配对为 [playerAction, opponentAction] 序列。
+ * Pair the action list returned by the server into the [playerAction, opponentAction] sequence by round.
  *
- * 服务端存的每条 action 形如 { round, action, from, ts }，双方各发一条。
- * 重放时按 round 分组，每 round 期望有 2 条；若某方未到（极端情况）则该 round 不完整，
- * 跳过该 round（不结算），等待重连后补齐再结算。
+ * Each action stored on the server is in the form of { round, action, from, ts }, and each party sends one.
+ * During replay, groups are grouped by round, and each round is expected to have 2 entries; if one party has not arrived (extreme case), the round is incomplete.
+ * Skip this round (not settled), wait for reconnection to complete the round, and then settle.
  *
- * @param {Array} actionLog 服务端返回的 action 列表
- * @param {string} myChatId 自己的 chat_id（用于区分双方）
+ * @param {Array} actionLog action list returned by the server
+ * @param {string} myChatId own chat_id (used to distinguish both parties)
  * @returns {Array<{round, playerAction, opponentAction, complete}>}
  */
 export function pairActionsByRound(actionLog, myChatId) {
@@ -24,9 +24,9 @@ export function pairActionsByRound(actionLog, myChatId) {
     if (!ACTIONS.includes(action) || typeof from !== 'string' || !from) continue
     if (!grouped.has(round)) grouped.set(round, {})
     const slot = grouped.get(round)
-    // from === myChatId → 我发的 → 玩家视角的 playerAction
-    // 否则 → 对手发的 → opponentAction
-    // 第一条合法动作即锁定，和实时引擎/后端的每回合幂等语义保持一致。
+    // from === myChatId → I sent → playerAction from the player's perspective
+    // Otherwise → issued by the opponent → opponentAction
+    // The first legal action is locking, which is consistent with the idempotent semantics of each round of the real-time engine/backend.
     if (from === myChatId) {
       if (slot.playerAction == null) slot.playerAction = action
     } else if (slot.opponentAction == null) {
@@ -46,22 +46,22 @@ export function pairActionsByRound(actionLog, myChatId) {
 }
 
 /**
- * 从 action 历史重放出当前游戏状态。
+ * Replay the current game state from the action history.
  *
- * 流程：逐 round 调用 resolveRound，遇到不完整的 round 停止（说明该 round 双方动作未齐，
- * 是断线时本回合进行中的状态）。
+ * Process: Call resolveRound round by round, and stop when encountering an incomplete round (indicating that the actions of both parties in the round are not complete,
+ * This is the status of the current round when the connection is disconnected).
  *
- * @param {Array} actionLog 服务端返回的 action 列表
- * @param {string} myChatId 自己的 chat_id
+ * @param {Array} actionLog action list returned by the server
+ * @param {string} myChatId own chat_id
  * @returns {{
- *   state: object,           // 当前游戏状态（可直接灌入 IronFistGame.state）
- *   lastResult: object|null, // 最后一回合结算结果
- *   completedRounds: number, // 已结算完成的回合数
- *   pendingRound: number|null, // 本回合（双方动作未齐）的 round 号
- *   pendingPlayerAction: string|null, // 本回合自己已选但对手未到的动作
+ * state: object, // Current game state (can be directly poured into IronFistGame.state)
+ * lastResult: object|null, //The final round settlement result
+ * completedRounds: number, // Number of completed rounds that have been settled
+ * pendingRound: number|null, // The round number of this round (both sides have not completed their actions)
+ * pendingPlayerAction: string|null, // The action you have chosen this round but the opponent has not yet arrived
  *   pendingOpponentAction: string|null,
- *   counterSuccesses: number,  // 已结算回合中本方反击成功（counter vs attack）累计次数
- *   history: Array,            // 已结算回合的逐回合结果（{round,playerAction,opponentAction,playerDmg,opponentDmg}）
+ * counterSuccesses: number, // The cumulative number of successful counterattacks (counter vs attack) in the settled round
+ * history: Array, // Round-by-turn results of settled rounds ({round,playerAction,opponentAction,playerDmg,opponentDmg})
  * }}
  */
 export function replayGame(actionLog, myChatId) {
@@ -78,7 +78,7 @@ export function replayGame(actionLog, myChatId) {
   for (const item of paired) {
     if (item.complete) {
       lastResult = resolveRound(item.playerAction, item.opponentAction, state)
-      // 灌入新状态（与 IronFistGame._resolve 中的字段对齐）
+      // Populate new state (aligned with fields in IronFistGame._resolve)
       state = {
         playerHP: lastResult.playerHP,
         opponentHP: lastResult.opponentHP,
@@ -91,14 +91,14 @@ export function replayGame(actionLog, myChatId) {
         bothChargedStalemate: lastResult.bothChargedStalemate,
       }
       completedRounds = item.round
-      // 追踪本方反击成功（与 IronFistGame._resolve 的判定保持一致，用于「反击大师」成就）
-      // 注意：终局回合也计入 counterSuccesses（成就统计需完整），但下方 history 会跳过它
+      // Track the success of your own counterattack (consistent with the determination of IronFistGame._resolve, used for the "Counterattack Master" achievement)
+      // Note: The final round is also counted in counterSuccesses (the achievement statistics must be complete), but the history below will skip it.
       if (item.playerAction === ACTION.COUNTER && item.opponentAction === ACTION.ATTACK) {
         counterSuccesses += 1
       }
-      // 记录逐回合结果，供重连后恢复 UI 侧 moveHistory（出招统计/累计伤害/战绩明细）
-      // 终局回合不进 history：loadReplay 的 gameover 分支会 emit 'resolved'，
-      // 由 Vue 侧 resolved 监听器 push 进 moveHistory，避免重复
+      // Record the round-by-round results for restoration on the UI side after reconnection moveHistory (move statistics/accumulated damage/record details)
+      // The final round does not enter history: the gameover branch of loadReplay will emit 'resolved',
+      // Push the resolved listener on the Vue side into moveHistory to avoid duplication
       if (!lastResult.gameResult) {
         history.push({
           round: item.round,
@@ -108,10 +108,10 @@ export function replayGame(actionLog, myChatId) {
           opponentDmg: lastResult.opponentDmg,
         })
       }
-      // 若该 round 已结束游戏，停止重放
+      // If the round has ended the game, stop replaying
       if (lastResult.gameResult) break
     } else {
-      // 本回合进行中，记录待续传的动作
+      // While this round is in progress, record the actions to be continued
       pendingRound = item.round
       pendingPlayerAction = item.playerAction
       pendingOpponentAction = item.opponentAction

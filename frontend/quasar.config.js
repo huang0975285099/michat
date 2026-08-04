@@ -1,7 +1,7 @@
 import { defineConfig } from '#q-app/wrappers'
 import { readFileSync } from 'node:fs'
 
-// 读取 package.json 的版本号，构建时注入到应用，供「我」页面展示
+// Read the version number of package.json and inject it into the application during construction for display on the "Me" page
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8'))
 
 export default defineConfig(() => {
@@ -55,17 +55,17 @@ export default defineConfig(() => {
     ssr: { pwa: false },
     pwa: {
       workboxMode: 'GenerateSW',
-      // 新 Service Worker 安装后立即接管并清理旧缓存，配合 register-service-worker 的刷新提示，
-      // 确保发版后用户无需手动强刷即可更新到最新版本
+      // After the new Service Worker is installed, it will take over and clean up the old cache immediately, and cooperate with the refresh prompt of register-service-worker.
+      // Ensure that users can update to the latest version without manual flashing after release
       extendGenerateSWOptions(cfg) {
         cfg.skipWaiting = true
         cfg.clientsClaim = true
         cfg.cleanupOutdatedCaches = true
       },
       manifest: {
-        name: '云密',
+        name: 'Yunmi',
         short_name: 'yunChat',
-        description: '端对端加密聊天',
+        description: 'End-to-end encrypted chat',
         display: 'standalone',
         orientation: 'portrait',
         background_color: '#ffffff',
@@ -85,7 +85,7 @@ export default defineConfig(() => {
       bundler: 'builder',
       builder: {
         appId: 'com.yzs88.e2eechat',
-        productName: '云密',
+        productName: 'Yunmi',
         win: {
           target: [{ target: 'nsis', arch: ['x64'] }],
           icon: 'src-electron/icons/icon.ico'

@@ -1,8 +1,8 @@
--- 修复：fist_transactions.type 枚举缺少 'pvp_refund'。
--- 后端 writeFistTx 在取消撮合/平局结算/超时兜底等退款路径均写入 'pvp_refund'，
--- 旧枚举不含该值会触发 1265（Data truncated），导致整个退款事务回滚——
--- 表现为"无法取消匹配、平局/超时不退款、质押被锁死"。
--- MODIFY COLUMN 幂等：目标枚举一致时重复执行不报错。
+-- Fixed: fist_transactions.type enum missing 'pvp_refund'.
+-- The backend writeFistTx writes 'pvp_refund' in all refund paths such as match cancellation/tie settlement/timeout settlement, etc.
+-- If the old enumeration does not contain this value, 1265 (Data truncated) will be triggered, causing the entire refund transaction to be rolled back——
+-- The performance is "unable to cancel the match, no refund for draw/timeout, and the pledge is locked".
+-- MODIFY COLUMN is idempotent: if the target enumeration is consistent, repeated execution will not report an error.
 
 USE e2eechat;
 

@@ -1,11 +1,11 @@
-// 版本与更新检查工具
-// APP_VERSION / BUILD_TIME 由构建时注入（见 quasar.config.js 的 build.env）
+// Version and update checking tools
+// APP_VERSION / BUILD_TIME are injected at build time (see build.env in quasar.config.js)
 import { versionApi } from 'src/services/api'
 
 export const APP_VERSION = process.env.APP_VERSION || ''
 export const BUILD_TIME = process.env.BUILD_TIME || ''
 
-// 语义化版本号比较：a>b 返回 1，a<b 返回 -1，相等返回 0
+// Semantic version number comparison: a>b returns 1, a<b returns -1, and equality returns 0
 export function cmpVersion(a, b) {
   const pa = String(a || '').split('.').map((n) => parseInt(n, 10) || 0)
   const pb = String(b || '').split('.').map((n) => parseInt(n, 10) || 0)
@@ -17,13 +17,13 @@ export function cmpVersion(a, b) {
   return 0
 }
 
-// 拉取线上版本信息（latest/min_supported/url/notes）
+// Pull online version information (latest/min_supported/url/notes)
 export async function fetchVersionInfo() {
   const { data } = await versionApi.get()
   return data || {}
 }
 
-// 是否为原生客户端（桌面 Electron / 安卓 Capacitor）；原生端更新走下载安装包
+// Whether it is a native client (desktop Electron / Android Capacitor); to update the native client, download the installation package
 export function isNativeClient() {
   return (
     window.location.protocol === 'file:' ||
@@ -31,7 +31,7 @@ export function isNativeClient() {
   )
 }
 
-// 浏览器 / PWA 强制刷新：清理缓存 + 注销 Service Worker 后 reload，用户无需手动强刷
+// Browser/PWA forced refresh: clear cache + log out of Service Worker and then reload, users do not need to force refresh manually
 export async function forceRefresh() {
   try {
     if (window.caches) {
@@ -43,9 +43,9 @@ export async function forceRefresh() {
       await Promise.all(regs.map((r) => r.unregister()))
     }
   } catch {
-    // 清理失败也继续刷新
+    // Continue to refresh even if cleanup fails
   }
-  // 带时间戳跳转，绕过浏览器对 index.html 的 HTTP 缓存
+  // Jump with timestamp to bypass the browser's HTTP cache of index.html
   const { pathname, hash } = window.location
   window.location.replace(pathname + '?_r=' + Date.now() + (hash || ''))
 }

@@ -1,6 +1,6 @@
 <template>
     <div class="q-pa-md fist-view">
-        <!-- 顶栏 -->
+        <!-- top bar -->
         <div class="row items-center q-mb-md">
             <q-btn
                 flat
@@ -10,34 +10,34 @@
                 color="white"
                 @click="$emit('back')"
             />
-            <div class="text-h6 q-ml-sm">$FIST 代币</div>
+            <div class="text-h6 q-ml-sm">$FIST Token</div>
             <q-space />
             <q-chip dense color="amber-9" text-color="white" class="fist-chip">
                 ⚡ {{ fistStore.balance.toLocaleString() }} $FIST
             </q-chip>
         </div>
 
-        <!-- ── Hero：$FIST 是什么 ─────────────────────────── -->
+        <!-- ── Hero: What is $FIST ─────────────────────────── -->
         <div class="hero">
             <div class="hero-glow"></div>
             <div class="hero-logo">⚡</div>
             <div class="hero-title">$FIST</div>
-            <div class="hero-sub">铁拳 3D 竞技代币</div>
+            <div class="hero-sub">iron fist 3D Competitive Tokens</div>
             <div class="hero-desc">
-                部署于 <b>Solana</b> 的 SPL 代币，总量硬顶
-                <b>10 亿</b>，不可增发。奖励来自对手而非印钞，销毁嵌入每一次核心行为——
-                <b>极致通缩、零和竞技、行为驱动销毁</b>。
+                Deployed on <b>Solana</b> of SPL Token，Total hard cap
+                <b>10 billion</b>，No additional issuance is allowed。Rewards come from opponents rather than printing money，Destroy every core behavior embedded in——
+                <b>Extreme deflation、zero sum competition、Behavior driven destruction</b>。
             </div>
             <div class="hero-tags">
                 <span class="htag">Solana</span>
                 <span class="htag">SPL Token</span>
-                <span class="htag">硬顶 10 亿</span>
-                <span class="htag">通缩刚性</span>
+                <span class="htag">hard top 10 billion</span>
+                <span class="htag">deflationary rigidity</span>
             </div>
         </div>
 
-        <!-- ── 数据看板 ─────────────────────────────────── -->
-        <div class="section-title">链上数据看板</div>
+        <!-- ── Data dashboard ───────────────────────────────── -->
+        <div class="section-title">On-chain data dashboard</div>
         <div class="stat-grid">
             <div
                 v-for="s in statCards"
@@ -51,12 +51,12 @@
             </div>
         </div>
         <div class="data-note">
-            数据依据 $FIST 经济模型 v1.0 设计稿。真实收支以 Solana 链上账户为准，TGE 后可在
-            Solscan 实时查询。
+            Data basis $FIST economic model v1.0 Design draft。The real income and expenditure are based on Solana The account on the chain shall prevail.，TGE Can be found later
+            Solscan Real-time query。
         </div>
 
-        <!-- ── 总量分配 ─────────────────────────────────── -->
-        <div class="section-title">总量分配 · 10 亿</div>
+        <!-- ── Total distribution ───────────────────────────────── -->
+        <div class="section-title">Total allocation · 10 billion</div>
         <div class="alloc-list">
             <div v-for="a in allocation" :key="a.name" class="alloc-row">
                 <div class="alloc-head">
@@ -74,24 +74,24 @@
             </div>
         </div>
 
-        <!-- ── PvE 奖励机制 ─────────────────────────────── -->
-        <div class="section-title">PvE 奖励机制</div>
+        <!-- ──PvE Reward Mechanism──────────────────────────── -->
+        <div class="section-title">PvE Reward mechanism</div>
         <div class="info-card">
             <div class="formula">
-                每场胜局奖励 = 当日全局奖励池 ÷ 当日全平台总胜场数
+                Rewards for each win = Global reward pool for the day ÷ Total number of wins on all platforms for the day
             </div>
             <div class="info-desc">
-                固定总池按胜场分配——人越多单场越小，自然稀释、防止通胀。
+                Fixed total pool distributed based on wins——The more people there are, the smaller the venue will be.，natural dilution、prevent inflation。
             </div>
             <div class="chip-row">
-                <span class="pill">冷启动期 50 万 / 天</span>
-                <span class="pill">每日前 10 场计入</span>
-                <span class="pill pill--gold">早期玩家永久 +20%</span>
+                <span class="pill">cold start period 50 million / day</span>
+                <span class="pill">daily before 10 field count</span>
+                <span class="pill pill--gold">Early players forever +20%</span>
             </div>
         </div>
 
-        <!-- ── PvP 三档质押 ─────────────────────────────── -->
-        <div class="section-title">PvP 质押对战 · 零和</div>
+        <!-- ── PvP three levels of pledge ─────────────────────────────── -->
+        <div class="section-title">PvP Pledge Battle · zero sum</div>
         <div class="tier-list">
             <div
                 v-for="t in tiers"
@@ -103,22 +103,22 @@
                 <div class="tier-info">
                     <div class="tier-name">{{ t.name }}</div>
                     <div class="tier-sub">
-                        入场 {{ t.stake.toLocaleString() }} · 赢家到手
+                        Admission {{ t.stake.toLocaleString() }} · Winner gets it
                         {{ t.win.toLocaleString() }}
                     </div>
                 </div>
                 <div class="tier-burn">
                     <div class="tier-burn-num">🔥 {{ t.burn }}</div>
-                    <div class="tier-burn-lb">销毁 / 局</div>
+                    <div class="tier-burn-lb">destroy / bureau</div>
                 </div>
             </div>
         </div>
         <div class="info-desc info-desc--pad">
-            奖池全部来自双方入场，平台不增发。5% 手续费中一半永久销毁、一半进国库。
+            All prize pools come from both parties’ entries，The platform does not issue additional shares。5% Half of the handling fee will be permanently destroyed、Half goes to the treasury。
         </div>
 
-        <!-- ── 通缩销毁 ─────────────────────────────────── -->
-        <div class="section-title">通缩与销毁触点</div>
+        <!-- ── Deflationary destruction ────────────────────────────────── -->
+        <div class="section-title">Deflation and destruction touchpoints</div>
         <div class="burn-grid">
             <div v-for="b in burns" :key="b.name" class="burn-card">
                 <div class="burn-ic">{{ b.icon }}</div>
@@ -127,12 +127,12 @@
             </div>
         </div>
 
-        <!-- ── 质押 veFIST ──────────────────────────────── -->
-        <div class="section-title">质押 veFIST · 收益 + 治理</div>
+        <!-- ── Pledge veFIST ─────────────────────────────── -->
+        <div class="section-title">pledge veFIST · income + governance</div>
         <div class="info-card">
             <div class="info-desc">
-                质押 $FIST 并选择锁定期铸造不可转让的 veFIST，享质押分红与 DAO
-                治理权。锁得越久倍率越高。
+                pledge $FIST and choose a lock-in period to cast a non-transferable veFIST，Enjoy pledge dividends and DAO
+                governance rights。The longer it is locked, the higher the magnification。
             </div>
             <div class="ve-list">
                 <div v-for="v in veRates" :key="v.lock" class="ve-row">
@@ -141,31 +141,31 @@
                 </div>
             </div>
             <div class="chip-row">
-                <span class="pill">固定池 5000 万 · 36 月线性</span>
-                <span class="pill">国库手续费 40% 分红</span>
+                <span class="pill">fixed pool 5000 million · 36 monthly linear</span>
+                <span class="pill">Treasury handling fee 40% dividend</span>
             </div>
         </div>
 
-        <!-- ── 国库 ─────────────────────────────────────── -->
-        <div class="section-title">DAO 国库</div>
+        <!-- ──Treasury───────────────────────────────────── -->
+        <div class="section-title">DAO treasury</div>
         <div class="info-card treasury-card">
             <div class="treasury-top">
-                <div class="treasury-amount">2.00 亿</div>
-                <div class="treasury-lb">$FIST · 占总量 20%</div>
+                <div class="treasury-amount">2.00 billion</div>
+                <div class="treasury-lb">$FIST · Accounting for the total 20%</div>
             </div>
             <div class="info-desc">
-                用于运营、生态合作、DAO 提案执行与回购储备。收入来自 PvP
-                手续费的 50%、SOL 铸造 NFT 的收益等。
+                for operations、ecological cooperation、DAO Proposal Execution and Repurchase Reserve。Revenue comes from PvP
+                Handling fee 50%、SOL casting NFT income, etc.。
             </div>
             <div class="chip-row">
-                <span class="pill">链上地址公开</span>
-                <span class="pill">大额提款需 3/5 多签 + 48h 时间锁</span>
-                <span class="pill">≥100 万支出需 DAO 批准</span>
+                <span class="pill">Public address on the chain</span>
+                <span class="pill">Large withdrawals require 3/5 Multiple signatures + 48h time lock</span>
+                <span class="pill">≥100 million expenditures DAO approve</span>
             </div>
         </div>
 
-        <!-- ── 路线图 ───────────────────────────────────── -->
-        <div class="section-title">8–12 月冲刺路线图</div>
+        <!-- ── Roadmap ─────────────────────────────────── -->
+        <div class="section-title">8–12 Monthly Sprint Roadmap</div>
         <div class="road-list">
             <div v-for="(r, i) in roadmap" :key="r.stage" class="road-row">
                 <div class="road-line">
@@ -179,10 +179,10 @@
             </div>
         </div>
 
-        <!-- 免责声明 -->
+        <!-- Disclaimer -->
         <div class="disclaimer">
-            本页依据《$FIST 游戏代币经济学设计说明书 v1.0》整理，为设计讨论稿，最终参数以
-            TGE 正式发布及链上合约为准，不构成任何投资建议。
+            This page is based on《$FIST Game Token Economics Design Instructions v1.0》Organize，Design discussion paper，The final parameters are
+            TGE The official release and on-chain contract shall prevail.，Does not constitute any investment advice。
         </div>
     </div>
 </template>
@@ -196,29 +196,29 @@ defineEmits(["back"]);
 
 const fistStore = useFistStore();
 
-// 数据看板（静态白皮书数据）
+// Data dashboard (static white paper data)
 const statCards = [
-    { label: "总供应量", value: "10 亿", hint: "硬上限 · 不可增发", tone: "gold" },
-    { label: "PvE 日排放", value: "50 万", hint: "冷启动期 / 天", tone: "purple" },
-    { label: "DAO 国库", value: "2 亿", hint: "占总量 20%", tone: "blue" },
-    { label: "质押分红池", value: "5000 万", hint: "36 月线性释放", tone: "green" },
-    { label: "PvP 手续费", value: "5%", hint: "半数永久销毁", tone: "red" },
-    { label: "首年净流通", value: "~38%", hint: "第 12 个月节点", tone: "teal" },
+    { label: "total supply", value: "10 billion", hint: "hard cap · No additional issuance is allowed", tone: "gold" },
+    { label: "PvE daily emissions", value: "50 million", hint: "cold start period / day", tone: "purple" },
+    { label: "DAO treasury", value: "2 billion", hint: "Accounting for the total 20%", tone: "blue" },
+    { label: "Pledge dividend pool", value: "5000 million", hint: "36 monthly linear release", tone: "green" },
+    { label: "PvP handling fee", value: "5%", hint: "Half are permanently destroyed", tone: "red" },
+    { label: "Net circulation in the first year", value: "~38%", hint: "No. 12 month node", tone: "teal" },
 ];
 
-// 总量分配
+// Total allocation
 const allocation = [
-    { name: "PvE 生态奖励池", pct: 28, use: "日常胜局奖励，递减释放", color: "#a855f7" },
-    { name: "DAO 国库", pct: 20, use: "运营 / 合作 / 回购储备", color: "#3b82f6" },
-    { name: "团队", pct: 15, use: "2 年锁仓 + 3 年线性", color: "#64748b" },
-    { name: "邀请 / 社区增长", pct: 12, use: "冲刺期裂变与空投", color: "#ec4899" },
-    { name: "初始流动性", pct: 8, use: "DEX 做市 (Raydium/Orca)", color: "#14b8a6" },
-    { name: "早期投资人", pct: 7, use: "6 月锁仓 + 18 月线性", color: "#f97316" },
-    { name: "质押分红池", pct: 5, use: "专项质押奖励", color: "#22c55e" },
-    { name: "NFT 生态储备", pct: 5, use: "赛季激励 / 白名单", color: "#eab308" },
+    { name: "PvE Ecological reward pool", pct: 28, use: "Daily victory rewards，Decreasing release", color: "#a855f7" },
+    { name: "DAO treasury", pct: 20, use: "Operation / cooperation / repurchase reserve", color: "#3b82f6" },
+    { name: "team", pct: 15, use: "2 Annual lockup + 3 annual linear", color: "#64748b" },
+    { name: "Invite / community growth", pct: 12, use: "Fission and airdrop during sprint period", color: "#ec4899" },
+    { name: "initial liquidity", pct: 8, use: "DEX market making (Raydium/Orca)", color: "#14b8a6" },
+    { name: "early investors", pct: 7, use: "6 Monthly lockup + 18 monthly linear", color: "#f97316" },
+    { name: "Pledge dividend pool", pct: 5, use: "Special pledge rewards", color: "#22c55e" },
+    { name: "NFT ecological reserve", pct: 5, use: "Season motivation / whitelist", color: "#eab308" },
 ];
 
-// PvP 三档：复用 App 内的档位定义，补充销毁/到手（手续费 5%，其中 50% 销毁）
+// PvP three levels: reuse the level definitions in the App, supplement and destroy/obtain (5% handling fee, 50% of which is destroyed)
 const tiers = computed(() =>
     PVP_TIERS.map((t) => {
         const fee = t.stake * 2 * 0.05;
@@ -230,30 +230,30 @@ const tiers = computed(() =>
     }),
 );
 
-// 销毁触点
+// Destroy contact
 const burns = [
-    { icon: "⚔️", name: "PvP 手续费", rule: "手续费的 50% 永久销毁" },
-    { icon: "🥊", name: "NFT 铸造", rule: "$FIST 支付 100% 销毁" },
-    { icon: "🎨", name: "皮肤购买", rule: "季度皮肤全额销毁" },
-    { icon: "💱", name: "二级版税", rule: "5% 版税半数销毁" },
-    { icon: "🏆", name: "锦标赛入场", rule: "入场费 15% 销毁" },
-    { icon: "🗳️", name: "DAO 提案", rule: "可发起销毁议案" },
+    { icon: "⚔️", name: "PvP handling fee", rule: "Handling fee 50% permanently destroyed" },
+    { icon: "🥊", name: "NFT casting", rule: "$FIST pay 100% destroy" },
+    { icon: "🎨", name: "skin purchase", rule: "All quarterly skins are destroyed" },
+    { icon: "💱", name: "Secondary royalties", rule: "5% Half of the royalties are destroyed" },
+    { icon: "🏆", name: "Tournament Admission", rule: "Admission fee 15% destroy" },
+    { icon: "🗳️", name: "DAO proposal", rule: "Can initiate destruction motion" },
 ];
 
-// veFIST 锁定倍率
+// veFIST lock magnification
 const veRates = [
-    { lock: "锁定 1 个月", rate: "0.25" },
-    { lock: "锁定 6 个月", rate: "0.5" },
-    { lock: "锁定 1 年", rate: "1.0" },
-    { lock: "锁定 4 年", rate: "4.0" },
+    { lock: "Lock 1 months", rate: "0.25" },
+    { lock: "Lock 6 months", rate: "0.5" },
+    { lock: "Lock 1 year", rate: "1.0" },
+    { lock: "Lock 4 year", rate: "4.0" },
 ];
 
-// 路线图
+// roadmap
 const roadmap = [
-    { stage: "冷启动 · 1–2 月", text: "TGE + 流动性部署 + 邀请裂变启动" },
-    { stage: "增长 · 3–5 月", text: "NFT Genesis 发售 + 周锦标赛上线" },
-    { stage: "爆发 · 6–9 月", text: "PvP 排位 + DAO 上线 + 质押分红" },
-    { stage: "过渡 · 10–12 月", text: "社区接管运营，项目方降低干预" },
+    { stage: "cold start · 1–2 month", text: "TGE + Liquidity deployment + Invite fission to start" },
+    { stage: "growth · 3–5 month", text: "NFT Genesis On sale + Weekly Championship is online" },
+    { stage: "break out · 6–9 month", text: "PvP Ranking + DAO Go online + Pledge dividends" },
+    { stage: "Transition · 10–12 month", text: "Community takes over operations，Project side reduces intervention" },
 ];
 </script>
 
@@ -337,7 +337,7 @@ const roadmap = [
     border: 1px solid rgba(255, 179, 0, 0.3);
 }
 
-/* 分组标题 */
+/* Group title */
 .section-title {
     font-size: 13px;
     font-weight: 700;
@@ -346,7 +346,7 @@ const roadmap = [
     margin: 22px 2px 12px;
 }
 
-/* 数据看板 */
+/* Data dashboard */
 .stat-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -403,7 +403,7 @@ const roadmap = [
     margin: 10px 2px 0;
 }
 
-/* 总量分配 */
+/* Total allocation */
 .alloc-list {
     display: flex;
     flex-direction: column;
@@ -454,7 +454,7 @@ const roadmap = [
     color: rgba(255, 255, 255, 0.5);
 }
 
-/* 通用信息卡 */
+/* General information card */
 .info-card {
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -502,7 +502,7 @@ const roadmap = [
     border-color: rgba(255, 179, 0, 0.3);
 }
 
-/* PvP 三档 */
+/* PvP Tier 3 */
 .tier-list {
     display: flex;
     flex-direction: column;
@@ -560,7 +560,7 @@ const roadmap = [
     color: rgba(255, 255, 255, 0.4);
 }
 
-/* 销毁触点 */
+/* Destroy contact */
 .burn-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -612,7 +612,7 @@ const roadmap = [
     color: #c084fc;
 }
 
-/* 国库 */
+/* treasury */
 .treasury-card {
     border-color: rgba(96, 165, 250, 0.3);
     background: linear-gradient(160deg, rgba(59, 130, 246, 0.1), rgba(255, 255, 255, 0.03));
@@ -632,7 +632,7 @@ const roadmap = [
     color: rgba(255, 255, 255, 0.55);
 }
 
-/* 路线图 */
+/* roadmap */
 .road-list {
     display: flex;
     flex-direction: column;
@@ -683,7 +683,7 @@ const roadmap = [
     line-height: 1.5;
 }
 
-/* 免责声明 */
+/* Disclaimer */
 .disclaimer {
     font-size: 10px;
     line-height: 1.7;

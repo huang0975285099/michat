@@ -5,25 +5,25 @@ import { send, on, off, confirmPendingReads, getServerNow } from 'src/services/w
 import { notifyNewMessage } from 'src/services/notify'
 import { useIdentityStore } from 'src/stores/identity'
 
-// ── 安全常量 ──────────────────────────────────────────────
+// ──Safety constants────────────────────────────────────────────
 
 const DB_NAME = 'e2eechat_messages'
-const DB_VERSION = 5  // v5: 新增 message_files 持久化加密文件体（刷新后仍可下载/预览）
+const DB_VERSION = 5  //v5: Added message_files persistent encrypted file body (can still be downloaded/previewed after refreshing)
 const STORE_NAME = 'messages'
-const KEY_STORE_NAME = 'message_key'  // 存储消息加密密钥
-const PENDING_STORE_NAME = 'pending_messages'  // 锁定期间收到、待解锁后解密的原始密文
-const FILE_STORE_NAME = 'message_files'  // 加密后的文件二进制（与消息记录分离，懒加载）
-const BURN_AFTER_READ_DELAY = 2 * 60 * 60 * 1000  // 2小时
+const KEY_STORE_NAME = 'message_key'  //Store message encryption key
+const PENDING_STORE_NAME = 'pending_messages'  //The original ciphertext received during the lock period and to be decrypted after unlocking
+const FILE_STORE_NAME = 'message_files'  //Encrypted file binary (separated from message records, lazy loading)
+const BURN_AFTER_READ_DELAY = 2 * 60 * 60 * 1000  //2 hours
 
-// ── 文件传输常量 ──────────────────────────────────────────
+// ── File transfer constants ────────────────────────────────────────
 
-const CHUNK_SIZE = 128 * 1024  // 128KB 二进制分块
+const CHUNK_SIZE = 128 * 1024  //128KB binary chunks
 const MAX_FILE_SIZE = 10 * 1024 * 1024  // 10MB
 const MAX_FILENAME_BYTES = 255
 const AES_GCM_TAG_SIZE = 16
-// 文件扩展名必须在白名单中；浏览器提供明确 MIME 时，还必须与扩展名匹配。
-// 空 MIME 和 application/octet-stream 仅作为浏览器无法识别类型时的兼容值，
-// 不能再单独作为放行任意文件扩展名的依据。
+// The file extension must be in the whitelist; when the browser provides explicit MIME, it must also match the extension.
+// Empty MIME and application/octet-stream are only used as compatible values when the browser does not recognize the type.
+// It can no longer be used alone as a basis for permitting arbitrary file extensions.
 const ALLOWED_FILE_TYPES = new Map([
   ['jpg', new Set(['image/jpeg', 'image/jpg'])],
   ['jpeg', new Set(['image/jpeg', 'image/jpg'])],
@@ -67,27 +67,27 @@ function expectedFileChunkSize(filesize, chunkIndex) {
 
 function validateFileMetadata(filename, filetype, filesize) {
   if (typeof filename !== 'string' || !filename || new TextEncoder().encode(filename).length > MAX_FILENAME_BYTES) {
-    throw new Error('文件名无效或过长')
+    throw new Error('File name is invalid or too long')
   }
-  if (!Number.isInteger(filesize) || filesize <= 0) throw new Error('不能发送空文件')
-  if (filesize > MAX_FILE_SIZE) throw new Error('文件超过 10MB 限制')
+  if (!Number.isInteger(filesize) || filesize <= 0) throw new Error('Cannot send empty files')
+  if (filesize > MAX_FILE_SIZE) throw new Error('File exceeds 10MB Limit')
 
   const ext = filename.split('.').pop()?.toLowerCase() ?? ''
   const allowedMimeTypes = ALLOWED_FILE_TYPES.get(ext)
-  if (!allowedMimeTypes) throw new Error('不支持的文件格式')
+  if (!allowedMimeTypes) throw new Error('Unsupported file format')
 
   const mimeType = (filetype || '').split(';', 1)[0].trim().toLowerCase()
   if (!GENERIC_BINARY_MIME_TYPES.has(mimeType) && !allowedMimeTypes.has(mimeType)) {
-    throw new Error('文件扩展名与文件类型不匹配')
+    throw new Error('File extension does not match file type')
   }
 }
 
-// ── 消息加密密钥管理 ──────────────────────────────────────────────
+// ── Message encryption key management ───────────────────────────────────────────
 
 /**
- * 生成或加载消息加密密钥
- * CryptoKey 对象直接存入 IndexedDB（Structured Clone），raw bytes 永不落盘。
- * 旧格式（raw bytes）在首次读取时自动迁移。
+ * Generate or load message encryption keys
+ * The CryptoKey object is directly stored in IndexedDB (Structured Clone), and the raw bytes are never dropped.
+ * The old format (raw bytes) is automatically migrated the first time it is read.
  */
 async function getOrCreateMessageEncryptKey() {
   const db = await openMessagesDB()
@@ -98,12 +98,12 @@ async function getOrCreateMessageEncryptKey() {
     req.onsuccess = async (e) => {
       const record = e.target.result
       if (record) {
-        // 新格式：CryptoKey 对象直接存储
+        // New format: CryptoKey objects stored directly
         if (record.cryptoKey) {
           resolve(record.cryptoKey)
           return
         }
-        // 旧格式：raw bytes → 迁移为 CryptoKey 存储
+        // Old format: raw bytes → migrated to CryptoKey storage
         if (record.key) {
           try {
             const key = await crypto.subtle.importKey(
@@ -114,7 +114,7 @@ async function getOrCreateMessageEncryptKey() {
             const tx2 = db.transaction(KEY_STORE_NAME, 'readwrite')
             tx2.objectStore(KEY_STORE_NAME).put({ id: 'encrypt_key', cryptoKey: key })
             tx2.oncomplete = () => resolve(key)
-            tx2.onerror = () => resolve(key)  // 迁移失败仍可用
+            tx2.onerror = () => resolve(key)  //Migration failure is still available
             return
           } catch (err) {
             reject(err)
@@ -122,7 +122,7 @@ async function getOrCreateMessageEncryptKey() {
           }
         }
       }
-      // 生成新的 non-extractable 密钥，直接存 CryptoKey 对象
+      // Generate new non-extractable keys and store them directly in CryptoKey objects
       try {
         const key = await crypto.subtle.generateKey(
           { name: 'AES-GCM', length: 256 },
@@ -142,10 +142,10 @@ async function getOrCreateMessageEncryptKey() {
 }
 
 /**
- * 加密消息文本（用于 IndexedDB 存储）
+ * Encrypted message text (for IndexedDB storage)
  */
 async function encryptMessageText(plaintext, key) {
-  if (!key) return plaintext  // 无密钥时不加密（降级处理）
+  if (!key) return plaintext  //No encryption when there is no key (downgrade processing)
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const encoded = new TextEncoder().encode(plaintext)
   const ciphertext = await crypto.subtle.encrypt(
@@ -161,10 +161,10 @@ async function encryptMessageText(plaintext, key) {
 }
 
 /**
- * 解密消息文本（从 IndexedDB 加载时）
+ * Decrypt message text (when loading from IndexedDB)
  */
 async function decryptMessageText(encryptedData, key) {
-  if (!encryptedData.encrypted) return encryptedData  // 未加密的数据
+  if (!encryptedData.encrypted) return encryptedData  //unencrypted data
   if (!key) throw new Error('No decryption key available')
   const iv = Uint8Array.from(atob(encryptedData.iv), c => c.charCodeAt(0))
   const ciphertext = Uint8Array.from(atob(encryptedData.ciphertext), c => c.charCodeAt(0))
@@ -177,8 +177,8 @@ async function decryptMessageText(encryptedData, key) {
 }
 
 /**
- * 加密文件二进制（用于 IndexedDB 持久化）。
- * iv 与 ciphertext 都以 ArrayBuffer/TypedArray 形式存储（结构化克隆，避免 base64 膨胀）。
+ * Encrypted file binary (for IndexedDB persistence).
+ * Both iv and ciphertext are stored in the form of ArrayBuffer/TypedArray (structured cloning to avoid base64 expansion).
  */
 async function encryptFileBytes(arrayBuffer, key) {
   const iv = crypto.getRandomValues(new Uint8Array(12))
@@ -187,41 +187,41 @@ async function encryptFileBytes(arrayBuffer, key) {
 }
 
 /**
- * 解密文件二进制（从 IndexedDB 加载时），返回明文 ArrayBuffer。
+ * Decrypt the file binary (when loading from IndexedDB), returning a plaintext ArrayBuffer.
  */
 async function decryptFileBytes(record, key) {
   return crypto.subtle.decrypt({ name: 'AES-GCM', iv: record.iv }, key, record.ciphertext)
 }
 
-// ── IndexedDB 辅助 ──────────────────────────────────────────────
+// ── IndexedDB Auxiliary ───────────────────────────────────────────
 
 function openMessagesDB() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
     req.onupgradeneeded = (e) => {
       const db = e.target.result
-      // 检查 object store 是否已存在
+      // Check if object store already exists
       let store
       if (db.objectStoreNames.contains(STORE_NAME)) {
-        // 已存在，获取现有的 store
+        // Already exists, get the existing store
         store = e.target.transaction.objectStore(STORE_NAME)
       } else {
-        // 不存在，创建新 store
+        // Does not exist, create a new store
         store = db.createObjectStore(STORE_NAME, { keyPath: 'id' })
       }
-      // 添加索引（如果不存在）
+      // Add index if not present
       if (!store.indexNames.contains('burnAt')) {
         store.createIndex('burnAt', 'burnAt', { unique: false })
       }
-      // 添加消息加密密钥存储
+      // Add message encryption key storage
       if (!db.objectStoreNames.contains(KEY_STORE_NAME)) {
         db.createObjectStore(KEY_STORE_NAME, { keyPath: 'id' })
       }
-      // 暂存锁定期间无法解密的原始密文（解锁后补解密）
+      // Temporarily store the original ciphertext that cannot be decrypted during the lock period (complementary decryption after unlocking)
       if (!db.objectStoreNames.contains(PENDING_STORE_NAME)) {
         db.createObjectStore(PENDING_STORE_NAME, { keyPath: 'msg_id' })
       }
-      // 加密文件体：key = 消息 ID，附带 chatId 便于按会话清理
+      // Encrypted file body: key = message ID, with chatId attached to facilitate cleaning by session
       if (!db.objectStoreNames.contains(FILE_STORE_NAME)) {
         const fileStore = db.createObjectStore(FILE_STORE_NAME, { keyPath: 'id' })
         fileStore.createIndex('chatId', 'chatId', { unique: false })
@@ -284,7 +284,7 @@ async function dbDeleteMessage(msgId) {
   })
 }
 
-// ── 文件体持久化 ──────────────────────────────────────────────
+// ── File persistence ───────────────────────────────────────────
 
 async function dbPutFile(record) {
   const db = await openMessagesDB()
@@ -316,7 +316,7 @@ async function dbDeleteFile(msgId) {
   })
 }
 
-// 按会话清除文件体（配合 clearChatMessages）
+// Clear file body by session (with clearChatMessages)
 async function dbClearChatFiles(chatId) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {
@@ -347,7 +347,7 @@ async function dbMarkMessageRead(msgId) {
   })
 }
 
-// 标记某条消息的已读回执「已确认发出」，持久化以便刷新后不丢失
+// Mark the read receipt of a message as "confirmed" and persist it so that it is not lost after refreshing.
 async function dbMarkReceiptSent(msgId) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {
@@ -363,9 +363,9 @@ async function dbMarkReceiptSent(msgId) {
   })
 }
 
-// 接收端首次读到阅后即焚消息时，启动销毁倒计时并持久化（保留记录的其他字段）
-// 对非阅后即焚消息仅置 read=true；对已启动倒计时的消息为幂等操作，
-// 因此可安全地对任意 msg_id 调用，无需调用方预先判断 burnAfterRead。
+// When the receiving end reads the burn-after-read message for the first time, it starts the destruction countdown and persists it (retaining other fields of the record)
+// Only set read=true for messages that are not ephemeral after reading; for messages that have started a countdown, the operation is idempotent.
+// Therefore it can be safely called on any msg_id without requiring the caller to prejudge burnAfterRead.
 async function dbStartBurnCountdown(msgId, readReceivedAt, burnAt) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {
@@ -378,8 +378,8 @@ async function dbStartBurnCountdown(msgId, readReceivedAt, burnAt) {
       if (record) {
         found = true
         record.read = true
-        // 仅对阅后即焚消息且尚未启动倒计时时设置销毁时间，
-        // 避免重放回执（syncReadStatus 每次返回同一批 ID）导致倒计时反复重置
+        // Only set the destruction time for messages that will burn after reading and the countdown has not been started.
+        // Avoid repeated receipts (syncReadStatus returns the same batch of IDs each time) causing the countdown to be reset repeatedly
         if (record.burnAfterRead && !record.readReceivedAt) {
           record.readReceivedAt = readReceivedAt
           record.burnAt = burnAt
@@ -392,7 +392,7 @@ async function dbStartBurnCountdown(msgId, readReceivedAt, burnAt) {
   })
 }
 
-// 阅读方收到服务器 read_ack 后，用数据库中的首次阅读时间校正本地预启动的倒计时。
+// After the reader receives the server's read_ack, it corrects the local pre-start countdown with the first read time in the database.
 async function dbCorrectBurnCountdown(msgId, readReceivedAt, burnAt) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {
@@ -441,13 +441,13 @@ export function clearAllMessagesDB() {
   })
 }
 
-// ── 待解密密文暂存（锁定期间） ──────────────────────────────────
+// ── Temporary storage of ciphertext to be decrypted (locked period) ─────────────────────────────────
 
 async function dbAddPending(payload) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {
     const tx = db.transaction(PENDING_STORE_NAME, 'readwrite')
-    // put 而非 add：同一 msg_id 重复到达时覆盖，避免 ConstraintError
+    // put instead of add: overwrite when the same msg_id arrives repeatedly to avoid ConstraintError
     tx.objectStore(PENDING_STORE_NAME).put(payload)
     tx.oncomplete = () => resolve()
     tx.onerror = (e) => reject(e.target.error)
@@ -494,13 +494,13 @@ async function dbClearMessages(chatId) {
   })
 }
 
-// ── Store 定义 ──────────────────────────────────────────────────
+// ── Store definition ──────────────────────────────────────────────
 
 let msgCounter = 0
 
 /**
- * 生成全局唯一消息 ID
- * 格式: timestamp-base36 + counter + random
+ * Generate a globally unique message ID
+ * Format: timestamp-base36 + counter + random
  */
 function genMsgId() {
   msgCounter++
@@ -514,19 +514,19 @@ export const useChatStore = defineStore('chat', () => {
   // fileTransfers: { [transferId]: { direction, status, progress, filename, ... } }
   const fileTransfers = ref({})
 
-  // 等待服务器 ACK 的文字消息。ACK 超时只改变本地展示状态，不自动重发，避免重复消息。
+  // Text message waiting for server ACK. ACK timeout only changes the local display status and does not automatically resend to avoid repeated messages.
   const ackTimers = new Map()
   const MESSAGE_ACK_TIMEOUT_MS = 15000
-  // 消息入库是异步的；对方可能在极短窗口内已经打开会话并发回已读通知。
-  // 暂存这类早到回执，待本地消息入库时立即应用。
+  // Message storage is asynchronous; the other party may have opened a session and sent back a read notification within a very short window.
+  // This type of early receipt is temporarily stored and used immediately when the local message is stored in the database.
   const earlyReadReceipts = new Map()
   const EARLY_READ_RECEIPT_MAX = 500
 
-  // 消息加密密钥（用于加密 IndexedDB 存储）
+  // Message encryption key (used to encrypt IndexedDB storage)
   let messageEncryptKey = null
-  // 单例化首次密钥初始化：并发调用共享同一个 Promise，避免各自生成不同的密钥。
-  // 否则冷启动时多条离线消息并发进入 addMessage，会各自走「无密钥→生成新密钥」分支
-  // 产生分叉，最后一把落盘，先前用其它密钥加密的消息重载时解密失败（[解密失败]）。
+  // Singleton first key initialization: concurrent calls share the same Promise to avoid generating different keys.
+  // Otherwise, during cold start, multiple offline messages enter addMessage concurrently and will each take the "no key → generate new key" branch.
+  // A fork occurs, the last one is dropped, and decryption fails when reloading messages previously encrypted with other keys ([Decryption Failed]).
   let messageKeyPromise = null
 
   async function ensureMessageKey() {
@@ -534,7 +534,7 @@ export const useChatStore = defineStore('chat', () => {
     if (!messageKeyPromise) {
       messageKeyPromise = getOrCreateMessageEncryptKey()
         .then((k) => { messageEncryptKey = k; return k })
-        .catch((e) => { messageKeyPromise = null; throw e })  // 失败可重试
+        .catch((e) => { messageKeyPromise = null; throw e })  //Retry if failed
     }
     return messageKeyPromise
   }
@@ -544,7 +544,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * 检查消息 ID 是否已存在（防止重放攻击）
+   * Check if the message ID already exists (prevents replay attacks)
    */
   function isMsgIdExists(msgId) {
     for (const chatId in messages.value) {
@@ -585,10 +585,10 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * 添加消息到内存并加密持久化到 IndexedDB
+   * Add messages to memory and encrypt persistence to IndexedDB
    */
   async function addMessage(chatId, msg) {
-    // 安全检查：防止重放攻击
+    // Security Check: Preventing Replay Attacks
     if (isMsgIdExists(msg.id)) {
       console.warn('[chat] duplicate message id, ignoring:', msg.id)
       return false
@@ -598,7 +598,7 @@ export const useChatStore = defineStore('chat', () => {
     ensureThread(chatId)
     messages.value[chatId].push(msg)
 
-    // 加密存储到 IndexedDB
+    // Encrypted storage to IndexedDB
     try {
       await ensureMessageKey()
       const encryptedText = await encryptMessageText(msg.text, messageEncryptKey)
@@ -619,9 +619,9 @@ export const useChatStore = defineStore('chat', () => {
       })
       if (earlyReceipt) confirmReadReceiptsApplied(chatId, [earlyReceipt.msg_id])
     } catch (e) {
-      // DB 写入失败：保留内存中的消息（用户仍可见），仅刷新后丢失。
-      // 回滚内存会导致「消息已发出但发送方看不到」的不一致——
-      // 对方已收到消息，而发送方本地既无内存记录也无 DB 记录。
+      // DB write failure: Keep message in memory (still visible to user), only lost after refresh.
+      // Rolling back the memory will lead to the inconsistency of "the message has been sent but the sender cannot see it"——
+      // The other party has received the message, but the sender has neither memory records nor DB records locally.
       console.error('[chat] persist message failed, kept in memory:', e)
       return false
     }
@@ -629,14 +629,14 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * 从 IndexedDB 加载指定 chatId 的消息并解密
+   * Load the message with the specified chatId from IndexedDB and decrypt it
    */
   async function loadMessages(chatId) {
     try {
-      // 初始化加密密钥
+      // Initialize encryption keys
       await ensureMessageKey()
 
-      // 保留内存中已有的 blob URL（切换聊天时 store 单例仍持有有效 URL）
+      // Keep the existing blob URL in memory (the store singleton still holds the valid URL when switching chats)
       const existingUrls = {}
       for (const m of messages.value[chatId] || []) {
         if (m.type === 'file' && m.objectUrl) existingUrls[m.id] = m.objectUrl
@@ -645,7 +645,7 @@ export const useChatStore = defineStore('chat', () => {
       const allMsgs = await dbGetAllMessages()
       const chatMsgs = allMsgs.filter(m => m.chatId === chatId || m.from === chatId)
 
-      // 解密消息文本
+      // Decrypt message text
       const decryptedMsgs = await Promise.all(chatMsgs.map(async (m) => {
         try {
           const decryptedText = await decryptMessageText(m.text, messageEncryptKey)
@@ -656,17 +656,17 @@ export const useChatStore = defineStore('chat', () => {
           return { ...m, text: decryptedText, status: m.mine ? (m.status === 'pending' ? 'failed' : (m.status || 'sent')) : undefined }
         } catch (e) {
           console.warn('[chat] decrypt message failed:', m.id, e)
-          return { ...m, text: '[解密失败]' }
+          return { ...m, text: '[Decryption failed]' }
         }
       }))
 
-      // 懒加载文件体：仅为「内存中没有有效 blob URL」的文件消息从 IndexedDB 重建。
-      // 仅作用于当前打开的会话，避免一次性把所有文件读进内存。
+      // Lazy loading of file bodies: Rebuild from IndexedDB only for file messages with "no valid blob URL in memory".
+      // Only works on the currently open session to avoid reading all files into memory at once.
       await Promise.all(decryptedMsgs.map(async (m) => {
         if (m.type !== 'file' || m.objectUrl) return
         try {
           const rec = await dbGetFile(m.id)
-          if (!rec) return  // 无持久化副本（旧数据/未存成功）→ 保持 null，显示「已过期」
+          if (!rec) return  //No persistent copy (old data/not saved successfully) → keep null and display "Expired"
           const buf = await decryptFileBytes(rec, messageEncryptKey)
           m.objectUrl = URL.createObjectURL(new Blob([buf], { type: m.filetype || rec.filetype }))
         } catch (e) {
@@ -674,8 +674,8 @@ export const useChatStore = defineStore('chat', () => {
         }
       }))
 
-      // 合并内存里已有、但 DB 快照没有的消息（按 id 去重），避免加载期间到达的消息被
-      // 整体覆盖清掉。详见 loadAllMessages 里的同类修复说明。
+      // Merge messages that are already in the memory but not in the DB snapshot (deletion by id) to avoid messages arriving during loading being
+      // Clear the entire coverage. See the similar fix instructions in loadAllMessages for details.
       const ids = new Set(decryptedMsgs.map((m) => m.id))
       for (const m of messages.value[chatId] || []) {
         if (!ids.has(m.id)) decryptedMsgs.push(m)
@@ -685,21 +685,21 @@ export const useChatStore = defineStore('chat', () => {
       messages.value[chatId] = decryptedMsgs
     } catch (e) {
       console.error('[chat] load messages failed:', e)
-      // 丢弃前先释放已有 blob URL，避免加载失败路径泄漏内存
+      // Release existing blob URLs before discarding to avoid memory leaks in failed loading paths.
       for (const m of messages.value[chatId] || []) releaseFileObjectUrl(m)
       messages.value[chatId] = []
     }
   }
 
   /**
-   * 从 IndexedDB 加载所有消息并解密（应用启动时调用）
+   * Load all messages from IndexedDB and decrypt (called when app starts)
    */
   async function loadAllMessages() {
     try {
-      // 初始化加密密钥
+      // Initialize encryption keys
       await ensureMessageKey()
 
-      // 保留内存中已有的 blob URL
+      // Keep the blob URL already in memory
       const existingUrls = {}
       for (const cid in messages.value) {
         for (const m of messages.value[cid]) {
@@ -710,7 +710,7 @@ export const useChatStore = defineStore('chat', () => {
       const allMsgs = await dbGetAllMessages()
       const grouped = {}
 
-      // 解密并分组
+      // Decrypt and group
       for (const m of allMsgs) {
         const cid = m.chatId || m.from
         if (!grouped[cid]) grouped[cid] = []
@@ -725,16 +725,16 @@ export const useChatStore = defineStore('chat', () => {
           }
         } catch (e) {
           console.warn('[chat] decrypt message failed:', m.id, e)
-          grouped[cid].push({ ...m, text: '[解密失败]' })
+          grouped[cid].push({ ...m, text: '[Decryption failed]' })
         }
       }
 
-      // 合并内存中已有、但 DB 快照里还没有的消息（按 id 去重）。
-      // 关键修复：冷启动时 dbGetAllMessages 读到的是「读那一刻」的 DB 快照，若离线消息
-      // 在「读 DB」之后、「赋值 messages.value」之前才由 addMessage 到达并入库，直接
-      // 整体覆盖会把这些刚到达的消息从内存清掉（DB 里其实有，故切 tab 重载才出现）。
-      // 改为合并保留：内存里有而快照没有的消息补进 grouped。撤回/焚毁会同时清内存与
-      // DB，故不会复活已删除的消息。
+      // Merge messages that are already in the memory but not in the DB snapshot (remove duplicates by id).
+      // Key fix: dbGetAllMessages reads the DB snapshot "at the moment of reading" during cold start. If the message is offline
+      // After "reading DB" and before "assigning messages.value", addMessage arrives and is stored in the database directly.
+      // The overall coverage will clear these newly arrived messages from the memory (it actually exists in the DB, so it only appears after tab reloading).
+      // Change to merge retention: messages that are in the memory but not in the snapshot are grouped. Recall/Destroy will clear the memory and
+      // DB, so deleted messages will not be revived.
       for (const cid in messages.value) {
         const ids = new Set((grouped[cid] || []).map((m) => m.id))
         for (const m of messages.value[cid]) {
@@ -745,7 +745,7 @@ export const useChatStore = defineStore('chat', () => {
         }
       }
 
-      // 排序
+      // sort
       for (const cid in grouped) {
         grouped[cid].sort((a, b) => a.ts - b.ts)
       }
@@ -756,10 +756,10 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * 清除指定 chatId 的消息（清空 IndexedDB 和内存）
+   * Clear messages with specified chatId (clear IndexedDB and memory)
    */
   async function clearChatMessages(chatId) {
-    // 先释放内存中该会话所有文件 blob URL，避免泄漏
+    // First release all file blob URLs of the session in memory to avoid leaks
     for (const m of messages.value[chatId] || []) releaseFileObjectUrl(m)
     try {
       await dbClearMessages(chatId)
@@ -771,17 +771,17 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * 发送加密消息
-   * @param {string} toChatId - 接收方 chat_id
-   * @param {string} recipientPubKey - 接收方公钥（Base64）
-   * @param {string} text - 明文
-   * @param {boolean} burnAfterRead - 阅后即焚（对方阅读后2小时自动删除）
+   * Send encrypted messages
+   * @param {string} toChatId - receiver chat_id
+   * @param {string} recipientPubKey - recipient’s public key (Base64)
+   * @param {string} text - plain text
+   * @param {boolean} burnAfterRead - burn after reading (automatically deleted 2 hours after the other party reads it)
    */
   async function sendMessage(toChatId, recipientPubKey, text, burnAfterRead = false) {
     const msgId = genMsgId()
     const encrypted = await encryptMessage(text, recipientPubKey)
 
-    // 先建立本地 pending 记录，确保极速 ACK 到达时一定能找到对应消息。
+    // First establish a local pending record to ensure that the corresponding message can be found when the extremely fast ACK arrives.
     await addMessage(toChatId, {
       id: msgId,
       from: 'me',
@@ -821,11 +821,11 @@ export const useChatStore = defineStore('chat', () => {
     return true
   }
 
-  // ── 文件传输 ──────────────────────────────────────────────────
+  // ── File transfer ─────────────────────────────────────────────
 
   /**
-   * 将文件明文加密后持久化到 IndexedDB（与消息记录分离，懒加载）。
-   * 失败不影响消息收发，仅退化为「刷新后过期」。
+   * Encrypt the plain text of the file and persist it to IndexedDB (separated from message records, lazy loading).
+   * The failure does not affect message sending and receiving, but only degrades to "expire after refresh".
    */
   async function persistFileBlob(chatId, msgId, arrayBuffer, filetype) {
     try {
@@ -838,7 +838,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * 释放消息持有的 blob URL（内存），避免泄漏。删除/过期消息时必须调用。
+   * Release the blob URL (memory) held by the message to avoid leaks. Must be called when deleting/expiring a message.
    */
   function releaseFileObjectUrl(msg) {
     if (msg && msg.type === 'file' && msg.objectUrl) {
@@ -848,8 +848,8 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * 删除一条消息时一并清理其文件副本：释放内存 blob URL + 删除 IndexedDB 文件体。
-   * msg 可能为 undefined（内存中已不存在），此时仅清理持久化副本。
+   * When deleting a message, clean up its file copy: free memory blob URL + delete IndexedDB file body.
+   * msg may be undefined (no longer exists in memory), in which case only the persistent copy is cleaned.
    */
   async function deleteFileArtifacts(msg, msgId) {
     releaseFileObjectUrl(msg)
@@ -857,11 +857,11 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * 添加文件消息到内存和 IndexedDB（仅存元数据）
+   * Add file messages to memory and IndexedDB (metadata only)
    */
   async function addFileMessage(chatId, msg) {
     if (isMsgIdExists(msg.id)) {
-      // 重复消息：释放调用方传入的 objectUrl，避免泄漏
+      // Duplicate message: Release the objectUrl passed in by the caller to avoid leaks
       if (msg.objectUrl) URL.revokeObjectURL(msg.objectUrl)
       return false
     }
@@ -881,9 +881,9 @@ export const useChatStore = defineStore('chat', () => {
         text: encryptedText,
         ts: msg.ts,
         mine: msg.mine,
-        // 从 fullMsg（即推入内存的同一对象）读取读已读/倒计时状态：
-        // 收到文件后 markAsRead 可能在 dbAddMessage 之前就把它标记为已读并写入 burnAt，
-        // 这样持久化时能捕获到该状态，避免重载后倒计时丢失（与 addMessage 行为一致）
+        // Read read/countdown status from fullMsg (i.e. the same object pushed into memory):
+        // After receiving the file, markAsRead may mark it as read and write burnAt before dbAddMessage.
+        // In this way, the state can be captured during persistence to avoid losing the countdown after reloading (consistent with addMessage behavior)
         read: fullMsg.read || false,
         receiptSent: fullMsg.receiptSent || false,
         burnAfterRead: msg.burnAfterRead || false,
@@ -893,7 +893,7 @@ export const useChatStore = defineStore('chat', () => {
       })
       if (earlyReceipt) confirmReadReceiptsApplied(chatId, [earlyReceipt.msg_id])
     } catch (e) {
-      // DB 写入失败：保留内存中的消息（用户仍可见），清理孤儿文件体（刷新后消息丢失）
+      // DB write failure: retain messages in memory (still visible to users), clean up orphan file bodies (messages are lost after refresh)
       await dbDeleteFile(msg.id).catch(() => {})
       console.error('[chat] persist file message failed, kept in memory:', e)
       return false
@@ -902,7 +902,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * 等待 file_accept 或 file_reject（Promise 化）
+   * Wait for file_accept or file_reject (Promise-ified)
    */
   function waitForFileAccept(transferId, timeoutMs) {
     return new Promise((resolve, reject) => {
@@ -910,13 +910,13 @@ export const useChatStore = defineStore('chat', () => {
         off('file_accept', onAccept)
         off('file_reject', onReject)
         off('file_error', onErr)
-        reject(new Error('对方未响应，请确认对方在线后重试'))
+        reject(new Error('The other party did not respond，Please confirm that the other party is online and try again'))
       }, timeoutMs)
 
       function cleanup() { clearTimeout(timer); off('file_accept', onAccept); off('file_reject', onReject); off('file_error', onErr) }
       function onAccept(p) { if (p.transfer_id === transferId) { cleanup(); resolve() } }
-      function onReject(p) { if (p.transfer_id === transferId) { cleanup(); reject(new Error('对方拒绝了文件传输')) } }
-      function onErr(p) { if (p.transfer_id === transferId) { cleanup(); reject(new Error(p.reason || '文件传输出错')) } }
+      function onReject(p) { if (p.transfer_id === transferId) { cleanup(); reject(new Error('The other party refused the file transfer')) } }
+      function onErr(p) { if (p.transfer_id === transferId) { cleanup(); reject(new Error(p.reason || 'File transfer error')) } }
 
       on('file_accept', onAccept)
       on('file_reject', onReject)
@@ -925,27 +925,27 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * 等待接收端确认收齐并解密成功（file_done），或收到 file_error / 超时
+   * Wait for the receiving end to confirm that it has been received and decrypted successfully (file_done), or receives file_error / timeout
    */
   function waitForFileDone(transferId, timeoutMs) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         off('file_done', onDone)
         off('file_error', onErr)
-        reject(new Error('对方未确认接收，文件可能未送达'))
+        reject(new Error('The other party has not confirmed receipt，Document may not have been delivered'))
       }, timeoutMs)
 
       function cleanup() { clearTimeout(timer); off('file_done', onDone); off('file_error', onErr) }
       function onDone(p) { if (p.transfer_id === transferId) { cleanup(); resolve(p.ts) } }
-      function onErr(p) { if (p.transfer_id === transferId) { cleanup(); reject(new Error(p.reason || '对方接收失败')) } }
+      function onErr(p) { if (p.transfer_id === transferId) { cleanup(); reject(new Error(p.reason || 'The other party failed to receive')) } }
 
       on('file_done', onDone)
       on('file_error', onErr)
     })
   }
 
-  // ── 接收端传输看门狗：检测分块停滞，避免某块丢失导致永久卡死 ──────────
-  const RECEIVE_STALL_MS = 30000  // 30s 内无新进展则判定传输失败
+  // ── Receiver transmission watchdog: detect block stagnation to avoid permanent stuck due to loss of a certain block ──────────
+  const RECEIVE_STALL_MS = 30000  //If there is no new progress within 30 seconds, the transmission will be deemed to have failed.
 
   function armReceiveWatchdog(transferId) {
     const t = fileTransfers.value[transferId]
@@ -955,10 +955,10 @@ export const useChatStore = defineStore('chat', () => {
       const tr = fileTransfers.value[transferId]
       if (!tr || tr.status === 'done' || tr.status === 'error') return
       tr.status = 'error'
-      tr.errorReason = '传输超时'
+      tr.errorReason = 'Transmission timeout'
       tr.errorAt = Date.now()
       scheduleTransferCleanup(transferId, 6000)
-      send('file_error', { to: tr.fromChatId, transfer_id: transferId, reason: '接收超时' })
+      send('file_error', { to: tr.fromChatId, transfer_id: transferId, reason: 'receive timeout' })
     }, RECEIVE_STALL_MS)
   }
 
@@ -967,8 +967,8 @@ export const useChatStore = defineStore('chat', () => {
     if (t && t.timer) { clearTimeout(t.timer); t.timer = null }
   }
 
-  // ── 传输记录清理：终态后延迟删除，避免 fileTransfers 无限累积 ──────────
-  // done：1s 后清理（给 UI 一瞬显示完成）；error：6s 后清理（覆盖 activeTransfer 的 5s 错误窗口）
+  // ── Transfer record cleaning: Delay deletion after final state to avoid infinite accumulation of fileTransfers ──────────
+  // done: Clean up after 1s (give the UI a moment to show completion); error: Clean up after 6s (cover the 5s error window of activeTransfer)
   function scheduleTransferCleanup(transferId, delayMs) {
     setTimeout(() => {
       const t = fileTransfers.value[transferId]
@@ -981,7 +981,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * 组装并解密接收到的文件数据块
+   * Assemble and decrypt received file data blocks
    */
   async function assembleAndDecrypt(transfer) {
     if (transfer.status === 'done' || transfer.status === 'error') return
@@ -1003,14 +1003,14 @@ export const useChatStore = defineStore('chat', () => {
         ciphertext: combined.buffer
       })
       if (plainBuf.byteLength !== transfer.filesize) {
-        throw new Error('解密后的文件大小与发送方声明不一致')
+        throw new Error('The decrypted file size does not match the size reported by the sender')
       }
 
       const blob = new Blob([plainBuf], { type: transfer.filetype })
       const objectUrl = URL.createObjectURL(blob)
       transfer.objectUrl = objectUrl
 
-      // 持久化加密文件体，刷新后仍可下载/预览
+      // Persistent encrypted file body can still be downloaded/previewed after refreshing
       await persistFileBlob(transfer.fromChatId, transfer.msgId, plainBuf, transfer.filetype)
 
       const added = await addFileMessage(transfer.fromChatId, {
@@ -1022,46 +1022,46 @@ export const useChatStore = defineStore('chat', () => {
         objectUrl,
         mine: false,
         burnAfterRead: transfer.burnAfterRead || false,
-        ts: transfer.ts  // 时间戳，与发送端一致
+        ts: transfer.ts  //Timestamp, consistent with the sender
       })
       if (!added) {
-        // 消息未入库（重复 ID 或 DB 失败），但文件已成功接收解密，内存中可见
-        // 重复 ID：消息已存在；DB 失败：消息在内存中（刷新后丢失）
+        // The message is not stored in the database (duplicate ID or DB failure), but the file is successfully received and decrypted and is visible in memory
+        // Duplicate ID: message already exists; DB failure: message in memory (lost after refresh)
         console.warn('[chat] file message not persisted:', transfer.msgId)
       }
-      // 通知发送端：已收齐并解密成功，回带时间戳供发送端统一显示
+      // Notify the sending end: All has been collected and decrypted successfully, and a timestamp is returned for unified display by the sending end.
       send('file_done', { to: transfer.fromChatId, transfer_id: transfer.id, ts: transfer.ts })
       scheduleTransferCleanup(transfer.id, 1000)
     } catch (e) {
       transfer.status = 'error'
-      transfer.errorReason = '文件解密失败'
+      transfer.errorReason = 'File decryption failed'
       transfer.errorAt = Date.now()
       clearReceiveWatchdog(transfer.id)
       scheduleTransferCleanup(transfer.id, 6000)
-      send('file_error', { to: transfer.fromChatId, transfer_id: transfer.id, reason: '文件解密失败' })
+      send('file_error', { to: transfer.fromChatId, transfer_id: transfer.id, reason: 'File decryption failed' })
       console.error('[chat] file decrypt failed:', e)
     }
   }
 
   /**
-   * 验证文件类型和大小
+   * Verify file type and size
    */
   function validateFile(file) {
     validateFileMetadata(file.name, file.type, file.size)
   }
 
   /**
-   * 发送文件（P2P WebSocket 中继）
+   * Send files (P2P WebSocket relay)
    * @param {string} toChatId
    * @param {string} recipientPubKey
    * @param {File} file
-   * @param {boolean} burnAfterRead - 阅后即焚（对方阅读后2小时自动删除）
+   * @param {boolean} burnAfterRead - burn after reading (automatically deleted 2 hours after the other party reads it)
    */
   async function sendFile(toChatId, recipientPubKey, file, burnAfterRead = false) {
     validateFile(file)
 
     const transferId = crypto.randomUUID()
-    const msgId = genMsgId()  // 消息记录 ID（符合已读回执格式），与 WebSocket 路由用的 UUID 分离
+    const msgId = genMsgId()  //Message record ID (in read receipt format), separate from the UUID used for WebSocket routing
     fileTransfers.value[transferId] = {
       id: transferId,
       msgId,
@@ -1076,12 +1076,12 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     try {
-      // 读取并加密文件
+      // Read and encrypt files
       const fileBuffer = await file.arrayBuffer()
       const { ephemeralPubKey, iv, ciphertext } = await encryptFile(fileBuffer, recipientPubKey)
 
-      // 先建立发送方本地待确认记录并保存文件体。这样接收端的 file_done 即使在发送方
-      // 瞬时断线后离线补投，重启应用也能凭 msg_id 把该文件恢复为发送成功。
+      // First create a local record of the sender to be confirmed and save the file body. In this way, the file_done on the receiving end is even on the sending side.
+      // After a momentary disconnection, the file can be reposted offline and the file can be restored to successfully sent based on msg_id by restarting the application.
       const localObjectUrl = URL.createObjectURL(new Blob([fileBuffer], { type: file.type }))
       await persistFileBlob(toChatId, msgId, fileBuffer, file.type)
       await addFileMessage(toChatId, {
@@ -1097,7 +1097,7 @@ export const useChatStore = defineStore('chat', () => {
         ts: getServerNow()
       })
 
-      // 分块
+      // Chunking
       const cipherArr = new Uint8Array(ciphertext)
       const chunks = []
       for (let i = 0; i < cipherArr.length; i += CHUNK_SIZE) {
@@ -1106,7 +1106,7 @@ export const useChatStore = defineStore('chat', () => {
       const totalChunks = chunks.length
       fileTransfers.value[transferId].totalChunks = totalChunks
 
-      // 发送 offer
+      // Send offer
       const ok = send('file_offer', {
         to: toChatId,
         transfer_id: transferId,
@@ -1118,50 +1118,50 @@ export const useChatStore = defineStore('chat', () => {
         ephemeral_pub_key: ephemeralPubKey,
         iv,
         burn_after_read: burnAfterRead,
-        ts: Date.now()  // 发送方时间戳，供接收端用作消息时间（后端中继若注入 ts 则覆盖）
+        ts: Date.now()  //The sender timestamp is used by the receiver as the message time (overridden by the backend relay if ts is injected)
       })
-      if (!ok) throw new Error('发送失败，请检查网络连接')
+      if (!ok) throw new Error('Sending failed，Please check network connection')
 
-      // 等待对方接受
+      // Wait for the other party to accept
       await waitForFileAccept(transferId, 30000)
       fileTransfers.value[transferId].status = 'transferring'
 
-      // 必须在发送第一块前监听完成回执。接收端收到最后一块就会立即解密并发送
-      // file_done；若发送完所有块后才监听，极速回执会被 WebSocket 层丢弃。
+      // Must listen for completion receipt before sending the first block. When the receiving end receives the last block, it will immediately decrypt it and send it.
+      // file_done; if you listen after all blocks have been sent, the fast receipt will be discarded by the WebSocket layer.
       const doneResultPromise = waitForFileDone(transferId, 120000)
         .then(ts => ({ ok: true, ts }), error => ({ ok: false, error }))
 
-      // 逐块发送
+      // Send chunk by chunk
       for (let i = 0; i < chunks.length; i++) {
-        if (fileTransfers.value[transferId]?.status === 'error') throw new Error('传输已中断')
+        if (fileTransfers.value[transferId]?.status === 'error') throw new Error('Transfer interrupted')
         const sent = send('file_chunk', {
           to: toChatId,
           transfer_id: transferId,
           chunk_index: i,
           data: bufToB64(chunks[i].buffer)
         })
-        if (!sent) throw new Error('网络中断，文件发送失败')
+        if (!sent) throw new Error('Network outage，File sending failed')
         fileTransfers.value[transferId].progress = Math.round((i + 1) / totalChunks * 95)
-        // 每 10 块让出一次事件循环，避免阻塞 UI
+        // Give way to the event loop every 10 blocks to avoid blocking the UI
         if (i % 10 === 9) await new Promise(r => setTimeout(r, 0))
       }
 
-      // 发送完成信号
+      // Send completion signal
       if (!send('file_complete', { to: toChatId, transfer_id: transferId })) {
-        throw new Error('网络中断，文件完成信号发送失败')
+        throw new Error('Network outage，File completion signal failed to send')
       }
       fileTransfers.value[transferId].progress = 100
 
-      // 等待接收端确认收齐并解密成功；超时或收到 file_error 则按失败处理
-      // 返回的 ts 来自接收端，两端显示一致
+      // Wait for the receiving end to confirm that it has been received and decrypted successfully; if it times out or receives a file_error, it will be treated as a failure.
+      // The returned ts comes from the receiving end, and both ends display the same
       const doneResult = await doneResultPromise
       if (!doneResult.ok) throw doneResult.error
       const doneTs = doneResult.ts
       fileTransfers.value[transferId].status = 'done'
       scheduleTransferCleanup(transferId, 1000)
 
-      // file_done 的时间戳由后端从 offer 会话中注入，两端统一；全局监听也会执行同样
-      // 的幂等更新，以覆盖断线补投或页面重启后的完成通知。
+      // The timestamp of file_done is injected from the offer session by the backend, and is unified at both ends; the global monitoring will also perform the same
+      // Idempotent update to cover the completion notification after disconnection or page restart.
       const finalTs = (typeof doneTs === 'number' && doneTs > 0) ? doneTs : getServerNow()
       const localMsg = messages.value[toChatId]?.find(m => m.id === msgId)
       if (localMsg) { localMsg.status = 'sent'; localMsg.ts = finalTs }
@@ -1184,7 +1184,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function recallMessage(chatId, msgId, toChatId) {
-    // 本地删除
+    // local delete
     const msgs = messages.value[chatId]
     let removed
     if (msgs) {
@@ -1193,20 +1193,20 @@ export const useChatStore = defineStore('chat', () => {
     }
     await dbDeleteMessage(msgId)
     await deleteFileArtifacts(removed, msgId)
-    // 通知对方撤回
+    // Notify the other party to withdraw
     if (toChatId) {
       send('recall', { to: toChatId, msg_id: msgId })
     }
   }
 
-  // ── 安全验证常量 ──────────────────────────────────────────────
+  // ── Security verification constants ───────────────────────────────────────────
 
 const CHAT_ID_PATTERN = /^\d{4}-[A-Z]{4}$/
 const MSG_ID_PATTERN = /^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/
 const TRANSFER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
- * 验证 payload 中的 chat_id 格式
+ * Verify chat_id format in payload
  */
 function validateChatId(chatId) {
   if (!chatId || typeof chatId !== 'string') return false
@@ -1214,7 +1214,7 @@ function validateChatId(chatId) {
 }
 
 /**
- * 验证 payload 中的 msg_id 格式
+ * Verify msg_id format in payload
  */
 function validateMsgId(msgId) {
   if (!msgId || typeof msgId !== 'string') return false
@@ -1222,11 +1222,11 @@ function validateMsgId(msgId) {
 }
 
 /**
- * 注册 WebSocket 消息监听（在聊天页面 mounted 时调用）
+ * Register WebSocket message listening (called when the chat page is mounted)
    */
   function startListening() {
     async function onMessage(payload) {
-      // 安全验证：检查 payload 结构
+      // Security verification: check payload structure
       if (!payload) {
         console.warn('[chat] empty message payload')
         return
@@ -1239,19 +1239,19 @@ function validateMsgId(msgId) {
         console.warn('[chat] invalid msg_id in message:', payload.msg_id)
         return
       }
-      // 验证加密参数
+      // Verify encryption parameters
       if (!payload.ephemeral_pub_key || !payload.iv || !payload.ciphertext) {
         console.warn('[chat] missing encryption params in message')
         return
       }
-      // 验证时间戳（使用服务器时间）
+      // Verify timestamp (using server time)
       if (typeof payload.ts !== 'number' || payload.ts < 0) {
         console.warn('[chat] invalid ts in message:', payload.ts)
         return
       }
 
-      // 提醒放在解密之前：锁定状态下私钥已清除、消息无法解密，
-      // 但仍应让用户知道「收到新消息」并触发闪烁（通知文案通用，不含内容）
+      // Reminder is placed before decryption: the private key has been cleared in the locked state and the message cannot be decrypted.
+      // However, the user should still be informed of "received new message" and trigger a flash (the notification text is general and does not contain content)
       notifyNewMessage()
 
       try {
@@ -1264,14 +1264,14 @@ function validateMsgId(msgId) {
           id: payload.msg_id,
           from: payload.from,
           text,
-          ts: payload.ts,  // 使用服务器时间
+          ts: payload.ts,  //Use server time
           mine: false,
           burnAfterRead: payload.burn_after_read || false,
           burnAt: null
         })
       } catch (e) {
-        // 锁定态下私钥已清除，必然解密失败：暂存原始密文，解锁后补解密。
-        // 非锁定态的解密失败属于真损坏，沿用原有「丢弃」行为。
+        // If the private key has been cleared in the locked state, decryption must fail: the original ciphertext is temporarily stored and decrypted after unlocking.
+        // Decryption failure in the non-locked state is considered true damage, and the original "discard" behavior is used.
         if (useIdentityStore().isLocked) {
           await dbAddPending({
             msg_id: payload.msg_id,
@@ -1289,7 +1289,7 @@ function validateMsgId(msgId) {
     }
 
     async function onRecall(payload) {
-      // 安全验证
+      // Security verification
       if (!payload) {
         console.warn('[chat] empty recall payload')
         return
@@ -1316,7 +1316,7 @@ function validateMsgId(msgId) {
     }
 
     async function onAck(payload) {
-      // 安全验证
+      // Security verification
       if (!payload) {
         console.warn('[chat] empty ack payload')
         return
@@ -1345,7 +1345,7 @@ function validateMsgId(msgId) {
     }
 
     async function onReadReceipt(payload) {
-      // 安全验证
+      // Security verification
       if (!payload) {
         console.warn('[chat] empty read_receipt payload')
         return
@@ -1355,7 +1355,7 @@ function validateMsgId(msgId) {
         return
       }
       let receipts = payload.receipts
-      // 兼容滚动发布期间旧后端的仅 ID 格式；新后端始终提供权威 read_at。
+      // Compatible with the old backend's ID-only format during rolling releases; the new backend always provides authoritative read_at.
       if (!Array.isArray(receipts) && Array.isArray(payload.msg_id)) {
         const fallbackTime = getServerNow()
         receipts = payload.msg_id.map(msg_id => ({ msg_id, read_at: fallbackTime }))
@@ -1385,7 +1385,7 @@ function validateMsgId(msgId) {
       }
       await Promise.all(ids.map(id => dbMarkReceiptSent(id).catch(() => {})))
 
-      // 用服务器首次阅读时间校准阅读方自己的销毁时刻，覆盖认证前极短窗口内的本机时间退化值。
+      // Use the server's first reading time to calibrate the reader's own destruction time, covering the local time degradation value within a very short window before authentication.
       const receipts = Array.isArray(payload.receipts) ? payload.receipts : []
       await Promise.all(receipts.map(async receipt => {
         if (!validateMsgId(receipt?.msg_id) || !Number.isFinite(receipt?.read_at) || receipt.read_at <= 0) return
@@ -1402,7 +1402,7 @@ function validateMsgId(msgId) {
       }))
     }
 
-    // ── 文件传输事件 ────────────────────────────────────────────
+    // ── File transfer event ─────────────────────────────────────────
 
     function failIncomingTransfer(transfer, reason) {
       if (!transfer || transfer.status === 'done' || transfer.status === 'error') return
@@ -1419,14 +1419,14 @@ function validateMsgId(msgId) {
       if (!validateChatId(from) || !TRANSFER_ID_PATTERN.test(transfer_id)) return
       try {
         validateFileMetadata(filename, filetype, filesize)
-        if (!validateMsgId(msg_id)) throw new Error('文件消息编号无效')
+        if (!validateMsgId(msg_id)) throw new Error('File message number is invalid')
         if (!Number.isInteger(total_chunks) || total_chunks !== expectedFileChunks(filesize)) {
-          throw new Error('文件分块数量与声明大小不匹配')
+          throw new Error('Number of file chunks does not match declared size')
         }
         if (typeof ephemeral_pub_key !== 'string' || !ephemeral_pub_key || typeof iv !== 'string' || !iv) {
-          throw new Error('缺少文件加密参数')
+          throw new Error('Missing file encryption parameters')
         }
-        if (fileTransfers.value[transfer_id]) throw new Error('文件传输编号重复')
+        if (fileTransfers.value[transfer_id]) throw new Error('Duplicate file transfer number')
       } catch (error) {
         console.warn('[chat] rejected invalid file offer:', error.message)
         send('file_error', { to: from, transfer_id, reason: error.message })
@@ -1449,12 +1449,12 @@ function validateMsgId(msgId) {
         ephemeralPubKey: ephemeral_pub_key,
         iv,
         burnAfterRead: payload.burn_after_read || false,
-        ts: (typeof payload.ts === 'number' && payload.ts > 0) ? payload.ts : Date.now(),  // 服务器时间戳，两端统一
+        ts: (typeof payload.ts === 'number' && payload.ts > 0) ? payload.ts : Date.now(),  //Server timestamp, unified on both ends
         timer: null
       }
-      // 启动停滞看门狗，避免某块丢失导致永久卡在传输中
+      // Start the stall watchdog to avoid being permanently stuck in transmission due to the loss of a certain block.
       armReceiveWatchdog(transfer_id)
-      // 自动接受
+      // Automatically accept
       send('file_accept', { to: from, transfer_id })
     }
 
@@ -1464,25 +1464,25 @@ function validateMsgId(msgId) {
       if (!transfer || transfer.direction !== 'receive' || transfer.status !== 'transferring') return
       if (from !== transfer.fromChatId || !Number.isInteger(chunk_index) || chunk_index < 0 ||
           chunk_index >= transfer.totalChunks || transfer.chunks[chunk_index] || typeof data !== 'string') {
-        failIncomingTransfer(transfer, '收到无效的文件分块')
+        failIncomingTransfer(transfer, 'Invalid file chunk received')
         return
       }
       try {
         const decodedSize = b64ToBuf(data).byteLength
         if (decodedSize !== expectedFileChunkSize(transfer.filesize, chunk_index)) {
-          throw new Error('文件分块长度不匹配')
+          throw new Error('File chunk length mismatch')
         }
       } catch {
-        failIncomingTransfer(transfer, '文件分块内容或长度无效')
+        failIncomingTransfer(transfer, 'File chunk content or length is invalid')
         return
       }
 
       transfer.chunks[chunk_index] = data
       transfer.receivedCount++
       transfer.progress = Math.round(transfer.receivedCount / transfer.totalChunks * 95)
-      armReceiveWatchdog(transfer_id)  // 有新进展则重置停滞计时
+      armReceiveWatchdog(transfer_id)  //When there is new progress, the stagnation timer will be reset.
 
-      // 全部到齐时自动组装（无需等 file_complete）
+      // Automatically assemble when everything is ready (no need to wait for file_complete)
       if (transfer.receivedCount === transfer.totalChunks) {
         assembleAndDecrypt(transfer)
       }
@@ -1493,17 +1493,17 @@ function validateMsgId(msgId) {
       const transfer = fileTransfers.value[transfer_id]
       if (!transfer || transfer.direction !== 'receive' || transfer.status !== 'transferring') return
       if (from !== transfer.fromChatId) {
-        failIncomingTransfer(transfer, '无效的文件完成信号')
+        failIncomingTransfer(transfer, 'Invalid file completion signal')
         return
       }
-      // 收齐则组装；缺块则判定失败并通知发送方，避免发送端误以为成功
+      // If all the blocks are collected, the assembly will be completed; if there are missing blocks, the failure will be determined and the sender will be notified to avoid the sender mistakenly thinking that it is successful.
       if (transfer.receivedCount < transfer.totalChunks || transfer.chunks.some(c => !c)) {
         transfer.status = 'error'
-        transfer.errorReason = '文件传输不完整'
+        transfer.errorReason = 'Incomplete file transfer'
         transfer.errorAt = Date.now()
         clearReceiveWatchdog(transfer_id)
         scheduleTransferCleanup(transfer_id, 6000)
-        send('file_error', { to: transfer.fromChatId, transfer_id, reason: '接收不完整' })
+        send('file_error', { to: transfer.fromChatId, transfer_id, reason: 'Incomplete reception' })
         return
       }
       assembleAndDecrypt(transfer)
@@ -1514,7 +1514,7 @@ function validateMsgId(msgId) {
       const transfer = fileTransfers.value[transfer_id]
       if (transfer && transfer.status !== 'done') {
         transfer.status = 'error'
-        transfer.errorReason = reason || '传输失败'
+        transfer.errorReason = reason || 'Transfer failed'
         transfer.errorAt = Date.now()
         clearReceiveWatchdog(transfer_id)
         scheduleTransferCleanup(transfer_id, 6000)
@@ -1571,7 +1571,7 @@ function validateMsgId(msgId) {
   async function clearAll() {
     for (const timer of ackTimers.values()) clearTimeout(timer)
     ackTimers.clear()
-    // 释放所有内存中的文件 blob URL（deleteDatabase 会清空文件体存储）
+    // Release all in-memory file blob URLs (deleteDatabase will clear the file body storage)
     for (const cid in messages.value) {
       for (const m of messages.value[cid]) releaseFileObjectUrl(m)
     }
@@ -1580,7 +1580,7 @@ function validateMsgId(msgId) {
   }
 
   /**
-   * 从服务器拉取好友已读记录，补偿发送方离线期间丢失的已读回执
+   * Pull friends' read records from the server to compensate for the read receipts lost while the sender is offline
    */
   async function syncReadStatus(peerChatId) {
     try {
@@ -1598,30 +1598,30 @@ function validateMsgId(msgId) {
   }
 
   /**
-   * 标记一组消息为已读，并发送已读回执给发送方
+   * Mark a group of messages as read and send a read receipt to the sender
    */
   async function markAsRead(chatId) {
     const msgs = messages.value[chatId] || []
     const readReceivedAt = getServerNow()
-    const newlyRead = []        // 本次新标记为已读的（用于持久化 read）
-    const burnReads = []        // 接收端首次读到的阅后即焚消息，需启动销毁倒计时
-    const pendingReceiptIds = []  // 需要（重）发回执的：本地已读但回执尚未确认送达
+    const newlyRead = []        //This new mark is read (for persistent read)
+    const burnReads = []        //The first read-out message read by the receiving end needs to start the destruction countdown.
+    const pendingReceiptIds = []  //Need to (re)send acknowledgment: The message has been read locally but the acknowledgment has not yet been confirmed as delivered.
     for (const m of msgs) {
       if (m.mine) continue
       if (!m.read) {
         m.read = true
         newlyRead.push(m.id)
-        // 阅后即焚：接收端读到后即启动销毁倒计时（销毁的是「看的人」这份）
+        // Burn after reading: The receiving end starts a countdown to destruction after reading it (the "viewer" copy is destroyed)
         if (m.burnAfterRead) {
           m.readReceivedAt = readReceivedAt
           m.burnAt = readReceivedAt + BURN_AFTER_READ_DELAY
           burnReads.push(m.id)
         }
       }
-      // 只要回执还没确认送达就需要补发——服务器 RecordRead 幂等，重发安全
+      // As long as the receipt has not been confirmed as delivered, it needs to be reissued - the server RecordRead is idempotent and resending is safe.
       if (!m.receiptSent) pendingReceiptIds.push(m.id)
     }
-    // 持久化新标记的已读状态到 IndexedDB
+    // Persist the read status of new tags to IndexedDB
     if (newlyRead.length > 0) {
       const burnSet = new Set(burnReads)
       await Promise.all(newlyRead.map(id =>
@@ -1631,14 +1631,14 @@ function validateMsgId(msgId) {
       ))
     }
     if (pendingReceiptIds.length === 0) return
-    // WebSocket 层统一去重、拆成每批最多 100 条并只 flush 一次，避免循环发送时把前面
-    // 尚未 ACK 的批次反复发送，形成 O(n²) 请求风暴。
+    // The WebSocket layer uniformly deduplicates, splits each batch into a maximum of 100 items, and only flushes them once to avoid cyclically sending the previous items.
+    // Batches that have not yet been ACKed are sent repeatedly, creating an O(n²) request storm.
     send('read', { to: chatId, msg_id: pendingReceiptIds })
   }
 
   /**
-   * 处理对方发来的已读回执通知（我发的消息被对方读了）
-   * 对于阅后即焚消息，使用服务器记录的首次阅读时间。
+   * Handle the read receipt notification sent by the other party (the message I sent was read by the other party)
+   * For messages that disappear after reading, the first reading time recorded by the server is used.
    */
   async function handleReadReceipt(fromChatId, receipts, rememberMissing = true) {
     if (!validateChatId(fromChatId) || !Array.isArray(receipts)) return
@@ -1657,20 +1657,20 @@ function validateMsgId(msgId) {
         }
         m.status = 'sent'
         m.read = true
-        // 阅后即焚消息：仅在「首次」收到回执时启动销毁倒计时。
-        // 服务器的 getReadReceipts 每次都会返回同一批已读 ID，若不加守卫，
-        // 每次重新进入聊天/重连都会把 readReceivedAt 重置为当前时间，
-        // 导致倒计时反复从 2 小时重新开始。
+        // Messages that will burn after reading: The destruction countdown will only start when a receipt is received "for the first time".
+        // The server's getReadReceipts will return the same batch of read IDs every time. If no guards are added,
+        // Each time you re-enter the chat/reconnect, readReceivedAt will be reset to the current time.
+        // Causes the countdown to repeatedly restart from 2 hours.
         if (m.burnAfterRead && !m.readReceivedAt) {
           m.readReceivedAt = receipt.read_at
           m.burnAt = receipt.read_at + BURN_AFTER_READ_DELAY
         }
       }
     }
-    // 统一落库：dbStartBurnCountdown 内部会判断 burnAfterRead 且仅在未启动倒计时时写入，
-    // 因此对非阅后即焚消息仅置 read=true，对已在内存中处理过的消息为幂等操作。
-    // 关键修复：即使消息未加载进内存（发送方不在聊天页），也能正确启动销毁倒计时，
-    // 避免 DB 记录停留在 read=true 但 readReceivedAt/burnAt 为空导致永不删除。
+    // Unified storage: dbStartBurnCountdown will internally determine burnAfterRead and only write when the countdown is not started.
+    // Therefore, only read=true is set for messages that are not ephemeral after reading, and the operation is idempotent for messages that have been processed in memory.
+    // Key fix: Even if the message is not loaded into memory (the sender is not on the chat page), the destruction countdown can be started correctly.
+    // Avoid DB records staying with read=true but readReceivedAt/burnAt empty and never deleted.
     const appliedIds = []
     await Promise.all(validReceipts.map(async receipt => {
       const found = await dbStartBurnCountdown(
@@ -1685,14 +1685,14 @@ function validateMsgId(msgId) {
     confirmReadReceiptsApplied(fromChatId, appliedIds)
   }
 
-  // ── 定时删除过期消息 ────────────────────────────────────────
+  // ── Delete expired messages regularly ──────────────────────────────────────
 
   let burnTimer = null
   let burnCheckRunning = false
 
   /**
-   * 启动定时删除检查（每分钟检查一次）
-   * 使用认证时校准的服务器时间，防止修改设备系统时间绕过删除。
+   * Start scheduled deletion check (check once every minute)
+   * Use the server time calibrated during authentication to prevent modification of the device system time to bypass deletion.
    */
   function startBurnTimer() {
     if (burnTimer) return
@@ -1700,7 +1700,7 @@ function validateMsgId(msgId) {
   }
 
   /**
-   * 停止定时删除检查
+   * Stop scheduled deletion checks
    */
   function stopBurnTimer() {
     if (burnTimer) {
@@ -1710,9 +1710,9 @@ function validateMsgId(msgId) {
   }
 
   /**
-   * 立即检查并删除过期消息
-   * 同时扫描 IndexedDB 的 burnAt 索引，即使相关会话尚未加载进内存，也会删除消息
-   * 元数据和加密文件体。应用关闭期间到期的数据会在下次启动后立即清理。
+   * Check and delete expired messages immediately
+   * The burnAt index of IndexedDB is also scanned and messages are deleted even if the related session has not been loaded into memory.
+   * Metadata and encrypted file body. Data that expired while the app was closed will be cleared immediately after the next startup.
    */
   async function checkExpiredMessages() {
     if (burnCheckRunning) return
@@ -1747,9 +1747,9 @@ function validateMsgId(msgId) {
   }
 
   /**
-   * 解锁后调用：补解密锁定期间暂存的密文。
-   * 成功 → 入库并删暂存；解锁后仍失败 → 视为真损坏，删暂存（自清理）；
-   * 仍处于锁定（私钥未就绪）→ 保留，下次解锁再试。
+   * Called after unlocking: Complementary decryption of the ciphertext temporarily stored during the lock period.
+   * Successful → enter the database and delete the temporary storage; still fails after unlocking → treat it as really damaged and delete the temporary storage (self-cleaning);
+   * Still locked (private key not ready) → Keep and try again next time you unlock.
    */
   async function processPendingMessages() {
     let pending
@@ -1761,7 +1761,7 @@ function validateMsgId(msgId) {
     }
     if (!pending.length) return
 
-    // 按服务器时间排序，保证补显示顺序与发送顺序一致
+    // Sort by server time to ensure that the supplementary display order is consistent with the sending order.
     pending.sort((a, b) => a.ts - b.ts)
 
     for (const p of pending) {
@@ -1782,9 +1782,9 @@ function validateMsgId(msgId) {
         })
         await dbDeletePending(p.msg_id).catch(() => {})
       } catch (e) {
-        // 解锁后仍失败：若仍锁定则保留待下次，否则是真损坏，删除
+        // Still failed after unlocking: If it is still locked, keep it for next time, otherwise it is really damaged and delete it.
         if (useIdentityStore().isLocked) {
-          break  // 私钥仍不可用，无需继续尝试
+          break  //Private key is still unavailable, no need to continue trying
         }
         console.error('[chat] pending decrypt failed, dropping', p.msg_id, e)
         await dbDeletePending(p.msg_id).catch(() => {})

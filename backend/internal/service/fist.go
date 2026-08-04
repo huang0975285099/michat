@@ -13,9 +13,9 @@ import (
 const (
 	PvERewardAmount     = int64(500)
 	PvEDailyMaxWins     = 10
-	PvEDailyBonusAmount = int64(1000) // 每日满 10 场额外奖励
+	PvEDailyBonusAmount = int64(1000) //Additional rewards for reaching 10 games per day
 
-	// StatsDailyWindowDays 公开透明度统计接口（/api/fist/stats）的历史趋势窗口天数
+	// StatsDailyWindowDays The number of historical trend window days in the public transparency statistics interface (/api/fist/stats)
 	StatsDailyWindowDays = 30
 )
 
@@ -32,18 +32,18 @@ func NewFistService(db *sql.DB) *FistService {
 	return &FistService{db: db}
 }
 
-// FistAccountView 返回给前端的账户概览
+// FistAccountView returns an account overview to the front end
 type FistAccountView struct {
 	Balance      int64  `json:"balance"`
 	TotalEarned  uint64 `json:"total_earned"`
 	TodayWins    int    `json:"today_wins"`
 	TodayMax     int    `json:"today_max"`
 	TodayEarned  int64  `json:"today_earned"`
-	BonusAwarded bool   `json:"bonus_awarded"` // 本次领奖是否触发每日满 10 场奖励
-	BonusAmount  int64  `json:"bonus_amount"`  // 满额奖励金额（触发时为 1000）
+	BonusAwarded bool   `json:"bonus_awarded"` //Will this reward trigger the reward for reaching 10 games per day?
+	BonusAmount  int64  `json:"bonus_amount"`  //Full reward amount (1000 when triggered)
 }
 
-// ensureAccount 确保用户的 fist_accounts 行存在（首次访问时静默创建）
+// ensureAccount ensures that the user's fist_accounts row exists (silently created on first access)
 func (s *FistService) ensureAccount(ctx context.Context, ex interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }, userID uint64) error {
@@ -54,7 +54,7 @@ func (s *FistService) ensureAccount(ctx context.Context, ex interface {
 	return err
 }
 
-// GetAccount 查询余额和今日 PvE 进度
+// GetAccount Check balance and today's PvE progress
 func (s *FistService) GetAccount(ctx context.Context, userID uint64) (*FistAccountView, error) {
 	if err := s.ensureAccount(ctx, s.db, userID); err != nil {
 		return nil, err
@@ -75,8 +75,8 @@ func (s *FistService) GetAccount(ctx context.Context, userID uint64) (*FistAccou
 	return view, nil
 }
 
-// ClaimPvEReward 发放一次 PvE 胜局奖励（500 $FIST），每日上限 10 次。
-// 全程在事务内原子执行，防止并发重复计数。
+// ClaimPvEReward issues a PvE victory reward (500 $FIST), with a daily limit of 10 times.
+// The entire process is executed atomically within the transaction to prevent concurrent double counting.
 func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistAccountView, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -88,8 +88,8 @@ func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistA
 		return nil, err
 	}
 
-	// 奖励必须消费一条已经由 ReportMatch 落库、且尚未领奖的 PvE 胜局。
-	// FOR UPDATE + 同事务标记保证并发请求也只能消费一次。
+	// The reward must be spent on a PvE victory that has been saved by ReportMatch and has not yet been claimed.
+	// FOR UPDATE + The same transaction mark guarantees that concurrent requests can only be consumed once.
 	var matchID uint64
 	err = tx.QueryRowContext(ctx, `
 		SELECT id FROM ironfist_matches
@@ -110,11 +110,11 @@ func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistA
 		return nil, err
 	}
 
-	// Upsert 每日进度行，IF 条件确保 wins_count < 10 才递增
+	// Upsert daily progress row, IF condition ensures wins_count < 10 before incrementing
 	// RowsAffected:
-	//   1 = 新建行（第一场）
-	//   2 = 已有行且值发生变化（正常递增）
-	//   0 = 已有行但值未变（wins_count 已到 10，无法继续）
+	// 1 = new row (first field)
+	// 2 = There is a row and the value changes (normal increment)
+	// 0 = There is a row but the value has not changed (wins_count has reached 10, cannot continue)
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO pve_daily_progress (user_id, date, wins_count, earned_today)
 		VALUES (?, UTC_DATE(), 1, ?)
@@ -129,7 +129,7 @@ func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistA
 		return nil, ErrPvEDailyLimitReached
 	}
 
-	// 更新账户余额
+	// Update account balance
 	if _, err = tx.ExecContext(ctx, `
 		UPDATE fist_accounts
 		SET balance = balance + ?, total_earned = total_earned + ?
@@ -138,7 +138,7 @@ func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistA
 		return nil, err
 	}
 
-	// 读取更新后的完整状态
+	// Read the updated complete status
 	view := &FistAccountView{TodayMax: PvEDailyMaxWins}
 	if err = tx.QueryRowContext(ctx, `
 		SELECT fa.balance, fa.total_earned,
@@ -152,7 +152,7 @@ func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistA
 		return nil, err
 	}
 
-	// 写流水记录（balance_after = 已更新的余额）
+	// Write transaction records (balance_after = updated balance)
 	remark := fmt.Sprintf("第%d场PvE胜局（今日）", view.TodayWins)
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO fist_transactions (user_id, amount, balance_after, type, ref_id, remark)
@@ -161,9 +161,9 @@ func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistA
 		return nil, err
 	}
 
-	// 每日满 10 场额外奖励：本次领奖使 wins_count 恰好达到上限时发放（每日仅一次）。
-	// 因为达 10 场后再次领奖会在上面的 upsert 处返回 ErrPvEDailyLimitReached，
-	// 所以 TodayWins == PvEDailyMaxWins 只会在「第 10 场」这次成功领奖时成立。
+	// Additional rewards for reaching 10 games per day: This reward will be issued when wins_count reaches the upper limit (only once per day).
+	// Because claiming the prize again after 10 games will return ErrPvEDailyLimitReached at the upsert above,
+	// Therefore, TodayWins == PvEDailyMaxWins will only be established when the prize is successfully collected in the "10th game".
 	if view.TodayWins == PvEDailyMaxWins {
 		if _, err = tx.ExecContext(ctx, `
 			UPDATE fist_accounts
@@ -198,7 +198,7 @@ func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistA
 	return view, nil
 }
 
-// GetTransactions 查询流水明细，游标分页（before_id），最新在前。
+// GetTransactions queries the transaction details, cursor paging (before_id), latest first.
 func (s *FistService) GetTransactions(ctx context.Context, userID uint64, beforeID uint64, limit int) ([]*model.FistTransaction, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 20
@@ -244,27 +244,27 @@ func (s *FistService) GetTransactions(ctx context.Context, userID uint64, before
 	return txs, rows.Err()
 }
 
-// EcosystemStats 公开只读的 $FIST 生态透明度统计（无需鉴权，供国际站介绍页展示）
+// EcosystemStats public read-only $FIST ecological transparency statistics (no authentication required, for display on the international station introduction page)
 type EcosystemStats struct {
-	CirculatingBalance int64           `json:"circulating_balance"` // 当前所有用户余额总和（内部核算口径）
-	TotalPlayers       int64           `json:"total_players"`       // 已开通 $FIST 账户的用户数
-	PveTotalIssued     int64           `json:"pve_total_issued"`    // PvE 奖励历史累计发放（含每日满勤奖励）
-	PveTotalWins       int64           `json:"pve_total_wins"`      // PvE 历史累计有效胜局数
+	CirculatingBalance int64           `json:"circulating_balance"` //The current sum of all user balances (internal accounting caliber)
+	TotalPlayers       int64           `json:"total_players"`       //Number of users who have opened $FIST accounts
+	PveTotalIssued     int64           `json:"pve_total_issued"`    //Historical cumulative distribution of PvE rewards (including daily attendance rewards)
+	PveTotalWins       int64           `json:"pve_total_wins"`      //PvE historical accumulated effective number of wins
 	PveTodayIssued     int64           `json:"pve_today_issued"`
 	PveTodayWins       int64           `json:"pve_today_wins"`
-	PveDaily           []PveDailyPoint `json:"pve_daily"`         // 最近 StatsDailyWindowDays 天，按日期升序
-	ActivePlayers7d    int64           `json:"active_players_7d"` // 近7天有过任意对局（pve/pvp/friend）的去重用户数
+	PveDaily           []PveDailyPoint `json:"pve_daily"`         //Most recent StatsDailyWindowDays days, ascending date order
+	ActivePlayers7d    int64           `json:"active_players_7d"` //The number of deduplicated users who have played any game (pve/pvp/friend) in the past 7 days
 }
 
-// PveDailyPoint 按天聚合的 PvE 发放数据点
+// PveDailyPoint PvE distribution data points aggregated by day
 type PveDailyPoint struct {
 	Date   string `json:"date"` // YYYY-MM-DD（UTC）
 	Issued int64  `json:"issued"`
 	Wins   int64  `json:"wins"`
 }
 
-// GetEcosystemStats 查询全局 $FIST 生态数据：当前流通量/玩家数 + PvE 发放历史与近期趋势。
-// 全部为聚合只读查询，不含任何单个用户的可识别信息。
+// GetEcosystemStats queries the global $FIST ecological data: current circulation/number of players + PvE distribution history and recent trends.
+// All are aggregated read-only queries and do not contain any identifiable information about individual users.
 func (s *FistService) GetEcosystemStats(ctx context.Context) (*EcosystemStats, error) {
 	st := &EcosystemStats{}
 
@@ -281,9 +281,9 @@ func (s *FistService) GetEcosystemStats(ctx context.Context) (*EcosystemStats, e
 		return nil, err
 	}
 
-	// 活跃玩家：与 total_players（已开户人数）区分，抵消"开户数被批量注册灌水"的误导
-	// ironfist_matches.created_at 由列默认值 CURRENT_TIMESTAMP(3) 写入（服务端会话本地时区），
-	// 故这里用 NOW() 而非 UTC_TIMESTAMP() 比较，避免时区错位（服务端会话时区非 UTC 时会偏移）。
+	// Active players: distinguished from total_players (the number of people who have opened accounts) to offset the misleading of "the number of accounts opened is flooded by batch registration"
+	// ironfist_matches.created_at is written with the column default value CURRENT_TIMESTAMP(3) (server session local time zone),
+	// Therefore, NOW() is used instead of UTC_TIMESTAMP() for comparison to avoid time zone misalignment (the server session time zone will be offset when it is not UTC).
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(DISTINCT user_id) FROM ironfist_matches
 		WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
@@ -298,7 +298,7 @@ func (s *FistService) GetEcosystemStats(ctx context.Context) (*EcosystemStats, e
 		return nil, err
 	}
 
-	// pve_daily_progress.date 由 ClaimPvEReward 显式用 UTC_DATE() 写入，锚点用 UTC_DATE() 与写入侧一致。
+	// pve_daily_progress.date is explicitly written with UTC_DATE() by ClaimPvEReward, anchored with UTC_DATE() consistent with the writing side.
 	var anchor time.Time
 	if err := s.db.QueryRowContext(ctx, `SELECT UTC_DATE()`).Scan(&anchor); err != nil {
 		return nil, err
@@ -329,7 +329,7 @@ func (s *FistService) GetEcosystemStats(ctx context.Context) (*EcosystemStats, e
 		return nil, err
 	}
 
-	// 按锚点日期倒推 StatsDailyWindowDays 天补零，确保零活动日也有数据点（供前端画连续折线图）
+	// Push back by the anchor date and add zeros to StatsDailyWindowDays days to ensure that there are data points on zero activity days (for the front-end to draw continuous line charts)
 	st.PveDaily = make([]PveDailyPoint, StatsDailyWindowDays)
 	for i := 0; i < StatsDailyWindowDays; i++ {
 		ds := anchor.AddDate(0, 0, i-(StatsDailyWindowDays-1)).Format("2006-01-02")

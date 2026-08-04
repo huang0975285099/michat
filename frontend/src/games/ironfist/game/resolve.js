@@ -1,6 +1,6 @@
-// 铁拳 - 纯结算逻辑（无副作用，便于单测）
-// 乘区顺序：基础 → 蓄力 → 残血强化 → 暴击(未实现) → 防御减伤 → 残血护盾
-// 详见 docs/ironfist.md 第十五节（含已修正的 applyCharge 守卫）
+// Iron Fist - Pure settlement logic (no side effects, easy for single testing)
+// Order of riding area: Basic → Charge → Remaining Health Enhancement → Critical Hit (not implemented) → Defense Damage Reduction → Remaining Health Shield
+// See Section 15 of docs/ironfist.md for details (including corrected applyCharge guard)
 
 import {
   DAMAGE_TABLE, BASE_DAMAGE, CHARGE_MULTIPLIER, CHARGE_HOLD_LIMIT,
@@ -8,30 +8,30 @@ import {
   STALE_NO_DMG_LIMIT, STALE_ENV_DMG, MAX_ROUNDS, BOTH_CHARGED_LIMIT,
 } from './GameConstants.js'
 
-// 蓄力攻击的伤害上限（防御减伤前）：基础 12 × 2 = 24。
-// 用于阻止"蓄力 ×2"与"打断蓄力的 1.5× 惩罚"双重叠加（attack vs charge：18×2=36）。
-// 残血强化(×1.1)在此之后另算，故残血蓄力攻击仍可到 27（符合设计）。
+// The maximum damage of charged attacks (before defense damage reduction): base 12 × 2 = 24.
+// Used to prevent the double stacking of "charge ×2" and "1.5× penalty for interrupting charge" (attack vs charge: 18×2=36).
+// The remaining health enhancement (×1.1) is calculated separately after this, so the remaining health charge attack can still reach 27 (in line with the design).
 const MAX_CHARGED_HIT = BASE_DAMAGE * CHARGE_MULTIPLIER
 
 /**
- * 蓄力标记老化：携带未消耗的标记每回合计时 +1，到 CHARGE_HOLD_LIMIT 即失效。
+ * Charging mark aging: Carrying unconsumed marks will count +1 each round and will expire when CHARGE_HOLD_LIMIT is reached.
  * @returns {{charged: boolean, unused: number}}
  */
 function ageCharge(wasCharged, newCharged, oldUnused = 0) {
-  if (!newCharged) return { charged: false, unused: 0 } // 无标记 / 已被攻击消耗
-  if (!wasCharged) return { charged: true, unused: 0 }  // 本回合新建标记，计时归零
-  const unused = oldUnused + 1                            // 携带且未消耗 → 计时 +1
-  if (unused >= CHARGE_HOLD_LIMIT) return { charged: false, unused: 0 } // 超期失效
+  if (!newCharged) return { charged: false, unused: 0 } //Unmarked/consumed by attack
+  if (!wasCharged) return { charged: true, unused: 0 }  //Create a new mark this round and reset the timer to zero
+  const unused = oldUnused + 1                            //Carry and not consumed → Timer +1
+  if (unused >= CHARGE_HOLD_LIMIT) return { charged: false, unused: 0 } //Expiration date
   return { charged: true, unused }
 }
 
 /**
- * 结算一回合。输入双方动作 + 当前状态，输出新状态与本回合结果。
- * 纯函数：不修改入参，返回全新对象。
+ * Settle one round. Input the actions of both parties + the current state, and output the new state and the result of this round.
+ * Pure function: does not modify the input parameters and returns a new object.
  *
  * @param {string} playerAction
  * @param {string} opponentAction
- * @param {object} s 当前状态 { playerHP, opponentHP, playerCharged, opponentCharged,
+ * @param {object} s current state { playerHP, opponentHP, playerCharged, opponentCharged,
  *                              consecutiveNoDamageRounds, totalRounds, bothChargedStalemate }
  */
 export function resolveRound(playerAction, opponentAction, s) {
@@ -39,10 +39,10 @@ export function resolveRound(playerAction, opponentAction, s) {
   const base = DAMAGE_TABLE[playerAction][opponentAction]
   const result = { playerDmg: base.playerDmg, opponentDmg: base.opponentDmg }
 
-  // === 乘区 1：蓄力加成（×2）===
-  // 直接对表内伤害 ×2：attack/attack 12→24，attack/defend 5→10（= ceil(12×2×0.4)），
-  // 整数倍率下与严格乘区顺序结果一致（见 docs 第十五节）。
-  // 守卫 dmg > 0：避免蓄力攻击撞反击时把本应为 0 的伤害放大（被反击的一方不该挨打）。
+  // === Multiplication Zone 1: Charge Bonus (×2) ===
+  // Direct damage to the table ×2: attack/attack 12→24, attack/defend 5→10 (= ceil(12×2×0.4)),
+  // At integer multiples, the results are consistent with strict multiplication zone order (see docs Section 15).
+  // Guard dmg > 0: Avoid amplifying the damage that should be 0 when a charged attack hits a counterattack (the side being counterattacked should not be hit).
   if (playerCharged && playerAction === 'attack' && result.opponentDmg > 0) {
     result.opponentDmg = Math.min(result.opponentDmg * CHARGE_MULTIPLIER, MAX_CHARGED_HIT)
   }
@@ -50,7 +50,7 @@ export function resolveRound(playerAction, opponentAction, s) {
     result.playerDmg = Math.min(result.playerDmg * CHARGE_MULTIPLIER, MAX_CHARGED_HIT)
   }
 
-  // === 乘区 2：残血强化（攻击方 HP < 30）===
+  // === Multiplication area 2: Residual blood enhancement (attacker HP < 30) ===
   if (playerHP < LOW_HP_THRESHOLD && result.opponentDmg > 0) {
     result.opponentDmg = Math.ceil(result.opponentDmg * LOW_HP_BUFF)
   }
@@ -58,7 +58,7 @@ export function resolveRound(playerAction, opponentAction, s) {
     result.playerDmg = Math.ceil(result.playerDmg * LOW_HP_BUFF)
   }
 
-  // === 乘区 3：残血护盾（被攻击方 HP < 20，单次伤害上限）===
+  // === Multiplication area 3: Residual health shield (attacked party’s HP < 20, single damage limit) ===
   if (playerHP < SHIELD_HP_THRESHOLD && result.playerDmg > 0) {
     result.playerDmg = Math.min(result.playerDmg, Math.ceil(playerHP * SHIELD_RATIO))
   }
@@ -66,16 +66,16 @@ export function resolveRound(playerAction, opponentAction, s) {
     result.opponentDmg = Math.min(result.opponentDmg, Math.ceil(opponentHP * SHIELD_RATIO))
   }
 
-  // === 蓄力标记更新（含 N 回合失效计时）===
-  // 标记最多保留 CHARGE_HOLD_LIMIT 个可用回合：携带却不"攻击"消耗每回合计时 +1，到上限即失效。
-  // 见 docs/ironfist.md 第五节（174↔176 矛盾已统一为"最多保留 2 回合"）。
+  // === Charge mark update (including N round expiration time) ===
+  // The mark can be retained for up to CHARGE_HOLD_LIMIT available turns: carrying but not "attacking" consumes +1 timer per turn, and will expire when the upper limit is reached.
+  // See docs/ironfist.md section 5 (174↔176 contradictions have been unified to "keep at most 2 turns").
   let newPlayerCharged = playerCharged
   if (playerAction === 'attack' && playerCharged) {
-    newPlayerCharged = false                         // 消耗标记
+    newPlayerCharged = false                         //consumption mark
   } else if (playerAction === 'charge' && result.playerDmg === 0) {
-    newPlayerCharged = true                          // 蓄力成功（已有则保持，不叠加）
+    newPlayerCharged = true                          //Accumulation is successful (keep it if it already exists, no superposition)
   }
-  // charge 被打断 / defend / counter：保持原值（被打断时保留原标记）
+  // charge is interrupted / defend / counter: keep the original value (retain the original mark when interrupted)
   const pAge = ageCharge(playerCharged, newPlayerCharged, s.playerChargeUnused)
   newPlayerCharged = pAge.charged
   let newPlayerChargeUnused = pAge.unused
@@ -90,21 +90,21 @@ export function resolveRound(playerAction, opponentAction, s) {
   newOpponentCharged = oAge.charged
   let newOpponentChargeUnused = oAge.unused
 
-  // === 僵局计数器 ===
+  // === Deadlock Counter ===
   const noDamage = result.playerDmg === 0 && result.opponentDmg === 0
   const newConsecutiveNoDmg = noDamage ? s.consecutiveNoDamageRounds + 1 : 0
   const newTotalRounds = s.totalRounds + 1
   const bothCharged = newPlayerCharged && newOpponentCharged
   let newBothChargedStalemate = bothCharged ? s.bothChargedStalemate + 1 : 0
 
-  // === 僵局机制 ===
-  // 机制 A：连续无伤害 → 本回合即扣环境伤害，逐回合递增
+  // === Deadlock Mechanism ===
+  // Mechanism A: Continuous no damage → Environmental damage will be deducted this round, increasing each round.
   let envDmg = 0
   if (newConsecutiveNoDmg >= STALE_NO_DMG_LIMIT) {
     envDmg = STALE_ENV_DMG * (newConsecutiveNoDmg - STALE_NO_DMG_LIMIT + 1)
   }
-  // 机制 C：双方蓄力僵局 → 清除双方标记，并重置计数器（periodic 清除，
-  // 否则计数器永不归零会导致此后每回合都清标记，永久剥夺双蓄力窗口）
+  // Mechanism C: Both sides charge deadlock → Clear both sides’ marks and reset the counter (periodic clear,
+  // Otherwise, the counter will never return to zero, which will cause the mark to be cleared every round thereafter, permanently depriving the double charging window)
   if (newBothChargedStalemate > BOTH_CHARGED_LIMIT) {
     newPlayerCharged = false
     newOpponentCharged = false
@@ -113,11 +113,11 @@ export function resolveRound(playerAction, opponentAction, s) {
     newBothChargedStalemate = 0
   }
 
-  // === HP 更新（clamp 到 0）===
+  // === HP update (clamp to 0) ===
   const newPlayerHP = Math.max(0, playerHP - result.playerDmg - envDmg)
   const newOpponentHP = Math.max(0, opponentHP - result.opponentDmg - envDmg)
 
-  // === 胜负判定 ===
+  // === Determination of victory ===
   let gameResult = null
   if (newPlayerHP <= 0 && newOpponentHP <= 0) {
     gameResult = 'draw'
@@ -126,7 +126,7 @@ export function resolveRound(playerAction, opponentAction, s) {
   } else if (newOpponentHP <= 0) {
     gameResult = 'win'
   } else if (newTotalRounds >= MAX_ROUNDS) {
-    // 机制 B：总回合上限
+    // Mechanism B: Total round limit
     if (newPlayerHP <= 5 && newOpponentHP <= 5) gameResult = 'doubleLose'
     else if (newPlayerHP > newOpponentHP) gameResult = 'win'
     else if (newPlayerHP < newOpponentHP) gameResult = 'lose'

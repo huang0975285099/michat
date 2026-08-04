@@ -1,10 +1,10 @@
--- 铁拳对战统计与成就系统数据库迁移
--- 执行: mysql -u root -p e2eechat < 005_ironfist_stats.sql
+-- Tekken battle statistics and achievement system database migration
+-- Execution: mysql -u root -p e2eechat < 005_ironfist_stats.sql
 
 USE e2eechat;
 
 -- ─────────────────────────────────────────────────────
--- 表1：用户对战统计（每人一行）
+-- Table 1: User battle statistics (one row per person)
 -- ─────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS ironfist_stats (
   user_id            BIGINT UNSIGNED NOT NULL PRIMARY KEY,
@@ -14,16 +14,16 @@ CREATE TABLE IF NOT EXISTS ironfist_stats (
   pve_wins           INT UNSIGNED NOT NULL DEFAULT 0,
   pve_losses         INT UNSIGNED NOT NULL DEFAULT 0,
   pve_draws          INT UNSIGNED NOT NULL DEFAULT 0,
-  current_win_streak INT UNSIGNED NOT NULL DEFAULT 0,   -- 当前连胜（非胜归零）
-  max_win_streak     INT UNSIGNED NOT NULL DEFAULT 0,   -- 历史最高连胜
-  total_battles      INT UNSIGNED NOT NULL DEFAULT 0,   -- 累计对战场次
+  current_win_streak INT UNSIGNED NOT NULL DEFAULT 0,   -- Current winning streak (return to zero if not winning)
+  max_win_streak     INT UNSIGNED NOT NULL DEFAULT 0,   -- Highest winning streak in history
+  total_battles      INT UNSIGNED NOT NULL DEFAULT 0,   -- Total number of battles
   created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_is_user FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='铁拳对战统计';
 
 -- ─────────────────────────────────────────────────────
--- 表2：成就解锁记录（每用户每成就一行）
+-- Table 2: Achievement unlock records (one row per user per achievement)
 -- ─────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS ironfist_achievements (
   user_id         BIGINT UNSIGNED NOT NULL,

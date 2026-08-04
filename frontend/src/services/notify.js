@@ -1,28 +1,28 @@
 /**
- * 消息提醒工具
- * - Electron：任务栏闪烁（window.myAPI.flashWindow）
- * - 网页：系统桌面通知（Notification API）+ 标签页标题闪烁兜底
+ * Message reminder tool
+ * - Electron: Taskbar flash (window.myAPI.flashWindow)
+ * - Web page: System desktop notification (Notification API) + tab title flashing
  *
- * 隐私：本应用端到端加密，系统通知只显示「收到新消息」，不展示明文内容。
+ * Privacy: This application is end-to-end encrypted, and system notifications only display "new message received" and do not display clear text content.
  */
 
-const NOTIFY_TITLE = '云密'
-const NOTIFY_BODY = '收到新消息'
+const NOTIFY_TITLE = 'Yunmi'
+const NOTIFY_BODY = 'new message received'
 
-// ── 通知权限 ──────────────────────────────────────────────
+// ── Notification permissions ───────────────────────────────────────────
 
 function notificationSupported() {
   return typeof window !== 'undefined' && 'Notification' in window
 }
 
 /**
- * 请求桌面通知授权。
- * 浏览器要求在用户手势中触发，因此在首次点击/按键时自动请求一次。
- * 可在用户登录后调用 initNotifications() 注册。
+ * Request desktop notification authorization.
+ * Browsers require this to be triggered in a user gesture, so it is automatically requested once on the first click/key press.
+ * Registration can be done by calling initNotifications() after the user logs in.
  */
 export function initNotifications() {
   if (!notificationSupported()) return
-  if (Notification.permission !== 'default') return  // 已授权或已拒绝，无需再问
+  if (Notification.permission !== 'default') return  //Authorized or rejected, no need to ask again
 
   const requestOnce = () => {
     window.removeEventListener('click', requestOnce)
@@ -35,7 +35,7 @@ export function initNotifications() {
   window.addEventListener('keydown', requestOnce, { once: true })
 }
 
-// ── 标签页标题闪烁 ────────────────────────────────────────
+// ──Tab title flashes ──────────────────────────────────────
 
 let titleFlashTimer = null
 let originalTitle = ''
@@ -59,7 +59,7 @@ function stopTitleFlash() {
   }
 }
 
-// 窗口重新获得焦点时停止闪烁
+// Stop flickering when window regains focus
 if (typeof window !== 'undefined') {
   window.addEventListener('focus', stopTitleFlash)
   document.addEventListener('visibilitychange', () => {
@@ -67,14 +67,14 @@ if (typeof window !== 'undefined') {
   })
 }
 
-// ── 桌面通知 ──────────────────────────────────────────────
+// ──Desktop notifications───────────────────────────────────────────
 
 function showWebNotification() {
   if (!notificationSupported() || Notification.permission !== 'granted') return
   try {
     const n = new Notification(NOTIFY_TITLE, {
       body: NOTIFY_BODY,
-      tag: 'michat-new-message',  // 同 tag 合并，避免堆积多条
+      tag: 'michat-new-message',  //Merge with tags to avoid accumulation of multiple entries
       renotify: true,
     })
     n.onclick = () => {
@@ -82,23 +82,23 @@ function showWebNotification() {
       n.close()
     }
   } catch {
-    // 部分环境（如 Service Worker 要求）下构造会抛错，忽略
+    // In some environments (such as Service Worker requirements), the construction will throw an error and will be ignored.
   }
 }
 
 /**
- * 收到新消息时调用。
- * 仅在页面不在前台时提醒，避免用户正在看时打扰。
+ * Called when a new message is received.
+ * Only alert when the page is not in the foreground to avoid disturbing users while they are viewing it.
  */
 export function notifyNewMessage() {
-  // Electron：弹原生系统 Toast + 任务栏闪烁
+  // Electron: Play native system Toast + taskbar flashing
   if (window.myAPI?.isElectron) {
     window.myAPI.notify?.(NOTIFY_BODY)
     window.myAPI.flashWindow?.()
     return
   }
 
-  // 网页：仅当页面不可见时提醒
+  // Web pages: Alert only when page is not visible
   const hidden = typeof document !== 'undefined' && document.hidden
   if (!hidden) return
 

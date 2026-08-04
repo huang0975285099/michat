@@ -1,21 +1,21 @@
--- E2EE Chat 初始化建表脚本
--- 执行: mysql -u root -p e2eechat < 001_init.sql
+-- E2EE Chat initialization table creation script
+-- Execution: mysql -u root -p e2eechat < 001_init.sql
 
 CREATE DATABASE IF NOT EXISTS e2eechat CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE e2eechat;
 
--- 用户身份表（只存公开信息，私钥永远不上服务器）
+-- User identity table (only public information is stored, private keys are never uploaded to the server)
 CREATE TABLE IF NOT EXISTS users (
   id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  chat_id     CHAR(9)      NOT NULL UNIQUE,   -- 格式 NNNN-AAAA（如 1234-ABCD）
-  nickname    VARCHAR(64)  NOT NULL,           -- 自动生成：颜色+动物
-  public_key  TEXT         NOT NULL,           -- X25519 公钥（Base64 URL 编码）
-  is_ready    TINYINT(1)   NOT NULL DEFAULT 0, -- 0=待上传公钥 1=完成注册
+  chat_id     CHAR(9)      NOT NULL UNIQUE,   -- Format NNNN-AAAA (such as 1234-ABCD)
+  nickname    VARCHAR(64)  NOT NULL,           -- Automatically generated: color + animal
+  public_key  TEXT         NOT NULL,           -- X25519 public key (Base64 URL encoded)
+  is_ready    TINYINT(1)   NOT NULL DEFAULT 0, -- 0=Public key to be uploaded 1=Registration completed
   created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_seen   DATETIME     NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 好友申请表
+-- Friend application form
 CREATE TABLE IF NOT EXISTS friend_requests (
   id           BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   from_user_id BIGINT UNSIGNED NOT NULL,
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS friend_requests (
   CONSTRAINT fk_fr_to   FOREIGN KEY (to_user_id)   REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 好友关系表（双向存储，方便查询）
+-- Friend relationship table (two-way storage, easy to query)
 CREATE TABLE IF NOT EXISTS friendships (
   id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   user_id     BIGINT UNSIGNED NOT NULL,

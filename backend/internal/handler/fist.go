@@ -21,7 +21,7 @@ func NewFistHandler(svc *service.FistService) *FistHandler {
 }
 
 // GET /api/fist/account
-// 返回当前余额、历史累计收入、今日 PvE 进度
+// Returns current balance, historical accumulated income, and today's PvE progress
 func (h *FistHandler) GetAccount(c *gin.Context) {
 	userID := c.GetUint64(middleware.CtxUserID)
 	view, err := h.svc.GetAccount(c.Request.Context(), userID)
@@ -33,8 +33,8 @@ func (h *FistHandler) GetAccount(c *gin.Context) {
 }
 
 // POST /api/fist/pve-reward
-// 玩家赢得一局 PvE 后调用，发放 500 $FIST，每日最多 10 次
-// 返回: 更新后的账户状态（同 GetAccount）
+// Called after the player wins a PvE round, 500 $FIST will be issued, up to 10 times per day
+// Returns: updated account status (same as GetAccount)
 func (h *FistHandler) ClaimPvEReward(c *gin.Context) {
 	userID := c.GetUint64(middleware.CtxUserID)
 	view, err := h.svc.ClaimPvEReward(c.Request.Context(), userID)
@@ -57,8 +57,8 @@ func (h *FistHandler) ClaimPvEReward(c *gin.Context) {
 }
 
 // GET /api/fist/transactions?before_id=xxx&limit=20
-// 游标分页查询流水明细，最新在前
-// before_id 为上一页最后一条的 id，首次不传
+// Cursor paging to query the flow details, latest first
+// before_id is the id of the last item on the previous page and is not passed for the first time.
 func (h *FistHandler) GetTransactions(c *gin.Context) {
 	userID := c.GetUint64(middleware.CtxUserID)
 
@@ -79,7 +79,7 @@ func (h *FistHandler) GetTransactions(c *gin.Context) {
 		return
 	}
 	if txs == nil {
-		txs = make([]*model.FistTransaction, 0) // 返回 [] 而非 null
+		txs = make([]*model.FistTransaction, 0) //Return [] instead of null
 	}
 	c.JSON(http.StatusOK, gin.H{"transactions": txs})
 }

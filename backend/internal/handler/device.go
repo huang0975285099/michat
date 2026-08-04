@@ -15,7 +15,7 @@ func NewDeviceHandler(db *sql.DB) *DeviceHandler {
 	return &DeviceHandler{db: db}
 }
 
-// SaveToken 注册或更新设备推送 token（极光 Registration ID）
+// SaveToken registers or updates device push token (Aurora Registration ID)
 // POST /api/device/token
 func (h *DeviceHandler) SaveToken(c *gin.Context) {
 	chatID := c.GetString("chat_id")
@@ -38,7 +38,7 @@ func (h *DeviceHandler) SaveToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// DeleteTokens 退出登录时删除该账号所有设备 token
+// DeleteTokens deletes all device tokens of this account when logging out
 // DELETE /api/device/token
 func (h *DeviceHandler) DeleteTokens(c *gin.Context) {
 	chatID := c.GetString("chat_id")

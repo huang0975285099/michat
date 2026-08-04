@@ -3,8 +3,8 @@ import { ChatService } from 'src/services/chat-service-plugin'
 import { deviceApi } from 'src/services/api'
 
 /**
- * 将极光 Registration ID 上报到后端，后端用它向该设备推送通知。
- * 登录后调用一次即可；Registration ID 变更时（极光回调）自动重新上报。
+ * Report the Jiguang Registration ID to the backend, and the backend uses it to push notifications to the device.
+ * Just call it once after logging in; it will be automatically re-reported when the Registration ID changes (Aurora callback).
  */
 export async function registerPushToken() {
   if (Capacitor.getPlatform() !== 'android') return
@@ -19,8 +19,8 @@ export async function registerPushToken() {
 }
 
 /**
- * 检查是否有通知点击带来的待跳转会话，有则路由过去。
- * 在 App 启动和每次从后台切回前台时调用。
+ * Check whether there is a session to be jumped brought by the notification click, and route it if there is.
+ * Called when the app starts and every time it switches back to the foreground from the background.
  */
 async function checkPendingNavigation(router) {
   try {
@@ -29,29 +29,29 @@ async function checkPendingNavigation(router) {
       router.push('/chat/' + senderChatId)
     }
   } catch (e) {
-    // 忽略
+    // ignore
   }
 }
 
 export default async ({ router }) => {
   if (Capacitor.getPlatform() !== 'android') return
 
-  // 请求 Android 13+ 通知权限
+  // Request Android 13+ notification permission
   ChatService.requestNotificationPermission().catch(() => {})
 
-  // 监听极光异步回调的新 Registration ID（首次安装注册时会触发）
+  // Listen to the new Registration ID of Jiguang asynchronous callback (triggered when registration is installed for the first time)
   ChatService.addListener('registrationId', ({ registrationId }) => {
     if (registrationId) {
       deviceApi.save(registrationId).catch(() => {})
     }
   })
 
-  // 如果已登录，立即上报 token
+  // If you are logged in, report the token immediately
   if (localStorage.getItem('session_token')) {
     await registerPushToken()
   }
 
-  // 监听前台/后台切换
+  // Monitor foreground/background switching
   document.addEventListener('visibilitychange', async () => {
     const isActive = document.visibilityState === 'visible'
     ChatService.setForeground({ active: isActive })
@@ -60,6 +60,6 @@ export default async ({ router }) => {
     }
   })
 
-  // 启动时检查（App 从通知点击冷启动的情况）
+  // Check on startup (when App clicks cold start from notification)
   await checkPendingNavigation(router)
 }

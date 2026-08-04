@@ -1,16 +1,16 @@
 <template>
     <q-page class="q-pa-md">
-        <!-- 微信浏览器引导遮罩（永久显示，不可关闭） -->
+        <!-- WeChat browser boot mask (permanent display, cannot be closed) -->
         <div v-if="isWechat" class="wechat-guide-overlay">
             <div class="wechat-guide-content">
                 <div class="wechat-guide-arrow">
                     <q-icon name="arrow_upward" size="48px" color="white" />
                 </div>
                 <div class="wechat-guide-text">
-                    <div class="text-h6 q-mb-sm">请使用浏览器打开</div>
+                    <div class="text-h6 q-mb-sm">Please use a browser to open</div>
                     <div class="text-body2">
-                        点击右上角 <strong>⋮</strong> 菜单<br />
-                        选择「在浏览器中打开」
+                        Click on the upper right corner <strong>⋮</strong> menu<br />
+                        Choose「Open in browser」
                     </div>
                 </div>
             </div>
@@ -24,13 +24,18 @@
                     class="q-mb-sm"
                 />
                 <div class="row items-center justify-center q-gutter-xs">
-                    <span class="text-h6">{{ identity.nickname }}</span>
-                    <q-btn
-                        flat round dense size="sm" icon="edit" color="grey-6"
-                        @click="openNicknameDialog"
-                    >
-                        <q-tooltip>修改昵称</q-tooltip>
-                    </q-btn>
+                    <div>
+                        <span class="text-h6">{{ identity.nickname }}</span>
+                        <q-btn
+                            flat round dense size="sm" icon="edit" color="grey-6"
+                            @click="openNicknameDialog"
+                        >
+                            <q-tooltip>{{ t("profile.editNickname") }}</q-tooltip>
+                        </q-btn>
+                    </div>
+                    <div>
+                        {{ t("profile.myId") }}
+                    </div>
                 </div>
             </q-card-section>
         </q-card>
@@ -41,12 +46,8 @@
                     ><q-icon name="fingerprint"
                 /></q-item-section>
                 <q-item-section>
-                    <q-item-label
-                        >复制我的 Chat ID: {{ identity.chatId }}</q-item-label
-                    >
-                    <q-item-label caption
-                        >分享给朋友，让他们添加你</q-item-label
-                    >
+                    <q-item-label>{{ t("profile.copyId", { id: identity.chatId }) }}</q-item-label>
+                    <q-item-label caption>{{ t("profile.shareId") }}</q-item-label>
                 </q-item-section>
             </q-item>
 
@@ -58,10 +59,8 @@
                     ><q-icon name="link" color="primary"
                 /></q-item-section>
                 <q-item-section>
-                    <q-item-label>邀请好友</q-item-label>
-                    <q-item-label caption
-                        >生成邀请链接，好友注册后自动添加你</q-item-label
-                    >
+                    <q-item-label>{{ t("profile.inviteFriend") }}</q-item-label>
+                    <q-item-label caption>{{ t("profile.inviteHint") }}</q-item-label>
                 </q-item-section>
             </q-item>
 
@@ -70,14 +69,12 @@
                     ><q-icon name="backup" color="orange"
                 /></q-item-section>
                 <q-item-section>
-                    <q-item-label>备份私钥</q-item-label>
-                    <q-item-label caption class="text-orange"
-                        >重要：清除浏览器数据前必须备份</q-item-label
-                    >
+                    <q-item-label>{{ t("profile.backupKey") }}</q-item-label>
+                    <q-item-label caption class="text-orange">{{ t("profile.backupWarning") }}</q-item-label>
                 </q-item-section>
             </q-item>
 
-            <!-- 安全码设置（未设置时） -->
+            <!-- Security code setting (when not set) -->
             <q-item
                 v-if="!identity.hasCode"
                 clickable
@@ -87,14 +84,12 @@
                     ><q-icon name="lock" color="primary"
                 /></q-item-section>
                 <q-item-section>
-                    <q-item-label>设置安全码</q-item-label>
-                    <q-item-label caption
-                        >6 位数字，防止他人查看聊天记录</q-item-label
-                    >
+                    <q-item-label>{{ t("profile.setupCode") }}</q-item-label>
+                    <q-item-label caption>{{ t("profile.setupCodeHint") }}</q-item-label>
                 </q-item-section>
             </q-item>
 
-            <!-- 安全码管理（已设置时） -->
+            <!-- Security code management (when set) -->
             <q-item
                 v-if="identity.hasCode"
                 clickable
@@ -106,16 +101,10 @@
                         :color="identity.isLocked ? 'negative' : 'positive'"
                 /></q-item-section>
                 <q-item-section>
-                    <q-item-label>安全码</q-item-label>
+                    <q-item-label>{{ t("profile.securityCode") }}</q-item-label>
                     <q-item-label caption>
-                        {{ identity.isLocked ? "已锁定" : "已解锁" }}
-                        · 超时
-                        {{
-                            timeoutOptions.find(
-                                (o) => o.value === identity.lockTimeout,
-                            )?.label ?? identity.lockTimeout + " 小时"
-                        }}
-                        自动锁定
+                        {{ identity.isLocked ? t("profile.locked") : t("profile.unlocked") }}
+                        · {{ t("profile.autoLock", { duration: lockTimeoutLabel(identity.lockTimeout) }) }}
                     </q-item-label>
                 </q-item-section>
                 <q-item-section side>
@@ -128,10 +117,8 @@
                     ><q-icon name="mic" color="teal"
                 /></q-item-section>
                 <q-item-section>
-                    <q-item-label>麦克风检测</q-item-label>
-                    <q-item-label caption
-                        >检查麦克风权限和设备是否正常</q-item-label
-                    >
+                    <q-item-label>{{ t("profile.micTest") }}</q-item-label>
+                    <q-item-label caption>{{ t("profile.micTestHint") }}</q-item-label>
                 </q-item-section>
             </q-item>
 
@@ -140,10 +127,21 @@
                     ><q-icon name="videocam" color="indigo"
                 /></q-item-section>
                 <q-item-section>
-                    <q-item-label>摄像头检测</q-item-label>
-                    <q-item-label caption
-                        >检查摄像头权限和画面是否正常</q-item-label
-                    >
+                    <q-item-label>{{ t("profile.cameraTest") }}</q-item-label>
+                    <q-item-label caption>{{ t("profile.cameraTestHint") }}</q-item-label>
+                </q-item-section>
+            </q-item>
+
+            <q-item clickable @click="showLanguageDialog = true">
+                <q-item-section avatar>
+                    <q-icon name="language" color="primary" />
+                </q-item-section>
+                <q-item-section>
+                    <q-item-label>{{ t("profile.language") }}</q-item-label>
+                    <q-item-label caption>{{ t("profile.languageHint") }}</q-item-label>
+                </q-item-section>
+                <q-item-section side>
+                    <span class="text-grey-7">{{ currentLanguageLabel }}</span>
                 </q-item-section>
             </q-item>
 
@@ -152,10 +150,8 @@
                     ><q-icon name="delete_forever" color="negative"
                 /></q-item-section>
                 <q-item-section>
-                    <q-item-label class="text-negative">注销账号</q-item-label>
-                    <q-item-label caption
-                        >将删除账号信息及所有好友关系，不可恢复</q-item-label
-                    >
+                    <q-item-label class="text-negative">{{ t("profile.deleteAccount") }}</q-item-label>
+                    <q-item-label caption>{{ t("profile.deleteAccountHint") }}</q-item-label>
                 </q-item-section>
             </q-item>
         </q-list>
@@ -164,37 +160,60 @@
             v-if="identity.hasCode"
             outline
             color="negative"
-            label="立即锁定"
+            label="Lock now"
             class="full-width q-mt-lg"
             @click="doLockNow"
         /> -->
 
-        <!-- 版本号 + 更新检查 -->
+        <!-- Version number + update check -->
         <div class="text-center text-caption text-grey-6 q-mt-xs">
             <div>v{{ appVersion }}<span v-if="buildDate"> · {{ buildDate }}</span></div>
             <div class="q-mt-xs">
-                <span v-if="updateState === 'checking'" class="text-grey">检查更新中…</span>
-                <span v-else-if="updateState === 'latest'" class="text-positive">✅ 已是最新版本</span>
+                <span v-if="updateState === 'checking'" class="text-grey">{{ t("profile.checkingUpdate") }}</span>
+                <span v-else-if="updateState === 'latest'" class="text-positive">{{ t("profile.latest") }}</span>
                 <a
                     v-else-if="updateState === 'outdated'"
                     class="text-primary"
                     style="cursor: pointer; text-decoration: none"
                     @click="onUpdateClick"
-                >🔔 有新版本 v{{ latestVersion }}，点击更新</a>
-                <span v-else class="text-grey">无法检查更新</span>
+                >{{ t("profile.outdated", { version: latestVersion }) }}</a>
+                <span v-else class="text-grey">{{ t("profile.checkFailed") }}</span>
             </div>
         </div>
 
-        <!-- 备份对话框 -->
+        <q-dialog v-model="showLanguageDialog">
+            <q-card style="min-width: 300px">
+                <q-card-section class="text-h6">{{ t("profile.languageTitle") }}</q-card-section>
+                <q-list separator>
+                    <q-item
+                        v-for="option in languageOptions"
+                        :key="option.value"
+                        v-ripple
+                        clickable
+                        @click="selectLanguage(option.value)"
+                    >
+                        <q-item-section>{{ option.label }}</q-item-section>
+                        <q-item-section side>
+                            <q-icon v-if="locale === option.value" name="check" color="primary" />
+                        </q-item-section>
+                    </q-item>
+                </q-list>
+                <q-card-actions align="right">
+                    <q-btn flat :label="t('common.close')" v-close-popup />
+                </q-card-actions>
+            </q-card>
+        </q-dialog>
+
+        <!-- Backup dialog -->
         <q-dialog v-model="showBackupDialog">
             <q-card style="min-width: 320px">
                 <q-card-section>
-                    <div class="text-h6">私钥备份</div>
+                    <div class="text-h6">Private key backup</div>
                     <div class="text-caption text-orange q-mb-md">
-                        请将以下内容保存到安全的地方。丢失私钥将永久无法恢复身份。
+                        Please save the following content to a safe place。Losing your private key will permanently render your identity irrecoverable。
                     </div>
                     <div class="text-caption text-grey q-mb-xs">
-                        私钥（Base64）
+                        private key（Base64）
                     </div>
                     <q-input
                         :model-value="privKey"
@@ -209,49 +228,49 @@
                 <q-card-actions align="right">
                     <q-btn
                         flat
-                        label="复制私钥"
+                        label="Copy private key"
                         color="primary"
                         @click="copyPrivKey"
                     />
-                    <q-btn flat label="关闭" v-close-popup />
+                    <q-btn flat label="close" v-close-popup />
                 </q-card-actions>
             </q-card>
         </q-dialog>
 
-        <!-- 设置安全码对话框 -->
+        <!-- Set security code dialog box -->
         <q-dialog v-model="showSetupDialog">
             <q-card style="min-width: 340px">
                 <q-card-section>
-                    <div class="text-h6">设置安全码</div>
+                    <div class="text-h6">Set security code</div>
                     <div class="text-caption text-grey q-mb-md">
-                        请输入 6
-                        位数字安全码。安全码不会存储在任何地方，请务必牢记。
+                        Please enter 6
+                        digit security code。Security codes are not stored anywhere，Please remember。
                     </div>
 
-                    <div class="text-caption text-grey q-mb-xs">安全码</div>
+                    <div class="text-caption text-grey q-mb-xs">Security code</div>
                     <q-input
                         v-model="setupCode1"
                         outlined
                         dense
                         maxlength="6"
                         inputmode="numeric"
-                        placeholder="6位数字"
+                        placeholder="6digits"
                         class="q-mb-sm"
                     />
 
-                    <div class="text-caption text-grey q-mb-xs">再次输入</div>
+                    <div class="text-caption text-grey q-mb-xs">Enter again</div>
                     <q-input
                         v-model="setupCode2"
                         outlined
                         dense
                         maxlength="6"
                         inputmode="numeric"
-                        placeholder="6位数字"
+                        placeholder="6digits"
                         class="q-mb-sm"
                     />
 
                     <div class="text-caption text-grey q-mb-xs">
-                        超时自动锁定
+                        Automatically lock after timeout
                     </div>
                     <q-select
                         v-model="setupTimeout"
@@ -264,16 +283,16 @@
                     />
 
                     <div class="text-caption text-negative q-mb-sm">
-                        ⚠️ 忘记安全码 =
-                        身份永久丢失。建议写在纸上或使用密码管理器备份。
+                        ⚠️ Forgot security code =
+                        Identity permanently lost。It is recommended to write it down on paper or use a password manager to back it up。
                     </div>
                 </q-card-section>
                 <q-card-actions align="right">
-                    <q-btn flat label="取消" v-close-popup />
+                    <q-btn flat label="Cancel" v-close-popup />
                     <q-btn
                         unelevated
                         color="primary"
-                        label="确认设置"
+                        label="Confirm settings"
                         :disable="!canSetup"
                         @click="doSetup"
                     />
@@ -281,14 +300,14 @@
             </q-card>
         </q-dialog>
 
-        <!-- 安全码设置对话框 -->
+        <!-- Security code setting dialog box -->
         <q-dialog v-model="showLockSettings">
             <q-card style="min-width: 300px">
                 <q-card-section>
-                    <div class="text-h6">安全码设置</div>
+                    <div class="text-h6">Security code settings</div>
 
                     <div class="q-mb-md">
-                        <div class="text-subtitle2 q-mb-xs">超时自动锁定</div>
+                        <div class="text-subtitle2 q-mb-xs">Automatically lock after timeout</div>
                         <q-select
                             v-model="editTimeout"
                             :options="timeoutOptions"
@@ -302,27 +321,27 @@
                     <q-btn
                         outline
                         color="grey-7"
-                        label="关闭安全码"
+                        label="Turn off security code"
                         class="full-width"
                         @click="showDisableConfirm = true"
                     />
                 </q-card-section>
                 <q-card-actions align="right">
-                    <q-btn flat label="关闭" v-close-popup />
+                    <q-btn flat label="close" v-close-popup />
                 </q-card-actions>
             </q-card>
         </q-dialog>
 
-        <!-- 关闭安全码确认 -->
+        <!-- Turn off security code confirmation -->
         <q-dialog v-model="showDisableConfirm">
             <q-card style="min-width: 300px">
                 <q-card-section>
-                    <div class="text-h6">关闭安全码</div>
+                    <div class="text-h6">Turn off security code</div>
                     <div class="text-caption text-negative q-mb-md">
-                        关闭后如您的手机丢失时，消息可能被他人查看。
+                        After shutting down if your phone is lost，Message may be viewed by others。
                     </div>
                     <div class="text-caption text-grey q-mb-xs">
-                        输入安全码确认
+                        Enter security code to confirm
                     </div>
                     <q-input
                         v-model="disableCode"
@@ -330,15 +349,15 @@
                         dense
                         maxlength="6"
                         inputmode="numeric"
-                        placeholder="6位数字"
+                        placeholder="6digits"
                     />
                 </q-card-section>
                 <q-card-actions align="right">
-                    <q-btn flat label="取消" v-close-popup />
+                    <q-btn flat label="Cancel" v-close-popup />
                     <q-btn
                         unelevated
                         color="negative"
-                        label="确认关闭"
+                        label="Confirm close"
                         :disable="disableCode.length !== 6"
                         @click="doDisable"
                     />
@@ -346,29 +365,29 @@
             </q-card>
         </q-dialog>
 
-        <!-- 修改昵称对话框 -->
+        <!-- Modify nickname dialog box -->
         <q-dialog v-model="showNicknameDialog">
             <q-card style="min-width: 300px">
                 <q-card-section>
-                    <div class="text-h6">修改昵称</div>
-                    <div class="text-caption text-grey q-mb-md">最多 8 个字符</div>
+                    <div class="text-h6">Modify nickname</div>
+                    <div class="text-caption text-grey q-mb-md">most 8 characters</div>
                     <q-input
                         v-model="newNickname"
                         outlined
                         dense
                         maxlength="8"
-                        placeholder="请输入新昵称"
+                        placeholder="Please enter a new nickname"
                         autofocus
                         counter
                         @keyup.enter="doUpdateNickname"
                     />
                 </q-card-section>
                 <q-card-actions align="right">
-                    <q-btn flat label="取消" v-close-popup />
+                    <q-btn flat label="Cancel" v-close-popup />
                     <q-btn
                         unelevated
                         color="primary"
-                        label="确认"
+                        label="Confirm"
                         :disable="!newNickname.trim() || newNickname.trim().length > 8"
                         :loading="updatingNickname"
                         @click="doUpdateNickname"
@@ -377,15 +396,15 @@
             </q-card>
         </q-dialog>
 
-        <!-- 邀请好友对话框 -->
+        <!-- Invite friends dialog box -->
         <q-dialog v-model="showInviteDialog">
             <q-card style="min-width: 320px">
                 <q-card-section>
-                    <div class="text-h6">邀请好友</div>
+                    <div class="text-h6">Invite friends</div>
                     <div class="text-caption text-grey q-mb-md">
-                        将此链接发送给好友，好友点击链接注册后会自动发送好友申请给你。
+                        Send this link to a friend，After your friend clicks the link to register, a friend application will be automatically sent to you.。
                     </div>
-                    <div class="text-caption text-grey q-mb-xs">邀请链接</div>
+                    <div class="text-caption text-grey q-mb-xs">Invitation link</div>
                     <q-input
                         :model-value="inviteLink"
                         readonly
@@ -395,36 +414,36 @@
                         rows="3"
                         class="q-mb-sm"
                     />
-                    <div class="text-caption text-grey">链接长期有效</div>
+                    <div class="text-caption text-grey">The link is valid for a long time</div>
                 </q-card-section>
                 <q-card-actions align="right">
                     <q-btn
                         flat
-                        label="复制链接"
+                        label="Copy link"
                         color="primary"
                         @click="copyInviteLink"
                     />
-                    <q-btn flat label="关闭" v-close-popup />
+                    <q-btn flat label="close" v-close-popup />
                 </q-card-actions>
             </q-card>
         </q-dialog>
 
-        <!-- 麦克风检测对话框 -->
+        <!-- Microphone detection dialog -->
         <q-dialog v-model="showMicDialog" @hide="stopMicTest">
             <q-card style="min-width: 340px">
                 <q-card-section>
-                    <div class="text-h6">麦克风检测</div>
+                    <div class="text-h6">Microphone detection</div>
                 </q-card-section>
 
                 <q-card-section>
                     <div v-if="micStatus === 'idle'" class="text-center q-py-lg">
                         <q-icon name="mic" size="48px" color="grey-5" />
-                        <div class="text-grey q-mt-sm">点击下方按钮开始检测</div>
+                        <div class="text-grey q-mt-sm">Click the button below to start testing</div>
                     </div>
 
                     <div v-else-if="micStatus === 'checking'" class="text-center q-py-lg">
                         <q-spinner color="primary" size="48px" />
-                        <div class="text-grey q-mt-sm">正在请求麦克风权限...</div>
+                        <div class="text-grey q-mt-sm">Requesting microphone permission...</div>
                     </div>
 
                     <div v-else-if="micStatus === 'error'" class="text-center q-py-lg">
@@ -433,7 +452,7 @@
                         <q-btn
                             flat
                             color="primary"
-                            label="重试"
+                            label="Try again"
                             class="q-mt-sm"
                             @click="startMicTest"
                         />
@@ -442,10 +461,10 @@
                     <div v-else-if="micStatus === 'ok'">
                         <div class="row items-center q-mb-md">
                             <q-icon name="check_circle" color="positive" size="24px" class="q-mr-sm" />
-                            <span class="text-positive">麦克风正常</span>
+                            <span class="text-positive">Microphone is normal</span>
                         </div>
 
-                        <div class="text-caption text-grey q-mb-xs">音量</div>
+                        <div class="text-caption text-grey q-mb-xs">Volume</div>
                         <q-linear-progress
                             :value="micLevel"
                             color="teal"
@@ -459,7 +478,7 @@
                             </div>
                         </q-linear-progress>
 
-                        <div class="text-caption text-grey q-mb-xs">选择设备</div>
+                        <div class="text-caption text-grey q-mb-xs">Select device</div>
                         <q-select
                             v-model="selectedMicId"
                             :options="micDevices"
@@ -478,30 +497,30 @@
                         v-if="micStatus === 'idle'"
                         unelevated
                         color="primary"
-                        label="开始检测"
+                        label="Start testing"
                         @click="startMicTest"
                     />
-                    <q-btn flat label="关闭" v-close-popup />
+                    <q-btn flat label="close" v-close-popup />
                 </q-card-actions>
             </q-card>
         </q-dialog>
 
-        <!-- 摄像头检测对话框 -->
+        <!-- Camera detection dialog box -->
         <q-dialog v-model="showCamDialog" @hide="stopCamTest">
             <q-card style="min-width: 340px">
                 <q-card-section>
-                    <div class="text-h6">摄像头检测</div>
+                    <div class="text-h6">Camera detection</div>
                 </q-card-section>
 
                 <q-card-section>
                     <div v-if="camStatus === 'idle'" class="text-center q-py-lg">
                         <q-icon name="videocam" size="48px" color="grey-5" />
-                        <div class="text-grey q-mt-sm">点击下方按钮开始检测</div>
+                        <div class="text-grey q-mt-sm">Click the button below to start testing</div>
                     </div>
 
                     <div v-else-if="camStatus === 'checking'" class="text-center q-py-lg">
                         <q-spinner color="primary" size="48px" />
-                        <div class="text-grey q-mt-sm">正在请求摄像头权限...</div>
+                        <div class="text-grey q-mt-sm">Requesting camera permission...</div>
                     </div>
 
                     <div v-else-if="camStatus === 'error'" class="text-center q-py-lg">
@@ -510,7 +529,7 @@
                         <q-btn
                             flat
                             color="primary"
-                            label="重试"
+                            label="Try again"
                             class="q-mt-sm"
                             @click="startCamTest"
                         />
@@ -519,7 +538,7 @@
                     <div v-show="camStatus === 'ok'">
                         <div class="row items-center q-mb-md">
                             <q-icon name="check_circle" color="positive" size="24px" class="q-mr-sm" />
-                            <span class="text-positive">摄像头正常</span>
+                            <span class="text-positive">The camera is normal</span>
                         </div>
 
                         <video
@@ -530,7 +549,7 @@
                             muted
                         ></video>
 
-                        <div class="text-caption text-grey q-mb-xs">选择设备</div>
+                        <div class="text-caption text-grey q-mb-xs">Select device</div>
                         <q-select
                             v-model="selectedCamId"
                             :options="camDevices"
@@ -549,10 +568,10 @@
                         v-if="camStatus === 'idle'"
                         unelevated
                         color="primary"
-                        label="开始检测"
+                        label="Start testing"
                         @click="startCamTest"
                     />
-                    <q-btn flat label="关闭" v-close-popup />
+                    <q-btn flat label="close" v-close-popup />
                 </q-card-actions>
             </q-card>
         </q-dialog>
@@ -573,16 +592,31 @@ import {
     forceRefresh,
 } from "src/services/version";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
+import { useI18n } from "src/i18n";
 
 const $q = useQuasar();
 const router = useRouter();
 const identity = useIdentityStore();
+const { locale, setLocale, t } = useI18n();
+const showLanguageDialog = ref(false);
+const languageOptions = computed(() => [
+    { label: t("profile.chinese"), value: "zh-CN" },
+    { label: t("profile.english"), value: "en-US" },
+]);
+const currentLanguageLabel = computed(
+    () => languageOptions.value.find((option) => option.value === locale.value)?.label,
+);
 
-// 版本号（构建时注入，见 quasar.config.js）
-const appVersion = APP_VERSION || "未知";
+function selectLanguage(value) {
+    setLocale(value);
+    showLanguageDialog.value = false;
+}
+
+// Version number (injected at build time, see quasar.config.js)
+const appVersion = APP_VERSION || "unknown";
 const buildDate = (BUILD_TIME || "").slice(0, 10);
 
-// 更新检查：与后端 /api/version 返回的线上最新版本对比
+// Update check: Compare with the latest online version returned by the backend /api/version
 const updateState = ref("checking"); // checking | latest | outdated | unknown
 const latestVersion = ref("");
 const updateUrl = ref("");
@@ -607,17 +641,17 @@ async function checkVersion() {
 }
 
 async function onUpdateClick() {
-    // 原生端（桌面/安卓）：打开下载页更新安装包
+    // Native side (desktop/Android): Open the download page to update the installation package
     if (isNativeClient()) {
         if (updateUrl.value) window.open(updateUrl.value, "_blank");
         return;
     }
-    // 浏览器 / PWA：清缓存 + 注销 SW 后刷新，用户无需手动强刷
-    $q.loading.show({ message: "正在更新到最新版…" });
+    // Browser/PWA: clear cache + log out of SW and refresh, users do not need to force refresh manually
+    $q.loading.show({ message: "Updating to the latest version…" });
     await forceRefresh();
 }
 
-// 浏览器检测
+// Browser detection
 const isWechat = ref(false);
 
 
@@ -634,7 +668,7 @@ onMounted(() => {
 const showBackupDialog = ref(false);
 const privKey = ref("");
 
-// 修改昵称
+// Modify nickname
 const showNicknameDialog = ref(false);
 const newNickname = ref("");
 const updatingNickname = ref(false);
@@ -650,30 +684,35 @@ async function doUpdateNickname() {
     updatingNickname.value = true;
     try {
         await identity.updateNickname(name);
-        $q.notify({ type: "positive", message: "昵称已更新" });
+        $q.notify({ type: "positive", message: "Nickname has been updated" });
         showNicknameDialog.value = false;
     } catch (e) {
-        $q.notify({ type: "negative", message: e.response?.data?.error || "修改失败，请重试" });
+        $q.notify({ type: "negative", message: e.response?.data?.error || "Modification failed，Please try again" });
     } finally {
         updatingNickname.value = false;
     }
 }
 
-// 邀请好友
+// Invite friends
 const showInviteDialog = ref(false);
 const inviteLink = ref("");
 
-// 安全码设置
+// Security code settings
 const showSetupDialog = ref(false);
 const setupCode1 = ref("");
 const setupCode2 = ref("");
 const setupTimeout = ref(1 / 6);
 const timeoutOptions = [
-    { label: "10 分钟", value: 1 / 6 },
-    { label: "30 分钟", value: 0.5 },
-    { label: "1 小时", value: 1 },
-    { label: "2 小时", value: 2 },
+    { label: "10 minutes", value: 1 / 6 },
+    { label: "30 minutes", value: 0.5 },
+    { label: "1 hours", value: 1 },
+    { label: "2 hours", value: 2 },
 ];
+
+function lockTimeoutLabel(value) {
+    if (value < 1) return t("profile.minutes", { count: Math.round(value * 60) });
+    return t("profile.hours", { count: value });
+}
 
 const canSetup = computed(
     () =>
@@ -681,31 +720,31 @@ const canSetup = computed(
         setupCode1.value === setupCode2.value,
 );
 
-// 安全码管理
+// Security code management
 const showLockSettings = ref(false);
 const editTimeout = ref(identity.lockTimeout);
 const showDisableConfirm = ref(false);
 const disableCode = ref("");
 
-// 监听 editTimeout 变化自动保存
+// Monitor editTimeout changes and automatically save them
 watch(editTimeout, async (val) => {
     if (showLockSettings.value && val) {
         await identity.setLockTimeout(val);
     }
 });
 
-// 打开备份对话框
+// Open backup dialog
 function openBackupDialog() {
     showBackupDialog.value = true;
 }
 
-// 备份
+// backup
 watch(showBackupDialog, async (open) => {
     if (open) {
         try {
             privKey.value = await identity.exportKey();
         } catch {
-            privKey.value = "（无法读取，请先解锁）";
+            privKey.value = "（Unable to read，Please unlock first）";
         }
     } else {
         privKey.value = "";
@@ -714,7 +753,7 @@ watch(showBackupDialog, async (open) => {
 
 function copyId() {
     navigator.clipboard.writeText(identity.chatId);
-    $q.notify({ type: "positive", message: "Chat ID 已复制" });
+    $q.notify({ type: "positive", message: "Chat ID Copied" });
 }
 
 function generateInviteLink() {
@@ -727,19 +766,19 @@ function generateInviteLink() {
 
 function copyInviteLink() {
     navigator.clipboard.writeText(inviteLink.value);
-    $q.notify({ type: "positive", message: "邀请链接已复制" });
+    $q.notify({ type: "positive", message: "Invitation link copied" });
 }
 
 function copyPrivKey() {
     navigator.clipboard.writeText(privKey.value);
-    $q.notify({ type: "positive", message: "私钥已复制，请妥善保管" });
+    $q.notify({ type: "positive", message: "Private key copied，Please keep it properly" });
 }
 
 async function doSetup() {
     if (!canSetup.value) return;
     try {
         await identity.enableSecurityCode(setupCode1.value, setupTimeout.value);
-        $q.notify({ type: "positive", message: "安全码设置成功，请牢记！" });
+        $q.notify({ type: "positive", message: "Security code set successfully，please remember！" });
         showSetupDialog.value = false;
         setupCode1.value = "";
         setupCode2.value = "";
@@ -751,13 +790,13 @@ async function doSetup() {
 // function doLockNow() {
 //     identity.lockNow();
 //     showLockSettings.value = false;
-//     $q.notify({ type: "info", message: "已锁定" });
+// $q.notify({ type: "info", message: "Locked" });
 // }
 
 async function doDisable() {
     try {
         await identity.disableSecCode(disableCode.value);
-        $q.notify({ type: "positive", message: "安全码已关闭" });
+        $q.notify({ type: "positive", message: "Security code is closed" });
         showDisableConfirm.value = false;
         showLockSettings.value = false;
         disableCode.value = "";
@@ -766,7 +805,7 @@ async function doDisable() {
     }
 }
 
-// 麦克风检测
+// Microphone detection
 const showMicDialog = ref(false);
 const micStatus = ref("idle");
 const micError = ref("");
@@ -788,15 +827,15 @@ function openMicDialog() {
 
 function micErrorMessage(e) {
     if (e.name === "NotFoundError" || e.name === "DevicesNotFoundError") {
-        return "未找到麦克风设备，请检查设备连接";
+        return "Microphone device not found，Please check device connection";
     }
     if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
-        return "麦克风权限被拒绝，请在浏览器设置中允许麦克风访问";
+        return "Microphone permission denied，Please allow microphone access in your browser settings";
     }
     if (e.name === "NotReadableError") {
-        return "麦克风被其他程序占用，请关闭后重试";
+        return "The microphone is occupied by another program，Please close and try again";
     }
-    return "无法访问麦克风：" + (e.message || e.name);
+    return "Unable to access microphone：" + (e.message || e.name);
 }
 
 async function startMicTest() {
@@ -846,7 +885,7 @@ async function enumerateMics() {
         micDevices.value = devices
             .filter((d) => d.kind === "audioinput")
             .map((d) => ({
-                label: d.label || "未知设备",
+                label: d.label || "unknown device",
                 value: d.deviceId,
             }));
         if (!selectedMicId.value && micDevices.value.length > 0) {
@@ -884,7 +923,7 @@ function stopMicTest() {
     micLevel.value = 0;
 }
 
-// 摄像头检测
+// Camera detection
 const showCamDialog = ref(false);
 const camStatus = ref("idle");
 const camError = ref("");
@@ -902,15 +941,15 @@ function openCamDialog() {
 
 function camErrorMessage(e) {
     if (e.name === "NotFoundError" || e.name === "DevicesNotFoundError") {
-        return "未找到摄像头设备，请检查设备连接";
+        return "Camera device not found，Please check device connection";
     }
     if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
-        return "摄像头权限被拒绝，请在浏览器设置中允许摄像头访问";
+        return "Camera permission denied，Please allow camera access in your browser settings";
     }
     if (e.name === "NotReadableError") {
-        return "摄像头被其他程序占用，请关闭后重试";
+        return "The camera is occupied by other programs，Please close and try again";
     }
-    return "无法访问摄像头：" + (e.message || e.name);
+    return "Unable to access camera：" + (e.message || e.name);
 }
 
 async function startCamTest() {
@@ -944,7 +983,7 @@ async function enumerateCams() {
         camDevices.value = devices
             .filter((d) => d.kind === "videoinput")
             .map((d) => ({
-                label: d.label || "未知设备",
+                label: d.label || "unknown device",
                 value: d.deviceId,
             }));
         if (!selectedCamId.value && camDevices.value.length > 0) {
@@ -977,22 +1016,22 @@ function stopCamTest() {
 
 function confirmClear() {
     $q.dialog({
-        title: "注销账号",
+        title: "Cancel account",
         message:
-            "这将永久删除您的账号、好友关系和所有数据，无法恢复！确定继续吗？",
+            "This will permanently delete your account、Friendships and all data，Unable to recover！Are you sure to continue?？",
         cancel: true,
         persistent: true,
-        ok: "确定注销",
+        ok: "Confirm logout",
         color: "negative",
     }).onOk(async () => {
-        // 二次确认
+        // Second confirmation
         $q.dialog({
-            title: "最后确认",
+            title: "final confirmation",
             message:
-                "此操作不可撤销！您的身份将永久丢失，即使有私钥备份也无法恢复！",
+                "This action is irreversible！Your identity will be permanently lost，Even if there is a backup of the private key, it cannot be restored！",
             cancel: true,
             persistent: true,
-            ok: "我确定要注销",
+            ok: "I'm sure I want to log out",
             color: "negative",
         }).onOk(async () => {
             await identity.clear();
@@ -1003,7 +1042,7 @@ function confirmClear() {
 </script>
 
 <style scoped>
-/* 微信浏览器引导遮罩 */
+/* WeChat browser boot mask */
 .wechat-guide-overlay {
     position: fixed;
     top: 0;
@@ -1060,14 +1099,14 @@ function confirmClear() {
     }
 }
 
-/* 摄像头检测预览 */
+/* Camera detection preview */
 .cam-preview {
     width: 100%;
     aspect-ratio: 4 / 3;
     background: #000;
     border-radius: 8px;
     object-fit: cover;
-    /* 镜像显示，符合用户习惯 */
+    /* Mirror display, in line with user habits */
     transform: scaleX(-1);
 }
 

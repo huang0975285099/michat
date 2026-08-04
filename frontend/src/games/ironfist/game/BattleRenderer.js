@@ -1,6 +1,6 @@
-// 铁拳 - 二期 战斗渲染器工厂（Phaser）
-// 仿 bomberman 的 createBombermanGame 模式：挂载到 DOM 容器，返回 Phaser.Game。
-// RESIZE 缩放模式让 canvas 充满 arena-slot；场景就绪后回调返回 scene 句柄。
+// Tekken - Phase 2 Combat Renderer Factory (Phaser)
+// Imitate bomberman's createBombermanGame mode: mount to the DOM container and return Phaser.Game.
+// RESIZE zoom mode makes the canvas fill arena-slot; the callback returns the scene handle after the scene is ready.
 
 import Phaser from 'phaser'
 import BattleScene from './scenes/BattleScene.js'
@@ -18,11 +18,11 @@ export function createBattleRenderer(container, { playerCharged = false, opponen
     audio: { noAudio: true },
   })
 
-  // 'ready' 后手动 add scene（autoStart=true，第 4 参为 init() 数据）
+  // Manually add scene after 'ready' (autoStart=true, the 4th parameter is init() data)
   game.events.once('ready', () => {
     game.scene.add('BattleScene', BattleScene, true, { playerCharged, opponentCharged })
   })
-  // 场景 create() 完成后回传句柄
+  // Scenario create() returns the handle after completion
   game.events.once('battle-ready', () => {
     onReady?.(game.scene.getScene('BattleScene'))
   })

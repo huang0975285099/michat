@@ -5,20 +5,20 @@ import { send, on, off, wsConnected } from 'src/services/websocket'
 import { callApi } from 'src/services/api'
 
 function deviceErrorMessage(e, video) {
-  const noun = video ? '摄像头/麦克风' : '麦克风'
+  const noun = video ? 'camera/Microphone' : 'Microphone'
   if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError') {
-    return `未找到${noun}设备，请检查设备连接`
+    return `not found${noun}Equipment，Please check device connection`
   }
   if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
-    return `${noun}权限被拒绝，请在浏览器设置中允许访问`
+    return `${noun}Permission denied，Please allow access in your browser settings`
   }
   if (e.name === 'NotReadableError') {
-    return `${noun}被其他程序占用，请关闭后重试`
+    return `${noun}occupied by other programs，Please close and try again`
   }
-  return `无法访问${noun}：` + (e.message || e.name)
+  return `Unable to access${noun}：` + (e.message || e.name)
 }
 
-// 视频约束：限制分辨率以控制带宽，1:1 通话足够
+// Video constraints: limit resolution to control bandwidth, 1:1 calls are sufficient
 const VIDEO_CONSTRAINTS = { width: { ideal: 1280 }, height: { ideal: 720 } }
 const CALL_TIMEOUT_MS = 30000
 const INCOMING_TIMEOUT_MS = 35000
@@ -36,7 +36,7 @@ function mediaConstraints(video, facing) {
 
 export const useCallStore = defineStore('call', () => {
   const state = ref('idle')   // idle | calling | ringing | active
-  const media = ref('audio')  // audio | video（本次通话类型）
+  const media = ref('audio')  //audio | video (type of this call)
   const peerId = ref('')
   const peerNickname = ref('')
   const remoteStream = ref(null)
@@ -57,7 +57,7 @@ export const useCallStore = defineStore('call', () => {
   let restartInFlight = false
   let awaitingRestartAnswer = false
   let lastRestartAttempt = 0
-  let facingMode = 'user' // 当前摄像头朝向：user=前置 environment=后置
+  let facingMode = 'user' //Current camera orientation: user=front environment=rear
 
   const isVideo = () => media.value === 'video'
 
@@ -105,7 +105,7 @@ export const useCallStore = defineStore('call', () => {
       connectTimer = null
       if (isCurrentSession(callId, targetPeerId) && connectionStatus.value !== 'connected') {
         hangup()
-        Notify.create({ type: 'negative', message: '无法建立媒体连接，请检查网络后重试', timeout: 3000 })
+        Notify.create({ type: 'negative', message: 'Unable to establish media connection，Please check the network and try again', timeout: 3000 })
       }
     }, CONNECT_TIMEOUT_MS)
   }
@@ -114,8 +114,8 @@ export const useCallStore = defineStore('call', () => {
     for (const track of stream.getTracks()) {
       track.onended = () => {
         if (!isCurrentSession(callId, targetPeerId)) return
-        const device = track.kind === 'video' ? '摄像头' : '麦克风'
-        Notify.create({ type: 'negative', message: `${device}已断开，通话已结束`, timeout: 3000 })
+        const device = track.kind === 'video' ? 'camera' : 'Microphone'
+        Notify.create({ type: 'negative', message: `${device}Disconnected，The call has ended`, timeout: 3000 })
         hangup()
       }
     }
@@ -136,7 +136,7 @@ export const useCallStore = defineStore('call', () => {
     lastRestartAttempt = now
     restartInFlight = true
     try {
-      // 上一次重连 Offer 没有收到 Answer 时先回滚，才能安全发起下一轮协商。
+      // If you did not receive an Answer during the last reconnection Offer, you must roll back before you can safely initiate the next round of negotiation.
       if (connection.signalingState === 'have-local-offer') {
         await connection.setLocalDescription({ type: 'rollback' })
       }
@@ -170,7 +170,7 @@ export const useCallStore = defineStore('call', () => {
       if (remaining <= 0) {
         clearRecoveryState()
         hangup()
-        Notify.create({ type: 'negative', message: '网络中断，通话已结束', timeout: 3000 })
+        Notify.create({ type: 'negative', message: 'Network outage，The call has ended', timeout: 3000 })
         return
       }
       attemptIceRestart(callId, targetPeerId)
@@ -225,7 +225,7 @@ export const useCallStore = defineStore('call', () => {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia(mediaConstraints(isVideo(), facingMode))
-      // 权限弹窗期间用户可能已挂断，不能让迟到的 getUserMedia 复活旧通话。
+      // The user may have hung up during the permission pop-up window, and the late getUserMedia cannot be used to revive the old call.
       if (!isCurrentSession(callId, chatId) || state.value !== 'calling') {
         stream.getTracks().forEach(t => t.stop())
         return
@@ -240,14 +240,14 @@ export const useCallStore = defineStore('call', () => {
       const offer = await connection.createOffer()
       await connection.setLocalDescription(offer)
       if (pc !== connection || !isCurrentSession(callId, chatId) || state.value !== 'calling') return
-      // 信令携带 media 类型，被叫端据此决定是否开启摄像头
+      // The signaling carries the media type, and the called end decides whether to turn on the camera based on this.
       if (!send('call_offer', { to: chatId, call_id: callId, sdp: offer, media: media.value })) {
-        throw new Error('信令连接已断开')
+        throw new Error('Signaling connection disconnected')
       }
       callingTimer = setTimeout(() => {
         if (state.value === 'calling' && currentCallId === callId) {
           hangup()
-          Notify.create({ type: 'warning', message: '呼叫超时，对方未接听' })
+          Notify.create({ type: 'warning', message: 'call timeout，The other party did not answer' })
         }
       }, CALL_TIMEOUT_MS)
     } catch (e) {
@@ -255,7 +255,7 @@ export const useCallStore = defineStore('call', () => {
       if (currentCallId === callId) {
         const video = isVideo()
         cleanup()
-        const message = e.message === '信令连接已断开' ? e.message : deviceErrorMessage(e, video)
+        const message = e.message === 'Signaling connection disconnected' ? e.message : deviceErrorMessage(e, video)
         Notify.create({ type: 'negative', message })
       }
     }
@@ -264,7 +264,7 @@ export const useCallStore = defineStore('call', () => {
   function handleIncomingOffer(fromId, callId, sdp, callMedia) {
     if (!CALL_ID_PATTERN.test(callId || '') || !fromId || !sdp) return
     if (state.value !== 'idle') {
-      // 同一双方同时互拨时按 call_id 确定性保留较小者，双方会得出相同结论。
+      // When the same two parties call each other at the same time, if the call_id is kept smaller with certainty, both parties will reach the same conclusion.
       if (state.value === 'calling' && fromId === peerId.value && callId < currentCallId) {
         cleanup()
       } else {
@@ -311,7 +311,7 @@ export const useCallStore = defineStore('call', () => {
       await connection.setLocalDescription(answer)
       if (pc !== connection || !isCurrentSession(callId, fromId) || state.value !== 'ringing') return
       if (!send('call_answer', { to: fromId, call_id: callId, sdp: answer })) {
-        throw new Error('信令连接已断开')
+        throw new Error('Signaling connection disconnected')
       }
       state.value = 'active'
       pendingOffer = null
@@ -323,7 +323,7 @@ export const useCallStore = defineStore('call', () => {
         const video = isVideo()
         send('call_reject', { to: fromId, call_id: callId, reason: 'device_error' })
         cleanup()
-        const message = e.message === '信令连接已断开' ? e.message : deviceErrorMessage(e, video)
+        const message = e.message === 'Signaling connection disconnected' ? e.message : deviceErrorMessage(e, video)
         Notify.create({ type: 'negative', message })
       }
     }
@@ -347,7 +347,7 @@ export const useCallStore = defineStore('call', () => {
     }
   }
 
-  // 开/关本地摄像头（仅暂停画面，不结束通话）
+  // Turn on/off the local camera (only pauses the picture, does not end the call)
   function setCameraEnabled(val) {
     cameraOn.value = val
     if (localStream.value) {
@@ -355,7 +355,7 @@ export const useCallStore = defineStore('call', () => {
     }
   }
 
-  // 切换前置/后置摄像头（移动端浏览器）
+  // Switch front/rear camera (mobile browser)
   async function switchCamera() {
     if (!isVideo() || !localStream.value || !pc) return
     const next = facingMode === 'user' ? 'environment' : 'user'
@@ -368,7 +368,7 @@ export const useCallStore = defineStore('call', () => {
       const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video')
       if (!sender) throw new Error('video sender not found')
       await sender.replaceTrack(newTrack)
-      // 同步本地预览流：移除旧轨、加入新轨
+      // Synchronize local preview stream: remove old tracks and add new tracks
       const oldTrack = localStream.value.getVideoTracks()[0]
       if (oldTrack) {
         oldTrack.onended = null
@@ -381,7 +381,7 @@ export const useCallStore = defineStore('call', () => {
     } catch (e) {
       tmp?.getTracks().forEach(t => t.stop())
       console.warn('[call] switchCamera:', e)
-      Notify.create({ type: 'warning', message: '切换摄像头失败' })
+      Notify.create({ type: 'warning', message: 'Failed to switch camera' })
     }
   }
 
@@ -441,7 +441,7 @@ export const useCallStore = defineStore('call', () => {
     } catch (e) {
       console.error('[call] apply answer:', e)
       if (pc === connection && isCurrentSession(payload.call_id, payload.from)) {
-        Notify.create({ type: 'negative', message: '无法建立通话连接，请重试' })
+        Notify.create({ type: 'negative', message: 'Unable to establish call connection，Please try again' })
         hangup()
       }
     }
@@ -496,7 +496,7 @@ export const useCallStore = defineStore('call', () => {
   function onCallHangup(payload) {
     if (!payload || !isCurrentSession(payload.call_id, payload.from)) return
     if (state.value === 'active') {
-      Notify.create({ type: 'info', message: '通话已结束', timeout: 2000 })
+      Notify.create({ type: 'info', message: 'The call has ended', timeout: 2000 })
     }
     cleanup()
   }
@@ -506,15 +506,15 @@ export const useCallStore = defineStore('call', () => {
     const reason = payload?.reason
     let message
     if (reason === 'busy') {
-      message = '对方正在通话中，请稍后再试'
+      message = 'The other party is on the call，Please try again later'
     } else if (reason === 'device_error') {
-      message = '对方设备无法接听通话（麦克风或权限问题）'
+      message = 'The other device cannot answer the call (microphone or permission issue)'
     } else if (reason === 'timeout') {
-      message = '对方未接听'
+      message = 'The other party did not answer'
     } else if (reason === 'glare') {
-      message = '正在处理双方同时发起的呼叫'
+      message = 'Processing calls initiated by both parties at the same time'
     } else {
-      message = '对方已拒绝通话'
+      message = 'The other party has declined the call'
     }
     Notify.create({ type: 'warning', message })
     cleanup()

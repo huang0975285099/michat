@@ -1,11 +1,11 @@
 <template>
     <div class="lock-screen" :class="{ visible: show }">
-        <!-- 背景遮罩 -->
+        <!-- background mask -->
         <div class="lock-bg" />
 
-        <!-- 锁定界面 -->
+        <!-- Lock interface -->
         <div class="lock-card">
-            <!-- 头像 + 昵称 -->
+            <!-- Avatar + Nickname -->
             <div style="display: flex;justify-content: center;align-items: center;">
                 <deterministic-avatar
                     :seed="identity.chatId"
@@ -15,9 +15,9 @@
                     {{ identity.nickname }}
                 </div>
             </div>
-            <div class="text-caption text-grey-7 q-mb-md q-mt-md">输入安全码解锁</div>
+            <div class="text-caption text-grey-7 q-mb-md q-mt-md">Enter security code to unlock</div>
 
-            <!-- 6 位 PIN 输入 -->
+            <!-- 6-digit PIN entry -->
             <div class="pin-row q-mb-lg">
                 <input
                     v-for="i in 6"
@@ -40,39 +40,39 @@
                 />
             </div>
 
-            <!-- 错误提示 -->
+            <!-- Error message -->
             <div v-if="showError" class="text-negative text-center q-mb-md">
-                <div>安全码错误</div>
+                <div>Security code error</div>
                 <div class="text-caption">
-                    剩余 {{ remainingAttempts }} 次机会
+                    Remaining {{ remainingAttempts }} opportunity
                 </div>
             </div>
 
-            <!-- 冷却提示 -->
+            <!-- Cooling Tips -->
             <div v-if="isCoolingDown" class="text-orange text-center q-mb-md">
                 <q-icon name="lock_clock" size="sm" />
                 <span class="q-ml-xs"
-                    >错误次数过多，请 {{ cooldownSeconds }} 秒后重试</span
+                    >Too many errors，please {{ cooldownSeconds }} Try again in seconds</span
                 >
             </div>
 
-            <!-- 解锁按钮 -->
+            <!-- Unlock button -->
             <q-btn
                 v-if="!isCoolingDown"
                 unelevated
                 color="primary"
-                label="解锁"
+                label="Unlock"
                 class="full-width"
                 :disable="pinCode.length !== 6 || isUnlocking"
                 :loading="isUnlocking"
                 @click="tryUnlock"
             />
 
-            <!-- 底部 -->
+            <!-- bottom -->
             <div class="text-caption text-grey-7 text-center q-mt-lg">
-                忘记安全码？
+                Forgot security code？
                 <span class="text-negative cursor-pointer" @click="confirmReset"
-                    >注销账号</span
+                    >Cancel account</span
                 >
             </div>
         </div>
@@ -101,11 +101,11 @@ const isCoolingDown = ref(false);
 const cooldownSeconds = ref(0);
 let cooldownTimer = null;
 
-// 错误计数（sessionStorage，页面刷新清零）
+// Error count (sessionStorage, cleared by page refresh)
 const MAX_ATTEMPTS = 5;
-const COOLDOWN_SEC = 30 * 60; // 30 分钟
+const COOLDOWN_SEC = 30 * 60; //30 minutes
 
-// 错误计数（localStorage 持久化，关闭浏览器不丢失）
+// Error count (persistent in localStorage, not lost when closing the browser)
 const errorCount = ref(
     parseInt(localStorage.getItem("sec_code_errors") || "0"),
 );
@@ -113,7 +113,7 @@ const remainingAttempts = computed(() =>
     Math.max(0, MAX_ATTEMPTS - errorCount.value),
 );
 
-// 初始化时检查是否在冷却中
+// Check if it is cooling during initialization
 onMounted(() => {
     const cooldownEnd = parseInt(
         localStorage.getItem("sec_code_cooldown_end") || "0",
@@ -127,7 +127,7 @@ onUnmounted(() => {
     if (cooldownTimer) clearTimeout(cooldownTimer);
 });
 
-// 当锁定状态变为 false 时重置
+// Reset when lock status changes to false
 watch(
     () => identity.isLocked,
     (locked) => {
@@ -155,7 +155,7 @@ function onPinInput(idx, event) {
         pinRefs.value[idx + 1]?.focus();
     }
 
-    // 自动提交
+    // autocommit
     if (pinCode.value.length === 6) {
         tryUnlock();
     }
@@ -178,19 +178,19 @@ async function tryUnlock() {
     isUnlocking.value = false;
 
     if (success) {
-        // 重置错误计数
+        // Reset error count
         errorCount.value = 0;
         localStorage.removeItem("sec_code_errors");
         return;
     }
 
-    // 失败
+    // failed
     errorCount.value++;
     localStorage.setItem("sec_code_errors", errorCount.value.toString());
     showError.value = true;
 
     if (errorCount.value >= MAX_ATTEMPTS) {
-        // 进入冷却
+        // Enter cooling
         const cooldownEnd = Date.now() + COOLDOWN_SEC * 1000;
         localStorage.setItem("sec_code_cooldown_end", cooldownEnd.toString());
         startCooldown(cooldownEnd);
@@ -199,25 +199,25 @@ async function tryUnlock() {
     }
 }
 
-// 确认注销（忘记密码时）
+// Confirm logout (when you forget your password)
 function confirmReset() {
     $q.dialog({
-        title: "注销账号",
+        title: "Cancel account",
         message:
-            "这将永久删除您的账号、好友关系和所有数据，无法恢复！确定继续吗？",
+            "This will permanently delete your account、Friendships and all data，Unable to recover！Are you sure to continue?？",
         cancel: true,
         persistent: true,
-        ok: "确定注销",
+        ok: "Confirm logout",
         color: "negative",
     }).onOk(() => {
-        // 二次确认
+        // Second confirmation
         $q.dialog({
-            title: "最后确认",
+            title: "final confirmation",
             message:
-                "此操作不可撤销！您的身份将永久丢失，即使有私钥备份也无法恢复！",
+                "This action is irreversible！Your identity will be permanently lost，Even if there is a backup of the private key, it cannot be restored！",
             cancel: true,
             persistent: true,
-            ok: "我确定要注销",
+            ok: "I'm sure I want to log out",
             color: "negative",
         }).onOk(async () => {
             await identity.clear();

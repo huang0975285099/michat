@@ -29,7 +29,7 @@ func NewFriendService(db *sql.DB, redis *rdb.Client) *FriendService {
 	return &FriendService{db: db, redis: redis}
 }
 
-// FriendRequestView 查询时的视图（含发送方信息）
+// FriendRequestView View when querying (including sender information)
 type FriendRequestView struct {
 	ID           uint64    `json:"id"`
 	Status       string    `json:"status"`
@@ -38,7 +38,7 @@ type FriendRequestView struct {
 	FromNickname string    `json:"from_nickname"`
 }
 
-// OutgoingRequestView 用户发出的好友申请（含接收方信息）
+// OutgoingRequestView Friend request sent by user (including recipient information)
 type OutgoingRequestView struct {
 	ID         uint64    `json:"id"`
 	Status     string    `json:"status"`
@@ -47,16 +47,16 @@ type OutgoingRequestView struct {
 	ToNickname string    `json:"to_nickname"`
 }
 
-// FriendView 好友列表视图
+// FriendView friend list view
 type FriendView struct {
 	ChatID    string     `json:"chat_id"`
 	Nickname  string     `json:"nickname"`
 	PublicKey string     `json:"public_key"`
 	LastSeen  *time.Time `json:"last_seen"`
-	Online    bool       `json:"online"` // 实时在线状态
+	Online    bool       `json:"online"` //Real-time online status
 }
 
-// GetUserIDByChatID 通过 chat_id 查询 user id
+// GetUserIDByChatID queries user id through chat_id
 func (s *FriendService) GetUserIDByChatID(ctx context.Context, chatID string) (*model.User, uint64, error) {
 	u := &model.User{}
 	err := s.db.QueryRowContext(ctx,
@@ -71,7 +71,7 @@ func (s *FriendService) GetUserIDByChatID(ctx context.Context, chatID string) (*
 	return u, u.ID, nil
 }
 
-// SendRequest 发送好友申请
+// SendRequest Send friend request
 func (s *FriendService) SendRequest(ctx context.Context, fromID, toID uint64) error {
 	if fromID == toID {
 		return ErrCannotAddSelf
@@ -94,7 +94,7 @@ func (s *FriendService) SendRequest(ctx context.Context, fromID, toID uint64) er
 	return nil
 }
 
-// GetIncomingRequests 查询收到的待处理申请
+// GetIncomingRequests Query the pending requests received
 func (s *FriendService) GetIncomingRequests(ctx context.Context, toID uint64) ([]*FriendRequestView, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT fr.id, fr.status, fr.created_at, u.chat_id, u.nickname
@@ -118,7 +118,7 @@ func (s *FriendService) GetIncomingRequests(ctx context.Context, toID uint64) ([
 	return result, nil
 }
 
-// GetOutgoingRequests 查询用户发出的好友申请
+// GetOutgoingRequests Query the friend requests sent by the user
 func (s *FriendService) GetOutgoingRequests(ctx context.Context, fromID uint64) ([]*OutgoingRequestView, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT fr.id, fr.status, fr.created_at, u.chat_id, u.nickname
@@ -142,8 +142,8 @@ func (s *FriendService) GetOutgoingRequests(ctx context.Context, fromID uint64) 
 	return result, nil
 }
 
-// HandleRequest 接受或拒绝好友申请
-// 返回请求发起者的 chat_id（用于 WebSocket 通知）
+// HandleRequest accepts or rejects friend requests
+// Returns the chat_id of the request originator (used for WebSocket notifications)
 func (s *FriendService) HandleRequest(ctx context.Context, reqID, toID uint64, accept bool) (string, error) {
 	var fromID uint64
 	err := s.db.QueryRowContext(ctx,
@@ -157,7 +157,7 @@ func (s *FriendService) HandleRequest(ctx context.Context, reqID, toID uint64, a
 		return "", err
 	}
 
-	// 获取发起者的 chat_id（在事务外查询，避免锁）
+	// Get the initiator's chat_id (query outside the transaction to avoid locks)
 	var fromChatID string
 	if err = s.db.QueryRowContext(ctx,
 		`SELECT chat_id FROM users WHERE id = ?`, fromID,
@@ -190,7 +190,7 @@ func (s *FriendService) HandleRequest(ctx context.Context, reqID, toID uint64, a
 	return fromChatID, tx.Commit()
 }
 
-// GetFriends 获取好友列表（含公钥和在线状态）
+// GetFriends gets the friend list (including public key and online status)
 func (s *FriendService) GetFriends(ctx context.Context, userID uint64) ([]*FriendView, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT u.chat_id, u.nickname, u.public_key, u.last_seen
@@ -209,7 +209,7 @@ func (s *FriendService) GetFriends(ctx context.Context, userID uint64) ([]*Frien
 		if err = rows.Scan(&v.ChatID, &v.Nickname, &v.PublicKey, &v.LastSeen); err != nil {
 			return nil, err
 		}
-		// 检查 Redis 在线状态
+		// Check Redis online status
 		if s.redis != nil {
 			exists, _ := s.redis.Exists(ctx, pkgredis.OnlineKey(v.ChatID)).Result()
 			v.Online = exists > 0
@@ -219,7 +219,7 @@ func (s *FriendService) GetFriends(ctx context.Context, userID uint64) ([]*Frien
 	return result, nil
 }
 
-// CancelRequest 撤销自己发出的待处理好友申请
+// CancelRequest cancels the pending friend request issued by yourself
 func (s *FriendService) CancelRequest(ctx context.Context, reqID, fromUserID uint64) error {
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM friend_requests WHERE id = ? AND from_user_id = ? AND status = 'pending'`,
@@ -235,7 +235,7 @@ func (s *FriendService) CancelRequest(ctx context.Context, reqID, fromUserID uin
 	return nil
 }
 
-// AutoRejectExpired 将超过 7 天未处理的 pending 申请标记为 rejected
+// AutoRejectExpired marks pending requests that have not been processed for more than 7 days as rejected
 func (s *FriendService) AutoRejectExpired(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE friend_requests SET status = 'rejected'
@@ -244,7 +244,7 @@ func (s *FriendService) AutoRejectExpired(ctx context.Context) error {
 	return err
 }
 
-// GetFriendChatIDs 获取好友的 chat_id 列表（用于广播在线状态）
+// GetFriendChatIDs Gets the chat_id list of friends (used for broadcasting online status)
 func (s *FriendService) GetFriendChatIDs(ctx context.Context, userID uint64) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT u.chat_id
@@ -267,7 +267,7 @@ func (s *FriendService) GetFriendChatIDs(ctx context.Context, userID uint64) ([]
 	return result, nil
 }
 
-// AreFriends 检查 userID 与 friendChatID 是否存在双向好友关系
+// AreFriends checks whether there is a two-way friend relationship between userID and friendChatID
 func (s *FriendService) AreFriends(ctx context.Context, userID uint64, friendChatID string) (bool, error) {
 	var count int
 	err := s.db.QueryRowContext(ctx, `
@@ -280,4 +280,4 @@ func (s *FriendService) AreFriends(ctx context.Context, userID uint64, friendCha
 	return count > 0, nil
 }
 
-// GetUserIDByChatID 通过 chat_id 查询 user id（已存在，无需修改）
+// GetUserIDByChatID queries user id through chat_id (already exists, no need to modify)

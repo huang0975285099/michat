@@ -1,12 +1,12 @@
-// 铁拳 - 二期 战斗场景（Phaser）
-// 渲染无关引擎(IronFistGame)不变；本场景只消费每回合结算结果 + 蓄力态，
-// 通过 playRound(result) / setCharge() 驱动表现。
-// 见 docs/ironfist.md 第十三/二十二节（逻辑与渲染解耦 + 动画演进）。
+// Iron Fist - Phase 2 Battle Scene (Phaser)
+// The rendering-independent engine (IronFistGame) remains unchanged; this scene only consumes the settlement result of each round + the charging state.
+// Drive performance via playRound(result) / setCharge().
+// See docs/ironfist.md Section 13/22 (Decoupling logic and rendering + animation evolution).
 
 import Phaser from 'phaser'
 import { Fighter, ensureFighterTextures, PAL_ME, PAL_OPP } from '../Fighter.js'
 
-// 与一期 BattleArena 一致的姿态映射
+// Attitude mapping consistent with the first issue of BattleArena
 function poseFor(action, dmgTaken, dealtDmg) {
   if (action === 'attack') return 'attack'
   if (action === 'charge') return dmgTaken > 0 ? 'stagger' : 'charge'
@@ -52,8 +52,8 @@ export default class BattleScene extends Phaser.Scene {
     g.clear()
     g.fillGradientStyle(0x322764, 0x322764, 0x0e0a1e, 0x0e0a1e, 1)
     g.fillRect(0, 0, w, h)
-    g.fillStyle(0x6a4fd0, 0.22); g.fillEllipse(w * 0.5, h * 0.84, w * 1.15, h * 0.55)  // 地面光盘
-    g.fillStyle(0xb6a8ff, 0.5); g.fillRect(w * 0.08, h * 0.52, w * 0.84, 2)             // 中线
+    g.fillStyle(0x6a4fd0, 0.22); g.fillEllipse(w * 0.5, h * 0.84, w * 1.15, h * 0.55)  //terrestrial disc
+    g.fillStyle(0xb6a8ff, 0.5); g.fillRect(w * 0.08, h * 0.52, w * 0.84, 2)             //center line
   }
 
   setCharge(playerCharged, opponentCharged) {
@@ -108,7 +108,7 @@ export default class BattleScene extends Phaser.Scene {
 
   _envWarn(dmg) {
     const w = this.scale.width, h = this.scale.height
-    const t = this.add.text(w * 0.5, h * 0.5, '⚠ 环境 -' + dmg, {
+    const t = this.add.text(w * 0.5, h * 0.5, '⚠ environment -' + dmg, {
       fontFamily: 'Arial, sans-serif', fontSize: '18px', fontStyle: 'bold',
       color: '#ff7a7a', stroke: '#000000', strokeThickness: 4,
     }).setOrigin(0.5).setDepth(50)

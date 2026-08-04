@@ -6,13 +6,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// VersionInfo 是 /api/version 返回的版本信息
-// 在 docker-compose 的环境变量里维护（见 main.go 的 APP_LATEST_VERSION 等）
+// VersionInfo is the version information returned by /api/version
+// Maintained in the environment variables of docker-compose (see APP_LATEST_VERSION of main.go, etc.)
 type VersionInfo struct {
-	Latest       string `json:"latest"`                  // 当前线上最新版本号
-	MinSupported string `json:"min_supported,omitempty"` // 低于此版本应强制更新（可选）
-	URL          string `json:"url,omitempty"`           // 更新/下载地址（可选）
-	Notes        string `json:"notes,omitempty"`         // 更新说明（可选）
+	Latest       string `json:"latest"`                  //The latest version number currently online
+	MinSupported string `json:"min_supported,omitempty"` //Versions below this should be forced to update (optional)
+	URL          string `json:"url,omitempty"`           //Update/download address (optional)
+	Notes        string `json:"notes,omitempty"`         //Update instructions (optional)
 }
 
 type VersionHandler struct {
@@ -28,7 +28,7 @@ func NewVersionHandler(latest, minSupported, url, notes string) *VersionHandler 
 	}}
 }
 
-// GET /api/version 公开接口：返回线上最新版本，供前端对比提示更新
+// GET /api/version public interface: returns the latest online version for front-end comparison prompt update
 func (h *VersionHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, h.info)
 }

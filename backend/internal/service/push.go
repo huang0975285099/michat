@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// PushService 通过极光推送 REST API 向离线用户发送通知。
-// 通知内容不含任何消息正文，仅携带发送者 chat_id，确保 E2EE 不被破坏。
+// PushService sends notifications to offline users through the Aurora Push REST API.
+// The notification content does not contain any message body and only carries the sender's chat_id to ensure that E2EE is not destroyed.
 type PushService struct {
 	appKey       string
 	masterSecret string
@@ -31,8 +31,8 @@ func NewPushService(db *sql.DB, appKey, masterSecret string, enabled bool) *Push
 	}
 }
 
-// NotifyOfflineUser 查找接收方的所有设备 token 并推送通知。
-// 在 goroutine 中调用，不阻塞消息处理主流程。
+// NotifyOfflineUser finds all device tokens of the receiver and pushes the notification.
+// Called in goroutine, it does not block the main message processing process.
 func (s *PushService) NotifyOfflineUser(recipientChatID, senderChatID string) {
 	if !s.enabled {
 		return

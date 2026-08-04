@@ -17,7 +17,7 @@ import cn.jpush.android.api.JPushInterface;
 @CapacitorPlugin(name = "ChatService")
 public class ChatServicePlugin extends Plugin {
 
-    /** App 是否处于前台，由 JPushEventReceiver 和前端 visibilitychange 共同维护 */
+    /** Whether the App is in the foreground is jointly maintained by JPushEventReceiver and front-end visibilitychange */
     public static volatile boolean appInForeground = true;
 
     private static ChatServicePlugin instance;
@@ -31,7 +31,7 @@ public class ChatServicePlugin extends Plugin {
         instance = this;
     }
 
-    /** 供 JPushEventReceiver 在注册成功后回调，通知前端新的 RegistrationID */
+    /** For JPushEventReceiver to call back after successful registration to notify the front end of the new RegistrationID */
     static void onRegistrationIdReceived(String regId) {
         if (instance == null) return;
         JSObject data = new JSObject();
@@ -39,7 +39,7 @@ public class ChatServicePlugin extends Plugin {
         instance.notifyListeners("registrationId", data);
     }
 
-    /** 获取 JPush Registration ID（设备唯一推送 ID） */
+    /** Get JPush Registration ID (device unique push ID) */
     @PluginMethod
     public void getRegistrationId(PluginCall call) {
         String regId = JPushInterface.getRegistrationID(getContext());
@@ -52,14 +52,14 @@ public class ChatServicePlugin extends Plugin {
         call.resolve(result);
     }
 
-    /** 由前端 visibilitychange 事件驱动，控制通知是否显示 */
+    /** Driven by the front-end visibilitychange event, controls whether notifications are displayed */
     @PluginMethod
     public void setForeground(PluginCall call) {
         appInForeground = Boolean.TRUE.equals(call.getBoolean("active", false));
         call.resolve();
     }
 
-    /** 获取并清除通知点击带来的待跳转会话 ID */
+    /** Obtain and clear the session ID to be redirected caused by notification clicks */
     @PluginMethod
     public void getPendingNotification(PluginCall call) {
         String chatId = getContext()
@@ -75,7 +75,7 @@ public class ChatServicePlugin extends Plugin {
         call.resolve(result);
     }
 
-    /** 请求 Android 13+ 通知权限 */
+    /** Request Android 13+ notification permission */
     @PluginMethod
     public void requestNotificationPermission(PluginCall call) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

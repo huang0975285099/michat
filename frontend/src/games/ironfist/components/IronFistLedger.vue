@@ -9,7 +9,7 @@
                 color="white"
                 @click="$emit('back')"
             />
-            <div class="text-h6 q-ml-sm">{{ currency }} 明细</div>
+            <div class="text-h6 q-ml-sm">{{ currency }} Details</div>
             <q-space />
             <q-chip dense color="amber-9" text-color="white" class="fist-chip">
                 ⚡ {{ fistStore.balance.toLocaleString() }} {{ currency }}
@@ -23,7 +23,7 @@
             <q-spinner-dots color="amber-8" size="38px" />
         </div>
         <div v-else-if="!fistStore.transactions.length" class="empty-hint">
-            暂无流水记录，去人机对战赢取 {{ currency }} 吧
+            No running records yet，Go to human-machine battle to win {{ currency }} Bar
         </div>
         <template v-else>
             <div
@@ -34,7 +34,7 @@
                 <div class="tx-main">
                     <div class="tx-label">{{ txLabel(t) }}</div>
                     <div class="tx-time">{{ fmtTime(t.created_at) }}</div>
-                    <div v-if="t.ref_id" class="tx-ref">来源 {{ t.ref_id }}</div>
+                    <div v-if="t.ref_id" class="tx-ref">Source {{ t.ref_id }}</div>
                 </div>
                 <div class="tx-right">
                     <div
@@ -47,7 +47,7 @@
                         }}{{ t.amount.toLocaleString() }}
                     </div>
                     <div class="tx-balance">
-                        余额 {{ t.balance_after.toLocaleString() }}
+                        balance {{ t.balance_after.toLocaleString() }}
                     </div>
                 </div>
             </div>
@@ -57,10 +57,10 @@
                     flat
                     dense
                     color="amber-7"
-                    label="加载更多"
+                    label="load more"
                     @click="fistStore.fetchTransactions()"
                 />
-                <div v-else class="text-caption text-grey-6">没有更多了</div>
+                <div v-else class="text-caption text-grey-6">no more</div>
             </div>
         </template>
     </div>

@@ -16,7 +16,7 @@ android {
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-        // 极光推送 AppKey — 填入从极光控制台获取的 AppKey
+        // Jiguang Push AppKey — fill in the AppKey obtained from the Jiguang console
         manifestPlaceholders = [
             JPUSH_APPKEY : "8ae2c1c5587c62b88ace4630",
             APP_CHANNEL  : "developer-default"
@@ -56,7 +56,7 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
-    // 极光推送 SDK
+    // Aurora Push SDK
     implementation 'cn.jiguang.sdk:jpush:5.4.0'
     implementation 'cn.jiguang.sdk:jcore:4.2.0'
     testImplementation "junit:junit:$junitVersion"

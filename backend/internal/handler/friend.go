@@ -53,7 +53,7 @@ func (h *FriendHandler) SendRequest(c *gin.Context) {
 		return
 	}
 
-	// 实时推送给对方（若在线）
+	// Push to the other party in real time (if online)
 	h.hub.NotifyFriendRequest(body.ToChatID, fromChatID)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -111,7 +111,7 @@ func (h *FriendHandler) HandleRequest(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// 实时通知发起方
+	// Notify the initiator in real time
 	if body.Accept {
 		h.hub.NotifyFriendAccepted(fromChatID)
 	} else {

@@ -77,11 +77,11 @@ const (
 	writeWait       = 10 * time.Second
 	pongWait        = 60 * time.Second
 	pingPeriod      = 30 * time.Second
-	maxMessageSize  = 256 * 1024 // 256KB（支持文件分块传输）
-	fileChunkSize   = 128 * 1024 // 前端分块大小（原始密文字节）
+	maxMessageSize  = 256 * 1024 //256KB (supports file block transfer)
+	fileChunkSize   = 128 * 1024 //Frontend chunk size (original ciphertext bytes)
 	maxChunkData    = ((fileChunkSize + 2) / 3) * 4
-	aesGCMTagSize   = 16               // WebCrypto AES-GCM 默认 128-bit tag
-	maxFileSize     = 10 * 1024 * 1024 // 10MB 明文上限
+	aesGCMTagSize   = 16               //WebCrypto AES-GCM default 128-bit tag
+	maxFileSize     = 10 * 1024 * 1024 //10MB plain text limit
 	maxFilename     = 255
 	maxTotalChunks  = 100
 	fileTransferTTL = 3 * time.Minute
@@ -102,42 +102,42 @@ func expectedFileChunkSize(filesize int64, chunkIndex int) int {
 	return int(remaining)
 }
 
-// Message 是 WebSocket 消息的通用结构
+// Message is the general structure of WebSocket messages
 type Message struct {
 	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"`
 }
 
-// Client 代表一个 WebSocket 连接
+// Client represents a WebSocket connection
 type Client struct {
 	hub    *Hub
 	conn   *websocket.Conn
 	send   chan []byte
 	ChatID string
-	UserID uint64 // 用于查询好友列表
+	UserID uint64 //Used to query the friend list
 
-	// closed 在该连接被新连接抢占时关闭，通知 writePump 停止向可能已半死的旧连接
-	// 写入并退出（退出时把 send 缓冲里未发送的消息回收进离线队列）。用 closeOnce
-	// 保证幂等。不直接 close(send)：那样会让并发的生产者 c.send<- 触发 panic，且缓冲
-	// 中未发送的消息会随连接销毁而永久丢失。
+	// closed is closed when the connection is preempted by a new connection, telling writePump to stop sending data to the old connection that may be half dead.
+	// Write and exit (recycle unsent messages in the send buffer into the offline queue when exiting). Use closeOnce
+	// Guaranteed idempotence. Do not close(send) directly: that will cause the concurrent producer c.send<- to trigger a panic and buffer
+	// Unsent messages will be permanently lost when the connection is destroyed.
 	closed    chan struct{}
 	closeOnce sync.Once
 
-	// 消息限流状态：固定窗口计数。仅在该连接自身的 readPump goroutine 内访问
-	// （dispatch 同步执行），故无需加锁。
-	msgLimiter         fixedWindow // 所有入站消息的总闸
-	lobbyLimiter       fixedWindow // 大厅加入/离开（会触发 O(N) 广播，单独严格限）
+	// Message current limiting status: fixed window count. Only accessed within the connection's own readPump goroutine
+	// (dispatch is executed synchronously), so no locking is required.
+	msgLimiter         fixedWindow //Gatekeeper for all inbound messages
+	lobbyLimiter       fixedWindow //Lobby joining/leaving (will trigger O(N) broadcast, strictly limited individually)
 	ifActionLimiter    fixedWindow
 	ifReconnectLimiter fixedWindow
 }
 
-// fixedWindow 是一个非并发安全的固定窗口限流器，仅供单 goroutine 使用。
+// fixedWindow is a non-concurrency-safe fixed window current limiter for single goroutine use only.
 type fixedWindow struct {
 	windowStart time.Time
 	count       int
 }
 
-// allow 在当前 1 秒窗口内放行不超过 max 次，超限返回 false。
+// allow does not release more than max times in the current 1 second window, and returns false if the limit is exceeded.
 func (w *fixedWindow) allow(now time.Time, max int) bool {
 	if now.Sub(w.windowStart) >= time.Second {
 		w.windowStart = now
@@ -150,27 +150,27 @@ func (w *fixedWindow) allow(now time.Time, max int) bool {
 	return true
 }
 
-// InitClient 由 handler 层调用，设置连接和发送通道
+// InitClient is called by the handler layer to set up the connection and sending channel
 func InitClient(c *Client, conn *websocket.Conn, send chan []byte) {
 	c.conn = conn
 	c.send = send
 	c.closed = make(chan struct{})
 }
 
-// signalClose 通知该连接的 writePump 退出（被新连接抢占时用）。幂等，可重复调用。
+// signalClose notifies the writePump of the connection to exit (used when it is preempted by a new connection). Idempotent and can be called repeatedly.
 func (c *Client) signalClose() {
 	c.closeOnce.Do(func() { close(c.closed) })
 }
 
-// 单连接每秒允许的消息上限（固定窗口）。
+// The upper limit of messages allowed per second for a single connection (fixed window).
 const (
-	msgMaxPerSec         = 100 // 所有入站消息总闸：挡单连接刷消息打 CPU/Redis/DB
-	lobbyMaxPerSec       = 5   // 大厅加入/离开：每次触发全大厅广播，严格限
-	ifActionMaxPerSec    = 30  // ironfist_action：实时对战动作，给足余量
-	ifReconnectMaxPerSec = 5   // ironfist_reconnect：低频操作，每次都做全量 LRANGE
+	msgMaxPerSec         = 100 //Main gate for all inbound messages: block single connection and flush messages to CPU/Redis/DB
+	lobbyMaxPerSec       = 5   //Lobby joining/leaving: triggering a full lobby broadcast every time, strictly limited
+	ifActionMaxPerSec    = 30  //ironfist_action: real-time battle action, giving enough margin
+	ifReconnectMaxPerSec = 5   //ironfist_reconnect: low-frequency operation, do full LRANGE every time
 )
 
-// Hub 管理所有在线连接
+// Hub manages all online connections
 type Hub struct {
 	mu             sync.RWMutex
 	clients        map[string]*Client // chatID → client
@@ -178,19 +178,18 @@ type Hub struct {
 	friendSvc      *service.FriendService
 	identitySvc    *service.IdentityService
 	messageReadSvc *service.MessageReadService
-	pushSvc        *service.PushService                 // 可为 nil（未配置时禁用推送）
-	ironFistSvc    *service.IronFistService             // 可为 nil（PVP 大厅禁用）
-	slgSvc         *service.SlgService                  // 可为 nil（SLG 多人禁用）
-	pvpLobby       map[string]*service.LobbyUserProfile // chatID → 大厅用户档案（PVP 大厅在线列表）
+	pushSvc        *service.PushService                 //Can be nil (disables pushing when not configured)
+	ironFistSvc    *service.IronFistService             //Can be nil (disabled for PVP lobbies)
+	pvpLobby       map[string]*service.LobbyUserProfile //chatID → Lobby User Profile (PVP Lobby Online List)
 
-	// PVP 房间参与方短 TTL 缓存：避免 ironfist_action 热路径每个动作打一次 DB
-	// （否则已认证用户狂刷 action 会把 WS 流量放大成等量 DB 查询）。状态陈旧度
-	// 上限为 pvpPartCacheTTL，对越权校验足够（参与方 chatID 撮合后不变）。
+	// PVP room participant short TTL cache: avoid ironfist_action hot path hitting DB once per action
+	// (Otherwise, the wild use of actions by authenticated users will amplify WS traffic into the same amount of DB queries). State staleness
+	// The upper limit is pvpPartCacheTTL, which is sufficient for unauthorized verification (the participant's chatID remains unchanged after matching).
 	pvpPartMu    sync.Mutex
 	pvpPartCache map[uint64]pvpPartCacheEntry
 
-	// 文件分块只允许在已登记且由接收方接受的会话中中继，防止任意用户绕过
-	// file_offer 的好友校验向在线用户灌入大块数据。
+	// File chunking is only allowed to be relayed in sessions that are registered and accepted by the recipient, preventing any user from bypassing
+	// file_offer's friend check floods online users with chunks of data.
 	fileTransferMu sync.Mutex
 	fileTransfers  map[string]*fileTransferSession
 }
@@ -208,14 +207,14 @@ type fileTransferSession struct {
 	timestamp      int64
 }
 
-// pvpPartCacheEntry 缓存项；part 为 nil 表示"已确认房间不存在"，同样缓存以挡住
-// 对不存在 room_id 的枚举刷查。
+// pvpPartCacheEntry cache item; part is nil, which means "the confirmed room does not exist", and is also cached to block
+// Flush the enumeration for room_id that does not exist.
 type pvpPartCacheEntry struct {
 	part    *service.PVPRoomParticipants
 	expires time.Time
 }
 
-// pvpPartCacheTTL 参与方缓存有效期，决定房间状态变更（结算/取消）的最大可见延迟。
+// pvpPartCacheTTL Party cache validity period, which determines the maximum visible delay for room status changes (settlement/cancellation).
 const pvpPartCacheTTL = 5 * time.Second
 
 func NewHub(redis *rdb.Client, friendSvc *service.FriendService, identitySvc *service.IdentityService, messageReadSvc *service.MessageReadService) *Hub {
@@ -231,9 +230,9 @@ func NewHub(redis *rdb.Client, friendSvc *service.FriendService, identitySvc *se
 	}
 }
 
-// getRoomParticipants 带短 TTL 缓存地查询 PVP 房间参与方，供 WS 越权校验使用。
-// 命中缓存时不打 DB；未命中时用带超时的 context 查询（避免慢/挂死的 DB 阻塞
-// 该连接的读循环），并顺带清理过期项防止 map 无界增长。
+// getRoomParticipants Query PVP room participants with short TTL cache for WS unauthorized verification.
+// When the cache is hit, the DB is not hit; when the cache is missed, context query with timeout is used (to avoid slow/hanging DB blocking)
+// The connection's read loop), and incidentally cleans up expired items to prevent the map from growing unbounded.
 func (h *Hub) getRoomParticipants(roomID uint64) (*service.PVPRoomParticipants, error) {
 	now := time.Now()
 
@@ -252,10 +251,10 @@ func (h *Hub) getRoomParticipants(roomID uint64) (*service.PVPRoomParticipants, 
 		return nil, err
 	}
 
-	// 不缓存 matching：这是个会很快翻转成 matched 的过渡态，若缓存住会导致撮合
-	// 完成后最多一个 TTL 内 from 的合法 action 被当作"未 matched"丢弃（永久丢失，
-	// 重连补不回），造成开局 desync。其它状态（matched/settled/cancelled）与 nil
-	// 都相对稳定，缓存其陈旧度可接受。
+	// Do not cache matching: This is a transition state that will quickly flip to matched. If cached, it will cause matching.
+	// After completion, the legal actions of from within at most one TTL are discarded as "unmatched" (permanently lost,
+	// Reconnection cannot be restored), causing desync at the beginning. Other states (matched/settled/cancelled) and nil
+	// All are relatively stable, and the cache staleness is acceptable.
 	if part != nil && part.Status == "matching" {
 		return part, nil
 	}
@@ -271,26 +270,21 @@ func (h *Hub) getRoomParticipants(roomID uint64) (*service.PVPRoomParticipants, 
 	return part, nil
 }
 
-// SetPushService 注入推送服务（在 main.go 中 hub 创建后调用）
+// SetPushService injects the push service (called after hub is created in main.go)
 func (h *Hub) SetPushService(svc *service.PushService) {
 	h.pushSvc = svc
 }
 
-// SetIronFistService 注入铁拳服务，启用 PVP 大厅在线列表功能
+// SetIronFistService injects the Iron Fist service and enables the PVP lobby online list function
 func (h *Hub) SetIronFistService(svc *service.IronFistService) {
 	h.ironFistSvc = svc
 }
 
-// SetSlgService 注入 SLG 服务，启用多人世界实时同步
-func (h *Hub) SetSlgService(svc *service.SlgService) {
-	h.slgSvc = svc
-}
-
-// Register 注册客户端，标记在线，通知好友
+// Register Register the client, mark online, notify friends
 func (h *Hub) Register(c *Client) {
 	h.mu.Lock()
-	// 若同一 chatID 已有连接，通知旧连接退出（不直接 close(send)，避免生产者 panic
-	// 并让旧连接的 writePump 在退出时把缓冲里未发送的消息回收进离线队列）
+	// If there is already a connection with the same chatID, notify the old connection to exit (do not close(send) directly to avoid producer panic
+	// And let the writePump of the old connection recycle the unsent messages in the buffer into the offline queue when exiting)
 	if old, ok := h.clients[c.ChatID]; ok {
 		old.signalClose()
 	}
@@ -300,26 +294,26 @@ func (h *Hub) Register(c *Client) {
 	ctx := context.Background()
 	h.redis.Set(ctx, pkgredis.OnlineKey(c.ChatID), "1", pkgredis.OnlineTTL)
 
-	// 通知好友：上线
+	// Notify friends: online
 	h.notifyFriendsStatus(c.UserID, c.ChatID, true)
 }
 
-// Unregister 注销客户端，标记离线，通知好友
+// Unregister logs out of the client, marks offline, and notifies friends
 func (h *Hub) Unregister(c *Client) {
 	h.mu.Lock()
 	isCurrent := h.clients[c.ChatID] == c
 	if isCurrent {
 		delete(h.clients, c.ChatID)
 	}
-	// 若该用户在 PVP 大厅，一并移除（断线即离开大厅）
+	// If the user is in the PVP lobby, remove him as well (leave the lobby when disconnected)
 	_, inLobby := h.pvpLobby[c.ChatID]
 	if inLobby {
 		delete(h.pvpLobby, c.ChatID)
 	}
 	h.mu.Unlock()
 
-	// 仅当该客户端仍是当前活跃连接时才清理在线状态
-	// 若新连接已抢占该 chatID（如重连），跳过清理，避免误删新连接的 Redis key 并误发 status:false
+	// Only clear online status if the client is still currently actively connected
+	// If the new connection has preempted the chatID (such as reconnection), skip the cleanup to avoid accidentally deleting the Redis key of the new connection and accidentally sending status:false
 	if !isCurrent {
 		return
 	}
@@ -327,26 +321,18 @@ func (h *Hub) Unregister(c *Client) {
 	ctx := context.Background()
 	h.redis.Del(ctx, pkgredis.OnlineKey(c.ChatID))
 
-	// 通知好友：下线
+	// Notify friends: offline
 	h.notifyFriendsStatus(c.UserID, c.ChatID, false)
 
-	// 离开 PVP 大厅：广播更新给仍在场的大厅用户
+	// Leaving the PVP lobby: Broadcast updates to lobby users still present
 	if inLobby {
 		h.broadcastLobbyUpdate()
 	}
 
-	// 离开 SLG 多人世界：广播下线给同世界玩家
-	if h.slgSvc != nil {
-		if _, ok := h.slgSvc.GetWorldIDByChatID(c.ChatID); ok {
-			h.broadcastSlgPresence(c.ChatID, false)
-			h.slgSvc.Leave(c.ChatID)
-		}
-	}
-
-	// 取消该用户在 PVP 撮合队列中的等待（避免被匹配给他人后无人开局）。
-	// 加 5 秒宽限期：ws.js 会自动重连，重连窗口内的短暂断线不应触发取消，
-	// 否则用户前端仍显示"搜索中"但后端已退款，再也等不到匹配。
-	// 异步执行，不阻塞 Unregister；失败仅日志，不影响断线流程。
+	// Cancel the user's waiting in the PVP matching queue (to avoid being matched to others and then no one starts the game).
+	// Add a 5-second grace period: ws.js will automatically reconnect, and a brief disconnection within the reconnection window should not trigger cancellation.
+	// Otherwise, the user's front-end still displays "Searching" but the back-end has refunded, and will no longer be able to wait for a match.
+	// Asynchronous execution, does not block Unregister; failure only logs, does not affect the disconnection process.
 	if h.ironFistSvc != nil {
 		go func(chatID string) {
 			time.Sleep(5 * time.Second)
@@ -354,7 +340,7 @@ func (h *Hub) Unregister(c *Client) {
 			_, online := h.clients[chatID]
 			h.mu.RUnlock()
 			if online {
-				return // 已重连，跳过取消
+				return //Reconnected, skip cancellation
 			}
 			if _, err := h.ironFistSvc.CancelPVPQueue(context.Background(), chatID); err != nil {
 				log.Printf("[ws] auto cancel pvp queue for %s: %v", chatID, err)
@@ -363,7 +349,7 @@ func (h *Hub) Unregister(c *Client) {
 	}
 }
 
-// notifyFriendsStatus 向好友广播在线状态变更
+// notifyFriendsStatus broadcasts online status changes to friends
 func (h *Hub) notifyFriendsStatus(userID uint64, chatID string, online bool) {
 	if h.friendSvc == nil {
 		return
@@ -401,7 +387,7 @@ func (h *Hub) notifyFriendsStatus(userID uint64, chatID string, online bool) {
 	h.mu.RUnlock()
 }
 
-// Send 向指定 chatID 发送消息；若离线则存入 Redis
+// Send sends a message to the specified chatID; if offline, it will be stored in Redis
 func (h *Hub) Send(chatID string, msg []byte) {
 	h.mu.RLock()
 	c, online := h.clients[chatID]
@@ -411,7 +397,7 @@ func (h *Hub) Send(chatID string, msg []byte) {
 		select {
 		case c.send <- msg:
 		default:
-			// 发送缓冲满，存离线
+			// The sending buffer is full and the storage is offline.
 			h.storeOffline(chatID, msg)
 		}
 	} else {
@@ -419,14 +405,14 @@ func (h *Hub) Send(chatID string, msg []byte) {
 	}
 }
 
-// IsOnline 检查用户是否在线
+// IsOnline checks if the user is online
 func (h *Hub) IsOnline(chatID string) bool {
 	ctx := context.Background()
 	exists, _ := h.redis.Exists(ctx, pkgredis.OnlineKey(chatID)).Result()
 	return exists > 0
 }
 
-// FlushOffline 将离线消息推送给刚上线的客户端
+// FlushOffline pushes offline messages to clients that have just gone online
 func (h *Hub) FlushOffline(c *Client) {
 	ctx := context.Background()
 	key := pkgredis.OfflineKey(c.ChatID)
@@ -439,10 +425,10 @@ func (h *Hub) FlushOffline(c *Client) {
 		select {
 		case c.send <- []byte(m):
 		case <-c.closed:
-			// 本连接在 flush 途中就被更新的连接抢占：把尚未入队的剩余离线消息（含当前
-			// 这条）原样退回离线队列，交给下一条连接补投，避免这里阻塞在满缓冲上死等。
-			// LPUSH key a b c 会得到 [c b a]，故按逆序传入，使剩余消息以原有先后顺序
-			// 排在队列最前，下次连接优先补投。
+			// This connection was preempted by an updated connection during the flush: the remaining offline messages that have not yet been queued (including the current
+			// This) is returned to the offline queue as it is and handed over to the next connection for re-investment to avoid being blocked here and waiting for a full buffer.
+			// LPUSH key a b c will get [c b a], so pass it in in reverse order so that the remaining messages are in the original order.
+			// Be at the front of the queue and get priority for the next connection.
 			rest := msgs[i:]
 			remaining := make([]interface{}, 0, len(rest))
 			for j := len(rest) - 1; j >= 0; j-- {
@@ -457,8 +443,8 @@ func (h *Hub) FlushOffline(c *Client) {
 	}
 }
 
-// FlushStoredReadReceipts 从数据库补投发送者尚未消费的全部已读 tombstone。Redis 离线
-// 队列只有有限 TTL，而阅后即焚必须在用户长期离线后仍能按首次阅读时间立即清理。
+// FlushStoredReadReceipts flushes all read tombstones that the sender has not yet consumed from the database. Redis offline
+// The queue has a limited TTL, and the burn after reading must be able to be cleared immediately according to the first read time even after the user is offline for a long time.
 func (h *Hub) FlushStoredReadReceipts(c *Client) {
 	if h.messageReadSvc == nil {
 		return
@@ -505,29 +491,29 @@ func (h *Hub) storeOffline(chatID string, msg []byte) {
 	h.redis.Expire(ctx, key, pkgredis.OfflineMsgTTL)
 }
 
-// ServeClient 启动读/写 goroutine
+// ServeClient starts the read/write goroutine
 func (h *Hub) ServeClient(c *Client) {
 	h.Register(c)
 
-	// 先启动 writePump 再 flush 离线消息：FlushOffline 直接写 c.send，若离线消息条数
-	// 超过发送通道缓冲（256），而 writePump 尚未启动来消费，c.send<- 会永久阻塞导致
-	// 该连接死锁、彻底收不到消息。writePump 先跑起来即可边写边消费，仅退化为背压。
+	// First start writePump and then flush offline messages: FlushOffline directly writes c.send. If the number of offline messages
+	// The send channel buffer (256) is exceeded, and writePump has not yet been started to consume, c.send<- will be permanently blocked resulting in
+	// The connection is deadlocked and no messages can be received at all. When writePump is run first, it can be consumed while writing, and it will only degrade to back pressure.
 	go c.writePump(h)
 	h.FlushOffline(c)
 	h.FlushStoredReadReceipts(c)
 
-	c.readPump(h) // 阻塞直到断开
+	c.readPump(h) //block until disconnected
 	h.Unregister(c)
 }
 
-// readPump 读取客户端消息
+// readPump reads client messages
 func (c *Client) readPump(h *Hub) {
 	defer c.conn.Close()
 	c.conn.SetReadLimit(maxMessageSize)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
-		// 刷新在线状态
+		// Refresh online status
 		h.redis.Expire(context.Background(), pkgredis.OnlineKey(c.ChatID), pkgredis.OnlineTTL)
 		return nil
 	})
@@ -540,7 +526,7 @@ func (c *Client) readPump(h *Hub) {
 			}
 			break
 		}
-		// 总闸限流：单连接每秒消息数封顶，挡刷消息打 CPU/Redis/DB。超限静默丢弃。
+		// General gate current limit: the number of messages per second for a single connection is capped, and blocking messages will hit CPU/Redis/DB. Silently discarded if exceeded.
 		if !c.msgLimiter.allow(time.Now(), msgMaxPerSec) {
 			continue
 		}
@@ -553,14 +539,14 @@ func (c *Client) readPump(h *Hub) {
 	}
 }
 
-// writePump 向客户端发送消息
+// writePump sends a message to the client
 func (c *Client) writePump(h *Hub) {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
-		// 退出时把 send 缓冲里尚未写出的消息回收进离线队列，避免半死连接/被抢占时
-		// 缓冲中的消息随连接销毁而永久丢失。
+		// When exiting, messages that have not yet been written in the send buffer are recycled into the offline queue to avoid half-dead connections/preemption.
+		// Messages in the buffer are permanently lost when the connection is destroyed.
 		h.requeueUndelivered(c)
 	}()
 	for {
@@ -575,8 +561,8 @@ func (c *Client) writePump(h *Hub) {
 				return
 			}
 		case <-c.closed:
-			// 被新连接抢占：停止向这条（可能已半死）连接写，礼貌发个关闭帧后退出，
-			// 缓冲中未发送的消息由 defer 的 requeueUndelivered 回收。
+			// Preempted by a new connection: Stop writing to this (possibly half-dead) connection, politely send a close frame and exit.
+			// Undelivered messages in the buffer are recycled by defer's requeueUndelivered.
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 			return
@@ -589,13 +575,13 @@ func (c *Client) writePump(h *Hub) {
 	}
 }
 
-// requeueUndelivered 非阻塞地抽干 send 缓冲，把其中尚未写出的「离线可存储」消息按序
-// 回收进离线队列。每个连接仅有一个 writePump，故本函数每连接至多执行一次，不会重复回收。
-// 回收 message/read_receipt/ack：消息、已读回执和送达确认都需要在重连后补投；
-// status/信令/游戏/文件块等瞬时消息直接丢弃，避免重连后产生幻象来电或残留游戏状态。
-// 非可存储类型仍会被抽出通道（丢弃），不留在缓冲里。
-// 注：极小概率下，生产者在本函数抽干后仍可能向 send 写入（抢占的固有竞态），该消息会
-// 滞留缓冲；此窗口远小于原先「半死连接整条缓冲丢失」的缺口，且不会 panic。
+// requeueUndelivered non-blockingly drains the send buffer and sorts the "offline storable" messages that have not yet been written out.
+// Recycle into offline queue. There is only one writePump per connection, so this function can be executed at most once per connection and will not be recycled repeatedly.
+// Recycle message/read_receipt/ack: Messages, read receipts and delivery confirmations all need to be added after reconnection;
+// Transient messages such as status/signaling/game/file blocks are directly discarded to avoid phantom calls or residual game status after reconnection.
+// Non-storable types are still pulled out of the channel (discarded) and do not remain in the buffer.
+// Note: With a very small probability, the producer may still write to send after this function is drained (inherent race condition of preemption), and the message will
+// Stalled buffer; this window is much smaller than the original gap of "half-dead connection and entire buffer lost", and will not panic.
 func (h *Hub) requeueUndelivered(c *Client) {
 	var pending []interface{}
 	for draining := true; draining; {
@@ -619,8 +605,8 @@ func (h *Hub) requeueUndelivered(c *Client) {
 	h.redis.Expire(ctx, key, pkgredis.OfflineMsgTTL)
 }
 
-// offlineStorable 判断一条已序列化的出站消息是否属于「离线可存储」类型。聊天消息、
-// 已读回执及两类 ACK 需要在重连后补投。解析失败按不可存储处理。
+// offlineStorable determines whether a serialized outbound message belongs to the "offline storable" type. chat messages,
+// Read receipts and two types of ACKs need to be resubmitted after reconnection. If the parsing fails, it will be treated as unstorable.
 func offlineStorable(msg []byte) bool {
 	var m struct {
 		Type string `json:"type"`
@@ -632,7 +618,7 @@ func offlineStorable(msg []byte) bool {
 		m.Type == "read_ack" || m.Type == "file_done"
 }
 
-// dispatch 路由消息
+// dispatch routing messages
 func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 	switch msg.Type {
 	case "message":
@@ -658,29 +644,23 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 		"game_move", "game_bomb", "game_powerup", "game_death", "game_resign":
 		h.handleGameRelay(c, msg.Type, msg.Payload)
 	case "ironfist_action":
-		// 暂存到 Redis（断线重连用）+ 中继给对方
+		// Temporarily save to Redis (for disconnection and reconnection) + relay to the other party
 		h.handleIronFistAction(c, msg.Payload)
 	case "ironfist_reconnect":
-		// 返回该房间完整 action 历史（ironfist_replay）
+		// Return the complete action history of this room (ironfist_replay)
 		h.handleIronFistReconnect(c, msg.Payload)
 	case "ironfist_lobby_join":
-		// 加入 PVP 大厅在线列表，广播更新
+		// Join the PVP lobby online list and broadcast updates
 		h.handleIronFistLobbyJoin(c)
 	case "ironfist_lobby_leave":
-		// 主动离开 PVP 大厅
+		// Take the initiative to leave the PVP lobby
 		h.handleIronFistLobbyLeave(c)
-	case "slg_join":
-		// 加入 SLG 多人世界（WS 在线订阅）
-		h.handleSlgJoin(c)
-	case "slg_leave":
-		// 离开 SLG 多人世界
-		h.handleSlgLeave(c)
 	default:
 		log.Printf("[ws] unknown message type %q from %s", msg.Type, c.ChatID)
 	}
 }
 
-// ChatMessagePayload 聊天消息负载
+// ChatMessagePayload chat message payload
 type ChatMessagePayload struct {
 	To              string `json:"to"`
 	MsgID           string `json:"msg_id"`
@@ -702,7 +682,7 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 		log.Printf("[ws] invalid to chat_id from %s: %q", from.ChatID, p.To)
 		return
 	}
-	// msg_id 是接收端去重、发送端 ACK 关联的必要字段，禁止为空。
+	// msg_id is a necessary field for deduplication at the receiving end and ACK association at the sending end, and is prohibited from being empty.
 	if !msgIDRe.MatchString(p.MsgID) {
 		log.Printf("[ws] invalid msg_id from %s: %q", from.ChatID, p.MsgID)
 		return
@@ -720,8 +700,8 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 		log.Printf("[ws] %s tried to message non-friend %s", from.ChatID, p.To)
 		return
 	}
-	// 在转发前持久化消息归属，后续已读回执只能由这条投递的真实接收者创建。
-	// 数据库异常时失败关闭，避免出现已送达但永远无法安全确认阅读的阅后即焚消息。
+	// Persist message ownership before forwarding, and subsequent read receipts can only be created by the actual recipient of this delivery.
+	// Failed to close when the database is abnormal, to avoid the occurrence of disappearing messages that have been delivered but can never be safely confirmed for reading.
 	if h.messageReadSvc == nil {
 		log.Printf("[ws] message read service unavailable; rejected message from %s", from.ChatID)
 		return
@@ -755,7 +735,7 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 	})
 	h.Send(p.To, fwd)
 
-	// 若接收方不在线，触发极光推送（异步，不阻塞主流程）
+	// If the receiver is not online, Aurora push is triggered (asynchronous, does not block the main process)
 	h.mu.RLock()
 	_, recipientOnline := h.clients[p.To]
 	h.mu.RUnlock()
@@ -763,7 +743,7 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 		go h.pushSvc.NotifyOfflineUser(p.To, from.ChatID)
 	}
 
-	// ack 回给发送方，携带服务器时间戳
+	// ack is sent back to the sender, carrying the server timestamp
 	type AckPayload struct {
 		MsgID     string `json:"msg_id"`
 		Timestamp int64  `json:"ts"`
@@ -775,8 +755,8 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 			Timestamp: timestamp,
 		}),
 	})
-	// ACK 不能静默丢弃：它决定发送方是否把已实际送达的消息误标为失败。
-	// 队列短暂拥塞时等待 writePump 腾出位置；连接异常时落入离线队列，重连后补投。
+	// ACK cannot be silently discarded: it determines whether the sender mistakenly marked a message as failed when it was actually delivered.
+	// When the queue is temporarily congested, it waits for writePump to make room; when the connection is abnormal, it falls into the offline queue and is re-invested after reconnection.
 	select {
 	case from.send <- ack:
 	case <-time.After(2 * time.Second):
@@ -784,7 +764,7 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 	}
 }
 
-// RecallPayload 撤回消息负载
+// RecallPayload recall message payload
 type RecallPayload struct {
 	To    string `json:"to"`
 	MsgID string `json:"msg_id"`
@@ -818,7 +798,7 @@ func (h *Hub) handleRecall(from *Client, payload json.RawMessage) {
 			MsgID: p.MsgID,
 		}),
 	})
-	// 撤回只转发在线用户，不存离线（对方收不到只是本地没删，无安全问题）
+	// The withdrawal is only forwarded to online users and does not save offline users (the other party cannot receive it but it is not deleted locally, so there is no security issue)
 	h.mu.RLock()
 	c, ok := h.clients[p.To]
 	h.mu.RUnlock()
@@ -830,13 +810,13 @@ func (h *Hub) handleRecall(from *Client, payload json.RawMessage) {
 	}
 }
 
-// ReadPayload 已读回执负载
+// ReadPayload read receipt payload
 type ReadPayload struct {
-	To    string   `json:"to"`     // 消息发送者 chat_id
-	MsgID []string `json:"msg_id"` // 已读的消息 ID 列表
+	To    string   `json:"to"`     //Message sender chat_id
+	MsgID []string `json:"msg_id"` //List of read message IDs
 }
 
-// handleRead 处理已读回执
+// handleRead handles read receipts
 func (h *Hub) handleRead(from *Client, payload json.RawMessage) {
 	var p ReadPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
@@ -864,8 +844,8 @@ func (h *Hub) handleRead(from *Client, payload json.RawMessage) {
 		return
 	}
 
-	// 服务端按投递归属逐条验证，并返回数据库中的首次阅读时间。去重可避免同一批次
-	// 重复 ID 产生多余查询；不属于该发送者/接收者的 ID 不会被转发。
+	// The server verifies each item according to the delivery attribution and returns the first reading time in the database. Deduplication can avoid the same batch
+	// Duplicate IDs generate redundant queries; IDs that do not belong to the sender/recipient will not be forwarded.
 	uniqueIDs := make([]string, 0, len(p.MsgID))
 	seen := make(map[string]struct{}, len(p.MsgID))
 	for _, msgID := range p.MsgID {
@@ -877,7 +857,7 @@ func (h *Hub) handleRead(from *Client, payload json.RawMessage) {
 	}
 	receipts, err := h.messageReadSvc.RecordReads(ctx, uniqueIDs, p.To, from.ChatID)
 	if err != nil {
-		// 数据库瞬时错误时不 ACK，前端保留整批并在重连/再次打开会话时重试。
+		// No ACK for transient database errors, the front end retains the entire batch and retries when reconnecting/opening the session again.
 		log.Printf("[ws] failed to record read batch from %s: %v", from.ChatID, err)
 		return
 	}
@@ -891,7 +871,7 @@ func (h *Hub) handleRead(from *Client, payload json.RawMessage) {
 		}
 	}
 
-	// 转发给发送者（在线则推送，离线则存 Redis 离线队列）
+	// Forward to the sender (push if online, save in Redis offline queue if offline)
 	if len(receipts) > 0 {
 		acceptedIDs := make([]string, 0, len(receipts))
 		for _, receipt := range receipts {
@@ -908,8 +888,8 @@ func (h *Hub) handleRead(from *Client, payload json.RawMessage) {
 		h.Send(p.To, fwd)
 	}
 
-	// 服务端完成持久化或确定拒绝后才确认；数据库瞬时错误时不会到达这里，
-	// 因而仍会留在前端队列等待重试。receipts 同时把权威首次阅读时间回给阅读方。
+	// The server completes persistence or confirms the rejection before confirming; it will not reach here when the database has a transient error.
+	// Therefore, it will still stay in the front-end queue waiting for retry. receipts also returns the authoritative first reading time to the reading party.
 	ack, _ := json.Marshal(Message{
 		Type: "read_ack",
 		Payload: mustMarshal(struct {
@@ -921,8 +901,8 @@ func (h *Hub) handleRead(from *Client, payload json.RawMessage) {
 	h.Send(from.ChatID, ack)
 }
 
-// handleReadReceiptApplied 在发送方已经把权威阅读时间持久化后停止数据库登录回放。
-// 不要求当前仍为好友：回执可能在解除好友或阅读方注销后才被长期离线的发送方收到。
+// handleReadReceiptApplied Stops database login playback after the sender has persisted the authoritative read time.
+// It is not required to still be a friend: the receipt may be received by the sender who has been offline for a long time after the friend is unfriended or the reader logs out.
 func (h *Hub) handleReadReceiptApplied(from *Client, payload json.RawMessage) {
 	var p ReadPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
@@ -954,7 +934,7 @@ func (h *Hub) handleReadReceiptApplied(from *Client, payload json.RawMessage) {
 	}
 }
 
-// NotifyFriendRequest 向目标用户推送好友申请通知
+// NotifyFriendRequest Push friend application notification to target users
 func (h *Hub) NotifyFriendRequest(toChatID, fromChatID string) {
 	type FriendRequestPayload struct {
 		From string `json:"from"`
@@ -974,7 +954,7 @@ func (h *Hub) NotifyFriendRequest(toChatID, fromChatID string) {
 	}
 }
 
-// NotifyFriendAccepted 通知好友申请发起方：对方已接受
+// NotifyFriendAccepted Notifies the initiator of friend application: the other party has accepted it
 func (h *Hub) NotifyFriendAccepted(toChatID string) {
 	msg, _ := json.Marshal(Message{
 		Type: "friend_accepted",
@@ -990,7 +970,7 @@ func (h *Hub) NotifyFriendAccepted(toChatID string) {
 	}
 }
 
-// NotifyFriendRejected 通知好友申请发起方：对方已拒绝
+// NotifyFriendRejected Notifies the initiator of friend application: The other party has rejected it
 func (h *Hub) NotifyFriendRejected(toChatID string) {
 	msg, _ := json.Marshal(Message{
 		Type: "friend_rejected",
@@ -1006,10 +986,10 @@ func (h *Hub) NotifyFriendRejected(toChatID string) {
 	}
 }
 
-// NotifyPVPMatched 推送 PVP 匹配成功通知给等待方玩家。
-// payload 包含 room_id / opponent / tier / stake，前端收到后切换到对战页面。
-// 用阻塞发送 + 2 秒超时替代 default 丢弃：匹配通知丢失会导致等待方永远停留在
-// 搜索页且房间变孤儿（质押锁死），不能静默丢弃。
+// NotifyPVPMatched Pushes PVP matching success notification to waiting players.
+// The payload contains room_id / opponent / tier / stake. After receiving it, the front end switches to the battle page.
+// Use blocking send + 2 seconds timeout instead of default drop: loss of matching notification will cause the waiting party to stay in
+// Search page and the room becomes orphaned (pledge locked) and cannot be discarded silently.
 func (h *Hub) NotifyPVPMatched(toChatID string, payload any) {
 	msg, _ := json.Marshal(Message{
 		Type:    "ironfist_pvp_matched",
@@ -1029,7 +1009,7 @@ func (h *Hub) NotifyPVPMatched(toChatID string, payload any) {
 	}
 }
 
-// ── 文件传输处理 ──────────────────────────────────────────────────
+// ── File transfer processing ──────────────────────────────────────────────
 
 func (h *Hub) sendFileError(to *Client, transferID, reason string) {
 	errMsg, _ := json.Marshal(Message{
@@ -1054,8 +1034,8 @@ func (h *Hub) registerFileTransfer(transferID string, session *fileTransferSessi
 	h.fileTransfers[transferID] = session
 	h.fileTransferMu.Unlock()
 
-	// 前端等待接受和完成回执的总时限小于 3 分钟；定时清理保证即使双方断线，
-	// 会话记录也不会永久滞留。transfer_id 是 UUID，不允许在 TTL 内复用。
+	// The total time the front end waits for acceptance and completion of receipt is less than 3 minutes; regular cleaning ensures that even if both parties are disconnected,
+	// Session records are not retained permanently. transfer_id is a UUID and is not allowed to be reused within the TTL.
 	time.AfterFunc(fileTransferTTL, func() {
 		h.fileTransferMu.Lock()
 		if current := h.fileTransfers[transferID]; current == session {
@@ -1063,8 +1043,8 @@ func (h *Hub) registerFileTransfer(transferID string, session *fileTransferSessi
 		}
 		failed := !session.done
 		h.fileTransferMu.Unlock()
-		// 被拒绝、报错、断线或超时的文件不会形成聊天消息，撤销其投递归属。
-		// 成功 file_done 的记录必须保留，以便接收者稍后首次打开时仍可验证已读回执。
+		// Files that are rejected, error reported, disconnected or timed out will not form chat messages and their delivery will be revoked.
+		// A record of a successful file_done must be retained so that the recipient can still verify the read receipt when it is opened for the first time later.
 		if failed && h.messageReadSvc != nil {
 			_ = h.messageReadSvc.DeleteMessage(context.Background(), session.msgID, session.sender, session.recipient)
 		}
@@ -1072,7 +1052,7 @@ func (h *Hub) registerFileTransfer(transferID string, session *fileTransferSessi
 	return true
 }
 
-// FileOfferPayload 文件发送请求负载
+// FileOfferPayload file send request payload
 type FileOfferPayload struct {
 	To              string `json:"to"`
 	TransferID      string `json:"transfer_id"`
@@ -1186,7 +1166,7 @@ func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
 		EphemeralPubKey string `json:"ephemeral_pub_key"`
 		IV              string `json:"iv"`
 		BurnAfterRead   bool   `json:"burn_after_read"`
-		Timestamp       int64  `json:"ts"` // 服务器时间戳，两端据此统一文件消息时间
+		Timestamp       int64  `json:"ts"` //Server timestamp, based on which both ends unify the file message time
 	}
 	fwd, _ := json.Marshal(Message{
 		Type: "file_offer",
@@ -1215,7 +1195,7 @@ func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
 	}
 }
 
-// handleFileChunk 中继文件数据块
+// handleFileChunk relay file data chunk
 func (h *Hub) handleFileChunk(from *Client, payload json.RawMessage) {
 	var p struct {
 		To         string `json:"to"`
@@ -1314,13 +1294,13 @@ func (h *Hub) handleFileChunk(from *Client, payload json.RawMessage) {
 	}
 }
 
-// handleFileSimpleRelay 中继 file_accept/file_reject/file_complete/file_error
+// handleFileSimpleRelay relay file_accept/file_reject/file_complete/file_error
 func (h *Hub) handleFileSimpleRelay(from *Client, msgType string, payload json.RawMessage) {
 	var p struct {
 		To         string `json:"to"`
 		TransferID string `json:"transfer_id"`
 		Reason     string `json:"reason,omitempty"`
-		Timestamp  int64  `json:"ts,omitempty"` // file_done 回带 file_offer 的服务器时间戳
+		Timestamp  int64  `json:"ts,omitempty"` //file_done returns the server timestamp of file_offer
 	}
 	if err := json.Unmarshal(payload, &p); err != nil {
 		log.Printf("[ws] invalid %s from %s: %v", msgType, from.ChatID, err)
@@ -1339,7 +1319,7 @@ func (h *Hub) handleFileSimpleRelay(from *Client, msgType string, payload json.R
 	session, ok := h.fileTransfers[p.TransferID]
 	if !ok {
 		h.fileTransferMu.Unlock()
-		// 对已完成会话的迟到 file_complete/file_error 静默忽略，避免成功后又显示失败。
+		// Silently ignore late file_complete/file_error for completed sessions to avoid showing failure after success.
 		if msgType != "file_complete" && msgType != "file_error" {
 			h.sendFileError(from, p.TransferID, "文件传输不存在或已过期")
 		}
@@ -1409,8 +1389,8 @@ func (h *Hub) handleFileSimpleRelay(from *Client, msgType string, payload json.R
 		}),
 	})
 
-	// 接收端已经完成解密并落盘后，file_done 就是不可丢失的最终结果。无论发送方此刻
-	// 在线、缓冲已满还是刚好断线，都标记会话成功并通过通用 Send 做在线/离线补投。
+	// After the receiving end has completed decryption and placed it on disk, file_done is the final result that cannot be lost. Regardless of the sender at the moment
+	// Whether it is online, the buffer is full, or just disconnected, the session will be marked as successful and online/offline re-investment will be done through universal Send.
 	if msgType == "file_done" {
 		session.done = true
 		delete(h.fileTransfers, p.TransferID)
@@ -1444,15 +1424,15 @@ func (h *Hub) handleFileSimpleRelay(from *Client, msgType string, payload json.R
 	}
 }
 
-// ── 语音通话信令处理 ──────────────────────────────────────────────────
+// ── Voice call signaling processing ───────────────────────────────────────────────
 
-// handleCallOffer 转发通话邀请（含好友校验）
+// handleCallOffer forwards call invitation (including friend verification)
 func (h *Hub) handleCallOffer(from *Client, payload json.RawMessage) {
 	var p struct {
 		To     string          `json:"to"`
 		CallID string          `json:"call_id"`
 		SDP    json.RawMessage `json:"sdp"`
-		Media  string          `json:"media"` // audio | video（缺省按 audio 处理）
+		Media  string          `json:"media"` //audio | video (processed by audio by default)
 	}
 	if err := json.Unmarshal(payload, &p); err != nil ||
 		!chatIDRe.MatchString(p.To) || !transferIDRe.MatchString(p.CallID) || len(p.SDP) == 0 {
@@ -1492,7 +1472,7 @@ func (h *Hub) handleCallOffer(from *Client, payload json.RawMessage) {
 	}
 }
 
-// handleCallRelay 转发 call_answer / call_ice / call_hangup / call_reject
+// handleCallRelay forwards call_answer / call_ice / call_hangup / call_reject
 func (h *Hub) handleCallRelay(from *Client, msgType string, payload json.RawMessage) {
 	var p struct {
 		To     string          `json:"to"`
@@ -1515,8 +1495,8 @@ func (h *Hub) handleCallRelay(from *Client, msgType string, payload json.RawMess
 		return
 	}
 
-	// 后续信令同样必须发生在好友之间，不能只保护 offer。客户端还会用 call_id 和
-	// 当前对端做会话级校验，形成服务端授权 + 客户端状态绑定的双重防线。
+	// Subsequent signaling must also occur between friends and cannot only protect the offer. The client also uses call_id and
+	// The current peer performs session-level verification, forming a double line of defense of server authorization + client status binding.
 	ctx := context.Background()
 	if ok, err := h.friendSvc.AreFriends(ctx, from.UserID, p.To); err != nil || !ok {
 		log.Printf("[ws] %s: %s not friends with %s", msgType, from.ChatID, p.To)
@@ -1594,8 +1574,8 @@ func (h *Hub) handleGameRelay(from *Client, msgType string, payload json.RawMess
 		}
 	}
 
-	// game_resign 时清理铁拳房间的 action 日志（若 payload 含 room_id）。
-	// 非铁拳对局 payload 不会有 room_id，跳过即可。
+	// When game_resign, clear the action log of the Tekken room (if the payload contains room_id).
+	// The non-Tekken game payload will not have room_id, so just skip it.
 	if msgType == "game_resign" {
 		var room struct {
 			RoomID string `json:"room_id"`
@@ -1612,8 +1592,8 @@ func mustMarshal(v any) json.RawMessage {
 	return b
 }
 
-// handleIronFistAction 暂存铁拳 action 到 Redis（断线重连用）并中继给对方。
-// 服务端不做任何游戏逻辑，仅追加存储 + 转发。详见 docs/ironfist.md 第十四节方案 B。
+// handleIronFistAction temporarily saves the Iron Fist action to Redis (for disconnection and reconnection) and relays it to the other party.
+// The server does not do any game logic, only append storage + forwarding. See docs/ironfist.md for details, Section 14 Plan B.
 func (h *Hub) handleIronFistAction(from *Client, payload json.RawMessage) {
 	var p struct {
 		To     string `json:"to"`
@@ -1628,19 +1608,19 @@ func (h *Hub) handleIronFistAction(from *Client, payload json.RawMessage) {
 		return
 	}
 
-	// 限流：单连接固定窗口（1s）内最多 ifActionMaxPerSec 个 action，挡住合法
-	// 参与方刷消息（叠加下游 Redis RPUSH + 中继的放大效应）。超限静默丢弃。
+	// Current limiting: at most ifActionMaxPerSec actions within a single connection fixed window (1s), blocking is legal
+	// Participants flush messages (superimposed on the amplification effect of downstream Redis RPUSH + relay). Silently discarded if exceeded.
 	if !from.ifActionLimiter.allow(time.Now(), ifActionMaxPerSec) {
 		log.Printf("[ws] ironfist_action rate limited from %s", from.ChatID)
 		return
 	}
 
-	// 房间类型区分：
-	//  - 质押 PVP 房间：room_id 是数字 DB 主键且存在于 ironfist_pvp_rooms。涉及资金，
-	//    需严格越权校验（from 必须是参与方、房间 matched、p.To 必须是对手）。
-	//  - 好友娱乐局：room_id 是 randomId 字符串（非数字 / 不在 PVP 表）。无资金风险，
-	//    仅中继不做游戏逻辑校验——randomId（36^8 空间，不可枚举）本身即访问凭据。
-	// 仅当肯定识别为 PVP 房间时才走严格校验，避免误伤好友局（其 action 不应被丢弃）。
+	// Room type distinction:
+	// - Staking PVP rooms: room_id is a numeric DB primary key and exists in ironfist_pvp_rooms. involving funds,
+	// Strict unauthorized verification is required (from must be a participant, room matched, p.To must be an opponent).
+	// - Friends Entertainment Bureau: room_id is a randomId string (not a number / not in the PVP table). No financial risk,
+	// Only relay does not perform game logic verification - randomId (36^8 space, non-enumerable) itself is the access credential.
+	// Only when it is definitely identified as a PVP room, strict verification is performed to avoid accidentally damaging the friend's room (its actions should not be discarded).
 	if roomID, perr := strconv.ParseUint(p.RoomID, 10, 64); perr == nil && h.ironFistSvc != nil {
 		if part, gerr := h.getRoomParticipants(roomID); gerr == nil && part != nil {
 			if part.Status != "matched" {
@@ -1665,7 +1645,7 @@ func (h *Hub) handleIronFistAction(from *Client, payload json.RawMessage) {
 		}
 	}
 
-	// 存储项含 from，便于客户端重放时区分双方动作
+	// The storage item contains from, which facilitates the client to distinguish the actions of both parties during replay.
 	entry := map[string]interface{}{
 		"round":  p.Round,
 		"action": p.Action,
@@ -1677,8 +1657,8 @@ func (h *Hub) handleIronFistAction(from *Client, payload json.RawMessage) {
 	ctx := context.Background()
 	key := pkgredis.IronFistActionsKey(p.RoomID)
 	onceKey := pkgredis.IronFistActionOnceKey(p.RoomID, from.ChatID, p.Round)
-	// 同一玩家每回合只接受第一条动作。Lua 将占位、写日志和 TTL 放进一个原子操作，
-	// 防止并发重复提交或“先占位后写日志失败”造成不可恢复的动作缺口。
+	// The same player only takes the first action each turn. Lua puts placeholder, log writing and TTL into one atomic operation,
+	// Prevent unrecoverable action gaps caused by concurrent repeated submissions or "failure to occupy space first and then write log".
 	const storeOnce = `
 		if redis.call('SET', KEYS[1], '1', 'NX', 'PX', ARGV[2]) then
 			redis.call('RPUSH', KEYS[2], ARGV[1])
@@ -1696,7 +1676,7 @@ func (h *Hub) handleIronFistAction(from *Client, payload json.RawMessage) {
 		return
 	}
 
-	// 中继给对方（注入 from 字段）
+	// Relay to the other party (inject the from field)
 	m := map[string]interface{}{
 		"to":      p.To,
 		"room_id": p.RoomID,
@@ -1727,8 +1707,8 @@ func validIronFistAction(action string) bool {
 	}
 }
 
-// handleIronFistReconnect 返回该房间的完整 action 历史（ironfist_replay）。
-// 客户端收到后用 replayGame() 重放出当前状态，无状态分叉风险。
+// handleIronFistReconnect returns the complete action history for this room (ironfist_replay).
+// After receiving it, the client uses replayGame() to replay the current state, without the risk of state fork.
 func (h *Hub) handleIronFistReconnect(from *Client, payload json.RawMessage) {
 	var p struct {
 		RoomID string `json:"room_id"`
@@ -1738,16 +1718,16 @@ func (h *Hub) handleIronFistReconnect(from *Client, payload json.RawMessage) {
 		return
 	}
 
-	// 限流：reconnect 每次都做一次全量 LRANGE，限制单连接刷取频率。超限静默丢弃。
+	// Current limiting: Do a full LRANGE every time you reconnect, limiting the frequency of brushing for a single connection. Silently discarded if exceeded.
 	if !from.ifReconnectLimiter.allow(time.Now(), ifReconnectMaxPerSec) {
 		log.Printf("[ws] ironfist_reconnect rate limited from %s", from.ChatID)
 		return
 	}
 
-	// 越权校验：仅对质押 PVP 房间（数字 DB 主键且存在于 ironfist_pvp_rooms）生效——
-	// 否则任意用户可枚举自增 room_id 拉取他人对局完整动作历史。要求 from 是参与方、
-	// 房间 matched/settled。好友娱乐局 room_id 为不可枚举的 randomId 字符串，不在 PVP 表，
-	// randomId 本身即访问凭据，直接放行重放（否则好友局刷新无法重连）。
+	// Override verification: only effective for pledged PVP rooms (numeric DB primary key and exists in ironfist_pvp_rooms)——
+	// Otherwise, any user can enumerate and increment room_id to pull the complete action history of other people's games. Requires from to be a participant,
+	// Room matched/settled. The friend entertainment room room_id is a non-enumerable randomId string, which is not in the PVP table.
+	// The randomId itself is the access credential, allowing replay directly (otherwise the friend's game cannot be reconnected after refreshing).
 	if roomID, perr := strconv.ParseUint(p.RoomID, 10, 64); perr == nil && h.ironFistSvc != nil {
 		if part, gerr := h.getRoomParticipants(roomID); gerr == nil && part != nil {
 			if part.Status != "matched" && part.Status != "settled" {
@@ -1784,25 +1764,25 @@ func (h *Hub) handleIronFistReconnect(from *Client, payload json.RawMessage) {
 	}
 	fwd, _ := json.Marshal(Message{Type: "ironfist_replay", Payload: mustMarshal(m)})
 
-	// 直接回送给请求方（不走对方）
+	// Send directly back to the requesting party (without leaving the other party)
 	select {
 	case from.send <- fwd:
 	default:
 	}
 }
 
-// handleIronFistLobbyJoin 加入 PVP 大厅在线列表。
-// 客户端进入 PVP 大厅页面时发送；服务端查询用户档案后存入 pvpLobby，
-// 并向所有在场用户广播最新列表（含本人在内）。
+// handleIronFistLobbyJoin Joins the PVP lobby online list.
+// Sent when the client enters the PVP lobby page; the server queries the user profile and stores it in pvpLobby.
+// And broadcast the latest list to all users present (including myself).
 func (h *Hub) handleIronFistLobbyJoin(c *Client) {
 	if h.ironFistSvc == nil {
 		return
 	}
-	// 限流：加入会触发 DB 查询 + 全大厅 O(N) 广播，严格限频防广播风暴。
+	// Current limiting: Joining will trigger DB query + O(N) broadcast in the whole hall, strict frequency limitation to prevent broadcast storms.
 	if !c.lobbyLimiter.allow(time.Now(), lobbyMaxPerSec) {
 		return
 	}
-	// 查询档案（不在持锁期间做 DB 查询，避免阻塞其他 dispatch）
+	// Query files (do not perform DB queries during the lock period to avoid blocking other dispatches)
 	ctx := context.Background()
 	p, err := h.ironFistSvc.GetLobbyUserProfile(ctx, c.ChatID)
 	if err != nil {
@@ -1811,9 +1791,9 @@ func (h *Hub) handleIronFistLobbyJoin(c *Client) {
 	}
 
 	h.mu.Lock()
-	// 已存在则覆盖（profile 可能变化：余额/场次更新）
+	// If it already exists, it will be overwritten (profile may change: balance/session update)
 	h.pvpLobby[c.ChatID] = p
-	// 拷贝当前列表用于广播
+	// Copy the current list for broadcast
 	list := make([]*service.LobbyUserProfile, 0, len(h.pvpLobby))
 	for _, v := range h.pvpLobby {
 		list = append(list, v)
@@ -1829,9 +1809,9 @@ func (h *Hub) handleIronFistLobbyJoin(c *Client) {
 	h.sendLobbyUpdate(recipients, list)
 }
 
-// handleIronFistLobbyLeave 主动离开 PVP 大厅
+// handleIronFistLobbyLeave voluntarily leaves the PVP lobby
 func (h *Hub) handleIronFistLobbyLeave(c *Client) {
-	// 共用大厅限流器：挡 join/leave 快速来回切换触发的广播风暴。
+	// Shared lobby flow limiter: Blocks broadcast storms triggered by join/leave fast switching back and forth.
 	if !c.lobbyLimiter.allow(time.Now(), lobbyMaxPerSec) {
 		return
 	}
@@ -1850,7 +1830,7 @@ func (h *Hub) handleIronFistLobbyLeave(c *Client) {
 			recipients = append(recipients, rc)
 		}
 	}
-	// 离开者也要收到更新（清空自己的列表显示）
+	// Those who left will also receive updates (clear their own list display)
 	if rc, ok := h.clients[c.ChatID]; ok {
 		recipients = append(recipients, rc)
 	}
@@ -1859,8 +1839,8 @@ func (h *Hub) handleIronFistLobbyLeave(c *Client) {
 	h.sendLobbyUpdate(recipients, list)
 }
 
-// broadcastLobbyUpdate 向当前大厅所有在线用户广播最新列表。
-// 用于断线/异常下线场景（Unregister 路径），此时离开者已不可达，无需发回。
+// broadcastLobbyUpdate broadcasts the latest list to all online users in the current lobby.
+// Used for disconnection/abnormal offline scenarios (Unregister path). At this time, the leaver is no longer reachable and does not need to be sent back.
 func (h *Hub) broadcastLobbyUpdate() {
 	h.mu.RLock()
 	list := make([]*service.LobbyUserProfile, 0, len(h.pvpLobby))
@@ -1876,7 +1856,7 @@ func (h *Hub) broadcastLobbyUpdate() {
 	h.sendLobbyUpdate(recipients, list)
 }
 
-// sendLobbyUpdate 组装并广播大厅列表消息
+// sendLobbyUpdate assembles and broadcasts lobby list messages
 func (h *Hub) sendLobbyUpdate(recipients []*Client, list []*service.LobbyUserProfile) {
 	type UpdatePayload struct {
 		Count int                         `json:"count"`
@@ -1895,147 +1875,4 @@ func (h *Hub) sendLobbyUpdate(recipients []*Client, list []*service.LobbyUserPro
 		default:
 		}
 	}
-}
-
-// ── SLG 多人世界 ──────────────────────────────────────────────────
-
-// handleSlgJoin 标记玩家在 SLG 世界中在线。客户端进入 SLG 页面时发送。
-// 实际的世界/出生点/领地数据通过 HTTP /api/games/slg/join 获取，
-// WS 仅负责在线状态订阅与领地变更广播路由。
-func (h *Hub) handleSlgJoin(c *Client) {
-	if h.slgSvc == nil {
-		return
-	}
-	if !c.lobbyLimiter.allow(time.Now(), lobbyMaxPerSec) {
-		return
-	}
-	// 服务层标记在线；若玩家尚未通过 HTTP join，则 GetWorldIDByChatID 会返回 false，
-	// 但不影响——客户端应先调 HTTP join 再发 slg_join。
-	h.slgSvc.SetOnline(c.ChatID)
-
-	// 向同世界在线玩家广播「玩家上线」
-	h.broadcastSlgPresence(c.ChatID, true)
-}
-
-// handleSlgLeave 标记玩家离开 SLG 世界
-func (h *Hub) handleSlgLeave(c *Client) {
-	if h.slgSvc == nil {
-		return
-	}
-	h.broadcastSlgPresence(c.ChatID, false)
-	h.slgSvc.Leave(c.ChatID)
-}
-
-// broadcastSlgPresence 广播玩家上/下线事件给同世界在线玩家
-func (h *Hub) broadcastSlgPresence(chatID string, online bool) {
-	if h.slgSvc == nil {
-		return
-	}
-	worldID, ok := h.slgSvc.GetWorldIDByChatID(chatID)
-	if !ok {
-		return
-	}
-	peers := h.slgSvc.GetOnlinePlayersInWorld(worldID)
-
-	msg, _ := json.Marshal(Message{
-		Type: "slg_presence",
-		Payload: mustMarshal(map[string]interface{}{
-			"chat_id": chatID,
-			"online":  online,
-		}),
-	})
-
-	h.mu.RLock()
-	for _, pid := range peers {
-		if rc, ok := h.clients[pid]; ok {
-			select {
-			case rc.send <- msg:
-			default:
-			}
-		}
-	}
-	h.mu.RUnlock()
-}
-
-// BroadcastSLGEvent 向同世界在线玩家广播领地变更事件。
-// 由 HTTP handler 在领地变更后调用。
-func (h *Hub) BroadcastSLGEvent(senderChatID string, ev *service.TerritoryChangeEvent) {
-	if h.slgSvc == nil {
-		return
-	}
-	worldID, ok := h.slgSvc.GetWorldIDByChatID(senderChatID)
-	if !ok {
-		return
-	}
-	peers := h.slgSvc.GetOnlinePlayersInWorld(worldID)
-
-	msg, _ := json.Marshal(Message{
-		Type:    "slg_territory_update",
-		Payload: mustMarshal(ev),
-	})
-
-	h.mu.RLock()
-	for _, pid := range peers {
-		if rc, ok := h.clients[pid]; ok {
-			select {
-			case rc.send <- msg:
-			default:
-			}
-		}
-	}
-	h.mu.RUnlock()
-}
-
-// BroadcastSLGMarchEvent 向同世界在线玩家广播部队事件（出征/行军开始、结束、玩家碰撞遭遇战结果）。
-// 由 HTTP handler 在落库存证后调用。
-func (h *Hub) BroadcastSLGMarchEvent(senderChatID string, ev *service.MarchEvent) {
-	if h.slgSvc == nil {
-		return
-	}
-	worldID, ok := h.slgSvc.GetWorldIDByChatID(senderChatID)
-	if !ok {
-		return
-	}
-	peers := h.slgSvc.GetOnlinePlayersInWorld(worldID)
-
-	msg, _ := json.Marshal(Message{
-		Type:    "slg_march_update",
-		Payload: mustMarshal(ev),
-	})
-
-	h.mu.RLock()
-	for _, pid := range peers {
-		if rc, ok := h.clients[pid]; ok {
-			select {
-			case rc.send <- msg:
-			default:
-			}
-		}
-	}
-	h.mu.RUnlock()
-}
-
-// BroadcastSLGAIEvent 向指定世界所有在线玩家广播 AI 扩张事件。
-// 由 SLG 服务端 AI 定时器在 AI 占领新地块后调用。
-func (h *Hub) BroadcastSLGAIEvent(worldID uint64, ev *service.AITerritoryEvent) {
-	if h.slgSvc == nil {
-		return
-	}
-	peers := h.slgSvc.GetOnlinePlayersInWorld(worldID)
-
-	msg, _ := json.Marshal(Message{
-		Type:    "slg_ai_expansion",
-		Payload: mustMarshal(ev),
-	})
-
-	h.mu.RLock()
-	for _, pid := range peers {
-		if rc, ok := h.clients[pid]; ok {
-			select {
-			case rc.send <- msg:
-			default:
-			}
-		}
-	}
-	h.mu.RUnlock()
 }

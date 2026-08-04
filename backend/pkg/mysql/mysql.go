@@ -25,7 +25,7 @@ func New(dsn string) (*sql.DB, error) {
 	return db, nil
 }
 
-// ensureDatabase 连接 MySQL（不指定库名），自动创建数据库。
+// ensureDatabase connects to MySQL (without specifying a library name) and automatically creates a database.
 func ensureDatabase(dsn string) error {
 	cfg, err := driver.ParseDSN(dsn)
 	if err != nil {

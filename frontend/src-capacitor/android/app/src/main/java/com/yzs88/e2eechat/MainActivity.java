@@ -12,11 +12,11 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(ChatServicePlugin.class);
         super.onCreate(savedInstanceState);
 
-        // JPush 初始化
+        // JPush initialization
         JPushInterface.setDebugMode(isDebugBuild());
         JPushInterface.init(this);
 
-        // WebView 调试（仅 debug 包）
+        // WebView debugging (debug package only)
         WebView.setWebContentsDebuggingEnabled(isDebugBuild());
     }
 

@@ -10,9 +10,9 @@
                 @click="$emit('home')"
             />
             <div style="font-size: 22px" class="q-ml-sm">🥊</div>
-            <div class="text-h6 q-ml-xs">铁拳3D</div>
+            <div class="text-h6 q-ml-xs">iron fist3D</div>
             <q-space />
-            <!-- 国际版 $FIST 介绍入口暂时停用，仅保留中国版积分模式。
+            <!-- The international version $FIST introduction entrance is temporarily suspended, and only the Chinese version points mode is retained.
             <div
                 v-if="region === 'intl'"
                 class="text-caption text-grey-5 cursor-pointer rules-link"
@@ -27,42 +27,42 @@
                 @click="showRules = true"
             >
                 <q-icon name="help_outline" size="15px" />
-                <span class="q-ml-xs">玩法</span>
+                <span class="q-ml-xs">How to play</span>
             </div>
         </div>
 
-        <div class="section-title">我的信息</div>
+        <div class="section-title">my information</div>
         <div class="mini-grid">
             <div class="mini-card mini-card--fist" @click="$emit('open-ledger')">
                 <div class="mini-emoji">⚡</div>
                 <div class="mini-name">
                     {{ fistStore.balance.toLocaleString() }}
                 </div>
-                <div class="mini-sub">{{ currency }} · 明细</div>
+                <div class="mini-sub">{{ currency }} · Details</div>
             </div>
             <div class="mini-card" @click="$emit('open-records')">
                 <div class="mini-emoji">📜</div>
-                <div class="mini-name">对战记录</div>
-                <div class="mini-sub">战绩明细</div>
+                <div class="mini-name">Battle record</div>
+                <div class="mini-sub">Record details</div>
             </div>
             <div class="mini-card" @click="$emit('open-achievements')">
                 <div class="mini-emoji">🏅</div>
-                <div class="mini-name">成就</div>
-                <div class="mini-sub">荣誉徽章</div>
+                <div class="mini-name">achievement</div>
+                <div class="mini-sub">badge of honor</div>
             </div>
         </div>
 
-        <div class="section-title">选择对战模式</div>
+        <div class="section-title">Select battle mode</div>
 
         <div class="mode-card mode-card--pve" @click="$emit('start-pve')">
             <div class="mode-emoji">🤖</div>
             <div class="mode-text">
                 <div class="mode-name">
-                    人机对战
+                    Man-machine battle
                     <span class="mode-tag mode-tag--earn">PVE</span>
                 </div>
-                <div class="mode-desc">每场获胜奖励 500 {{ currency }}，每天最多 10 场</div>
-                <!-- 每日进度条：满 10 场额外奖励 1000 $FIST -->
+                <div class="mode-desc">Reward for every win 500 {{ currency }}，Maximum per day 10 field</div>
+                <!-- Daily progress bar: additional reward of 1000 $FIST for 10 games -->
                 <div class="pve-progress">
                     <div class="pve-progress-bar">
                         <div
@@ -72,18 +72,18 @@
                     </div>
                     <div class="pve-progress-text">
                         <span
-                            >今日 {{ fistStore.todayWins }}/{{
+                            >today {{ fistStore.todayWins }}/{{
                                 fistStore.todayMax
                             }}
-                            场</span
+                            field</span
                         >
                         <span
                             v-if="fistStore.todayWins >= fistStore.todayMax"
                             class="pve-progress-done"
-                            >🎉 满勤 +1000 ✓</span
+                            >🎉 Full attendance +1000 ✓</span
                         >
                         <span v-else class="pve-progress-hint"
-                            >满 10 场 +1000 {{ currency }}</span
+                            >full 10 field +1000 {{ currency }}</span
                         >
                     </div>
                 </div>
@@ -95,11 +95,11 @@
             <div class="mode-emoji">⚔️</div>
             <div class="mode-text">
                 <div class="mode-name">
-                    匹配对战
-                    <span class="mode-tag mode-tag--soon">后续开放</span>
+                    Match play
+                    <span class="mode-tag mode-tag--soon">Open later</span>
                 </div>
                 <div class="mode-desc">
-                    黄金 100 · 铂金 1000 · 钻石 10000 {{ currency }} 质押对战
+                    gold 100 · platinum 1000 · diamond 10000 {{ currency }} Pledge Battle
                 </div>
             </div>
             <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
@@ -112,19 +112,19 @@
             <div class="mode-emoji">👥</div>
             <div class="mode-text">
                 <div class="mode-name">
-                    好友对战
-                    <span class="mode-tag mode-tag--fun">娱乐</span>
+                    Friends vs. friends
+                    <span class="mode-tag mode-tag--fun">entertainment</span>
                 </div>
-                <div class="mode-desc">实时 1v1 邀请在线好友，不消耗 {{ currency }}</div>
+                <div class="mode-desc">real time 1v1 Invite online friends，Not consumed {{ currency }}</div>
             </div>
             <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
         </div>
 
-        <!-- 好友列表弹窗 -->
+        <!-- Friends list pop-up window -->
         <q-dialog v-model="showFriends" position="bottom">
             <q-card class="friend-dialog">
                 <q-card-section class="row items-center q-pb-none">
-                    <div class="text-h6">在线好友</div>
+                    <div class="text-h6">online friends</div>
                     <q-space />
                     <q-btn icon="close" flat round dense v-close-popup />
                 </q-card-section>
@@ -158,7 +158,7 @@
                                     f.nickname || f.chat_id
                                 }}</q-item-label>
                                 <q-item-label caption class="text-positive"
-                                    >在线</q-item-label
+                                    >online</q-item-label
                                 >
                             </q-item-section>
                             <q-item-section side
@@ -167,40 +167,40 @@
                         </q-item>
                     </q-list>
                     <div v-else class="text-center text-grey-5 q-py-lg">
-                        暂无在线好友
+                        No online friends yet
                     </div>
                 </q-card-section>
             </q-card>
         </q-dialog>
 
-        <!-- 国际版及地区选择暂时停用，当前固定为中国版积分模式。
+        <!-- The international version and regional selection are temporarily disabled, and the current points mode is fixed to the Chinese version.
         <q-dialog v-model="showRegionDialog" persistent>
             <q-card class="region-dialog">
                 <q-card-section class="text-center q-pt-lg">
-                    <div class="region-title">🌏 选择版本</div>
-                    <div class="region-sub">首次选择后将自动记住，可在设置中更改</div>
+                    <div class="region-title">🌏 Select version</div>
+                    <div class="region-sub">Will be automatically remembered after first selection，Can be changed in settings</div>
                 </q-card-section>
                 <q-card-section class="region-options">
                     <button class="region-btn region-btn--cn" @click="selectRegion('cn')">
                         <span class="region-flag">🎮</span>
-                        <span class="region-name">中国大陆版</span>
-                        <span class="region-hint">使用 “积分” 对战与奖励</span>
+                        <span class="region-name">Mainland China version</span>
+                        <span class="region-hint">Use “Points” Battles and rewards</span>
                     </button>
                     <button class="region-btn region-btn--intl" @click="selectRegion('intl')">
                         <span class="region-flag">🌐</span>
-                        <span class="region-name">国际版</span>
-                        <span class="region-hint">使用 “$FIST” 对战与奖励</span>
+                        <span class="region-name">International version</span>
+                        <span class="region-hint">Use “$FIST” Battles and rewards</span>
                     </button>
                 </q-card-section>
             </q-card>
         </q-dialog>
         -->
 
-        <!-- 玩法弹窗 -->
+        <!-- How to play pop-up window -->
         <q-dialog v-model="showRules" position="bottom">
             <q-card class="rules-dialog">
                 <q-card-section class="row items-center q-pb-none">
-                    <div class="text-h6">玩法 · 4 种动作克制关系</div>
+                    <div class="text-h6">How to play · 4 action restraint relationship</div>
                     <q-space />
                     <q-btn icon="close" flat round dense v-close-popup />
                 </q-card-section>
@@ -217,8 +217,8 @@
                         </div>
                     </div>
                     <div class="text-caption text-grey-6 q-mt-md">
-                        攻击克蓄力 · 防御克攻击 · 反击克攻击 ·
-                        蓄力后下次攻击伤害翻倍（命中才生效）
+                        Attack overcomes charge · Defense against attack · counter attack ·
+                        After charging, the damage of the next attack is doubled.（It takes effect only when hit）
                     </div>
                 </q-card-section>
             </q-card>
@@ -240,7 +240,7 @@ defineEmits([
     "open-achievements",
     "start-pve",
     "open-pvp",
-    // 国际版 $FIST 介绍入口暂时停用。
+    // The international version of $FIST introduction portal is temporarily disabled.
     // "open-fist",
     "invite",
 ]);
@@ -249,7 +249,7 @@ const fistStore = useFistStore();
 
 const { currency } = useRegion();
 
-// 国际版地区选择暂时停用。
+// International version region selection is temporarily disabled.
 // const { region, currency, setRegion } = useRegion();
 // const showRegionDialog = ref(false);
 // function selectRegion(r) {
@@ -264,7 +264,7 @@ const onlineFriends = ref([]);
 
 const actionList = ACTIONS.map((k) => ({ key: k, ...ACTION_META[k] }));
 
-// PVE 每日进度百分比（0-100）
+// PVE daily progress percentage (0-100)
 const pveProgressPct = computed(() => {
     const max = fistStore.todayMax || 10;
     return Math.min(100, Math.round((fistStore.todayWins / max) * 100));
@@ -285,7 +285,7 @@ async function loadFriends() {
 onMounted(() => {
     fistStore.fetchAccount();
     loadFriends();
-    // 国际版地区选择暂时停用，固定使用中国版积分。
+    // The international version region selection is temporarily disabled, and the Chinese version points will be used permanently.
     // if (!region.value) showRegionDialog.value = true;
 });
 </script>
@@ -298,7 +298,7 @@ onMounted(() => {
     opacity: 0.8;
 }
 
-/* 分组标题 */
+/* Group title */
 .section-title {
     font-size: 13px;
     font-weight: 700;
@@ -307,7 +307,7 @@ onMounted(() => {
     margin: 18px 2px 10px;
 }
 
-/* 我的：小卡网格（一行 3 列） */
+/* Mine: Photocard grid (3 columns in one row) */
 .mini-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -349,7 +349,7 @@ onMounted(() => {
     text-align: center;
 }
 
-/* 大厅模式卡片 */
+/* Lobby mode card */
 .mode-card {
     display: flex;
     align-items: center;
@@ -417,7 +417,7 @@ onMounted(() => {
     border-radius: 16px 16px 0 0;
 }
 
-/* PVE 每日进度条 */
+/* PVE daily progress bar */
 .pve-progress {
     margin-top: 8px;
 }
@@ -449,7 +449,7 @@ onMounted(() => {
     font-weight: 700;
 }
 
-/* 国际版地区选择弹窗暂时停用。
+/* The international version region selection pop-up window is temporarily disabled.
 .region-dialog {
     background: linear-gradient(160deg, #1a1635, #0e0c22);
     color: #fff;
@@ -510,7 +510,7 @@ onMounted(() => {
 }
 */
 
-/* 玩法弹窗 */
+/* How to play pop-up window */
 .rules-dialog {
     background: linear-gradient(180deg, #1a1f3e, #0c1024);
     color: #fff;
