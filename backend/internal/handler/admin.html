@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Yunmi — Admin</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --gridline: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --series-1: #2a78d6;
+    --good: #0ca30c;
+    --critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --gridline: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --series-1: #3987e5;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --gridline: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --series-1: #3987e5;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 20px 64px; }
+
+  header.top {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 4px;
+  }
+  h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .meta { color: var(--text-muted); font-size: 13px; }
+  .privacy {
+    color: var(--text-secondary); font-size: 13px; margin: 12px 0 24px;
+    padding: 10px 12px; border-left: 2px solid var(--baseline); background: var(--surface-1);
+    border-radius: 0 6px 6px 0;
+  }
+
+  button {
+    font: inherit; font-size: 13px; color: var(--text-primary);
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--baseline); }
+
+  /* ── Token gate ─────────────────────────────────────── */
+  #gate { max-width: 520px; margin: 48px auto; background: var(--surface-1);
+          border: 1px solid var(--border); border-radius: 10px; padding: 24px; }
+  #gate h2 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+  #gate p { margin: 0 0 16px; color: var(--text-secondary); font-size: 13px; }
+  #gate code { background: var(--page); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  input[type=password], input[type=text] {
+    width: 100%; font: inherit; font-size: 14px; padding: 9px 11px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--page); color: var(--text-primary); margin-bottom: 12px;
+  }
+  .err { color: var(--critical); font-size: 13px; margin-top: 10px; }
+
+  /* ── Cards & tiles ──────────────────────────────────── */
+  section { margin-top: 32px; }
+  h2.sec { font-size: 13px; font-weight: 600; text-transform: uppercase;
+           letter-spacing: 0.06em; color: var(--text-muted); margin: 0 0 12px; }
+  .tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .tile .label { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+  /* Proportional figures on standalone values — tabular-nums is for aligned columns only */
+  .tile .value { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; }
+  .tile .sub { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+  .tile.hero .value { font-size: 34px; }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+         background: var(--good); margin-right: 6px; vertical-align: middle; }
+
+  /* ── Charts ─────────────────────────────────────────── */
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px 12px;
+  }
+  .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+  .card-head h3 { font-size: 14px; font-weight: 600; margin: 0; }
+  .card-head .hint { font-size: 12px; color: var(--text-muted); }
+  .chart-scroll { overflow-x: auto; }
+  svg { display: block; width: 100%; height: auto; min-width: 420px; }
+  .grid line { stroke: var(--gridline); stroke-width: 1; }
+  .axis line { stroke: var(--baseline); stroke-width: 1; }
+  .tick { fill: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .bar { fill: var(--series-1); }
+  .hit { fill: transparent; cursor: pointer; }
+  .hit:hover + .bar, .bar.on { fill: var(--series-1); filter: brightness(1.15); }
+
+  .tip {
+    position: fixed; pointer-events: none; z-index: 10; opacity: 0;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 9px; font-size: 12px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.14); transition: opacity .1s;
+    white-space: nowrap;
+  }
+  .tip b { font-variant-numeric: tabular-nums; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--gridline); }
+  th { color: var(--text-secondary); font-weight: 500; font-size: 12px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tablewrap { max-height: 280px; overflow: auto; margin-top: 10px; }
+  [hidden] { display: none !important; }
+
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 2px 16px; }
+  .kv dt { color: var(--text-secondary); font-size: 13px; padding: 5px 0; border-bottom: 1px solid var(--gridline); }
+  .kv dd { margin: 0; font-size: 13px; font-variant-numeric: tabular-nums;
+           text-align: right; padding: 5px 0; border-bottom: 1px solid var(--gridline); }
+  .cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(238px, 1fr)); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Token gate -->
+  <div id="gate">
+    <h2>Yunmi admin</h2>
+    <p>Paste a session token from an account with <code>is_admin = 1</code>.
+       In the app it is stored under <code>session_token</code> in localStorage.</p>
+    <input type="password" id="token" placeholder="Session token" autocomplete="off">
+    <button id="signin">View dashboard</button>
+    <div class="err" id="gateErr" hidden></div>
+  </div>
+
+  <!-- Dashboard -->
+  <div id="dash" hidden>
+    <header class="top">
+      <h1>Yunmi admin</h1>
+      <div>
+        <span class="meta" id="stamp"></span>
+        <button id="refresh">Refresh</button>
+        <button id="signout">Sign out</button>
+      </div>
+    </header>
+
+    <p class="privacy">
+      Messages are end-to-end encrypted, so their contents never reach the server and cannot
+      appear here. Every messaging figure below is a count derived from delivery metadata only.
+    </p>
+
+    <section>
+      <div class="tiles">
+        <div class="tile hero"><div class="label">Total users</div><div class="value" id="t_users">—</div><div class="sub" id="t_users_sub"></div></div>
+        <div class="tile hero"><div class="label">Online now</div><div class="value"><span class="dot"></span><span id="t_online">—</span></div><div class="sub">live WebSocket sessions</div></div>
+        <div class="tile hero"><div class="label">New today</div><div class="value" id="t_new">—</div><div class="sub" id="t_new_sub"></div></div>
+        <div class="tile hero"><div class="label">Messages today</div><div class="value" id="t_msg">—</div><div class="sub" id="t_msg_sub"></div></div>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="sec">Sign-ups</h2>
+      <div class="card">
+        <div class="card-head">
+          <h3>New registrations per day</h3>
+          <div>
+            <span class="hint" id="signups_total"></span>
+            <button data-toggle="signups_table">Table</button>
+          </div>
+        </div>
+        <div class="chart-scroll"><svg id="signups_chart" viewBox="0 0 760 190" role="img" aria-label="New registrations per day, last 30 days"></svg></div>
+        <div class="tablewrap" id="signups_table" hidden></div>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="sec">Message volume</h2>
+      <div class="card">
+        <div class="card-head">
+          <h3>Messages relayed per day</h3>
+          <div>
+            <span class="hint" id="msgs_total"></span>
+            <button data-toggle="msgs_table">Table</button>
+          </div>
+        </div>
+        <div class="chart-scroll"><svg id="msgs_chart" viewBox="0 0 760 190" role="img" aria-label="Messages relayed per day, last 30 days"></svg></div>
+        <div class="tablewrap" id="msgs_table" hidden></div>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="sec">Accounts</h2>
+      <div class="tiles">
+        <div class="tile"><div class="label">Registration complete</div><div class="value" id="u_ready">—</div></div>
+        <div class="tile"><div class="label">Onboarding incomplete</div><div class="value" id="u_pending">—</div><div class="sub">no public key uploaded</div></div>
+        <div class="tile"><div class="label">Active (24h)</div><div class="value" id="u_a24">—</div></div>
+        <div class="tile"><div class="label">Active (7d)</div><div class="value" id="u_a7">—</div></div>
+        <div class="tile"><div class="label">New (7d)</div><div class="value" id="u_n7">—</div></div>
+        <div class="tile"><div class="label">New (30d)</div><div class="value" id="u_n30">—</div></div>
+        <div class="tile"><div class="label">Administrators</div><div class="value" id="u_admin">—</div></div>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="sec">Detail</h2>
+      <div class="cols">
+        <div class="card">
+          <div class="card-head"><h3>Social graph</h3></div>
+          <dl class="kv" id="kv_social"></dl>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>Messaging</h3></div>
+          <dl class="kv" id="kv_msg"></dl>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>$FIST economy</h3></div>
+          <dl class="kv" id="kv_econ"></dl>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>Iron Fist</h3></div>
+          <dl class="kv" id="kv_game"></dl>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script>
+(() => {
+  const KEY = 'yunmi_admin_token';
+  const $ = (id) => document.getElementById(id);
+  const nf = new Intl.NumberFormat();
+  const fmt = (n) => (n === null || n === undefined) ? '—' : nf.format(n);
+
+  let token = localStorage.getItem(KEY) || '';
+
+  // ── Auth gate ────────────────────────────────────────
+  function showGate(msg) {
+    $('dash').hidden = true;
+    $('gate').hidden = false;
+    const err = $('gateErr');
+    err.hidden = !msg;
+    err.textContent = msg || '';
+  }
+
+  $('signin').addEventListener('click', () => {
+    const v = $('token').value.trim();
+    if (!v) return showGate('Enter a token.');
+    token = v;
+    localStorage.setItem(KEY, token);
+    load();
+  });
+  $('token').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('signin').click(); });
+  $('signout').addEventListener('click', () => {
+    localStorage.removeItem(KEY);
+    token = '';
+    $('token').value = '';
+    showGate('');
+  });
+  $('refresh').addEventListener('click', () => load());
+
+  // Table-view toggles — every chart has a table twin so no value is chart-only.
+  document.querySelectorAll('[data-toggle]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const el = $(btn.dataset.toggle);
+      el.hidden = !el.hidden;
+      btn.textContent = el.hidden ? 'Table' : 'Chart only';
+    });
+  });
+
+  // ── Fetch ────────────────────────────────────────────
+  async function load() {
+    if (!token) return showGate('');
+    try {
+      const res = await fetch('/api/admin/stats', {
+        headers: { Authorization: 'Bearer ' + token },
+        cache: 'no-store'
+      });
+      if (res.status === 401) return showGate('Token is invalid or expired.');
+      if (res.status === 404) return showGate('That account is not an administrator.');
+      if (!res.ok) return showGate('Server error (' + res.status + ').');
+      render(await res.json());
+    } catch (e) {
+      showGate('Could not reach the server.');
+    }
+  }
+
+  // ── Render ───────────────────────────────────────────
+  function render(d) {
+    $('gate').hidden = true;
+    $('dash').hidden = false;
+    $('stamp').textContent = 'as of ' + new Date(d.generated_at).toLocaleString();
+
+    const u = d.users, s = d.social, m = d.messaging, e = d.economy, g = d.game;
+
+    $('t_users').textContent = fmt(u.total);
+    $('t_users_sub').textContent = fmt(u.ready) + ' completed registration';
+    $('t_online').textContent = fmt(d.online);
+    $('t_new').textContent = fmt(u.new_today);
+    $('t_new_sub').textContent = fmt(u.new_7d) + ' in the last 7 days';
+    $('t_msg').textContent = fmt(m.today);
+    $('t_msg_sub').textContent = fmt(m.last_7d) + ' in the last 7 days';
+
+    $('u_ready').textContent = fmt(u.ready);
+    $('u_pending').textContent = fmt(u.pending);
+    $('u_a24').textContent = fmt(u.active_24h);
+    $('u_a7').textContent = fmt(u.active_7d);
+    $('u_n7').textContent = fmt(u.new_7d);
+    $('u_n30').textContent = fmt(u.new_30d);
+    $('u_admin').textContent = fmt(u.admins);
+
+    kv('kv_social', [
+      ['Friendships (pairs)', fmt(s.friendships)],
+      ['Average friends per user', s.avg_friends.toFixed(2)],
+      ['Users with no friends', fmt(s.isolated_users)],
+      ['Requests pending', fmt(s.pending_requests)],
+      ['Requests accepted', fmt(s.accepted_requests)],
+      ['Requests rejected', fmt(s.rejected_requests)]
+    ]);
+    kv('kv_msg', [
+      ['Tracked deliveries (all time)', fmt(m.total_tracked)],
+      ['Last 30 days', fmt(m.last_30d)],
+      ['Distinct senders (7d)', fmt(m.active_senders_7d)],
+      ['Read receipts queued', fmt(m.pending_receipts)],
+      ['Registered devices', fmt(m.device_tokens)],
+      ['Users reachable by push', fmt(m.pushable_users)]
+    ]);
+    kv('kv_econ', [
+      ['Accounts', fmt(e.accounts)],
+      ['Circulating balance', fmt(e.total_balance)],
+      ['Cumulative earned', fmt(e.total_earned)],
+      ['Ledger entries', fmt(e.transactions)],
+      ['Ledger entries (30d)', fmt(e.tx_30d)]
+    ]);
+    kv('kv_game', [
+      ['Matches played', fmt(g.total_matches)],
+      ['PvE / PvP', fmt(g.pve_matches) + ' / ' + fmt(g.pvp_matches)],
+      ['Matches today', fmt(g.matches_today)],
+      ['Distinct players', fmt(g.players)],
+      ['Rooms waiting', fmt(g.rooms_waiting)],
+      ['Rooms in progress', fmt(g.rooms_active)]
+    ]);
+
+    const sumOf = (a) => a.reduce((t, x) => t + x.count, 0);
+    $('signups_total').textContent = fmt(sumOf(d.signups)) + ' in 30 days';
+    $('msgs_total').textContent = fmt(sumOf(d.message_volume)) + ' in 30 days';
+
+    barChart($('signups_chart'), d.signups, 'sign-ups');
+    barChart($('msgs_chart'), d.message_volume, 'messages');
+    dataTable($('signups_table'), d.signups, 'Sign-ups');
+    dataTable($('msgs_table'), d.message_volume, 'Messages');
+  }
+
+  function kv(id, rows) {
+    $(id).innerHTML = rows
+      .map(([k, v]) => '<dt>' + k + '</dt><dd>' + v + '</dd>')
+      .join('');
+  }
+
+  function dataTable(el, data, label) {
+    el.innerHTML =
+      '<table><thead><tr><th>Date</th><th class="num">' + label + '</th></tr></thead><tbody>' +
+      data.map((p) => '<tr><td>' + p.date + '</td><td class="num">' + fmt(p.count) + '</td></tr>').join('') +
+      '</tbody></table>';
+  }
+
+  // ── Bar chart ────────────────────────────────────────
+  // Single series, so no legend — the card title names it. The container height
+  // includes the x-axis band so labels are never clipped into a nested scroll.
+  const W = 760, H = 190, PAD = { t: 12, r: 8, b: 26, l: 40 };
+
+  function niceMax(v) {
+    if (v <= 4) return 4;
+    const pow = Math.pow(10, Math.floor(Math.log10(v)));
+    return Math.ceil(v / (pow / 2)) * (pow / 2);
+  }
+
+  // Rounded only at the data end, anchored flat to the baseline.
+  function barPath(x, y, w, h, r) {
+    if (h <= 0) return '';
+    const rr = Math.min(r, w / 2, h);
+    return `M${x},${y + h}V${y + rr}a${rr},${rr} 0 0 1 ${rr},${-rr}h${w - 2 * rr}a${rr},${rr} 0 0 1 ${rr},${rr}V${y + h}Z`;
+  }
+
+  function barChart(svg, data, noun) {
+    const plotW = W - PAD.l - PAD.r;
+    const plotH = H - PAD.t - PAD.b;
+    const max = niceMax(Math.max(1, ...data.map((d) => d.count)));
+    const step = plotW / data.length;
+    const bw = Math.max(2, step - 2);           // 2px surface gap between bars
+    const y = (v) => PAD.t + plotH - (v / max) * plotH;
+
+    let g = '';
+
+    // Gridlines — solid hairlines, never dashed
+    for (let i = 0; i <= 2; i++) {
+      const v = (max / 2) * i;
+      const yy = y(v);
+      g += `<line x1="${PAD.l}" y1="${yy}" x2="${W - PAD.r}" y2="${yy}"/>`;
+    }
+    let out = `<g class="grid">${g}</g>`;
+
+    // Y ticks
+    out += '<g class="tick">';
+    for (let i = 0; i <= 2; i++) {
+      const v = (max / 2) * i;
+      out += `<text x="${PAD.l - 8}" y="${y(v) + 3.5}" text-anchor="end">${fmt(v)}</text>`;
+    }
+    out += '</g>';
+
+    // Bars + full-column hit areas (hit target spans the gap, not just the bar)
+    out += '<g>';
+    data.forEach((d, i) => {
+      const x = PAD.l + i * step + (step - bw) / 2;
+      const h = (d.count / max) * plotH;
+      out += `<rect class="hit" x="${PAD.l + i * step}" y="${PAD.t}" width="${step}" height="${plotH}" `
+           + `data-i="${i}" data-date="${d.date}" data-count="${d.count}"/>`;
+      out += `<path class="bar" d="${barPath(x, y(d.count), bw, h, 4)}"/>`;
+    });
+    out += '</g>';
+
+    // Baseline
+    out += `<g class="axis"><line x1="${PAD.l}" y1="${PAD.t + plotH}" x2="${W - PAD.r}" y2="${PAD.t + plotH}"/></g>`;
+
+    // X ticks — every 7th day, plus the final day so the window's end is labelled.
+    // The final label is dropped when it would sit on top of the preceding tick
+    // (the last index is rarely a clean multiple of the stride).
+    const last = data.length - 1;
+    const ticks = [];
+    for (let i = 0; i < data.length; i += 7) ticks.push(i);
+    if (last - ticks[ticks.length - 1] >= 3) ticks.push(last);
+
+    out += '<g class="tick">';
+    ticks.forEach((i) => {
+      const x = PAD.l + i * step + step / 2;
+      out += `<text x="${x}" y="${H - 8}" text-anchor="middle">${data[i].date.slice(5)}</text>`;
+    });
+    out += '</g>';
+
+    svg.innerHTML = out;
+    wireTooltip(svg, noun);
+  }
+
+  const tip = $('tip');
+  function wireTooltip(svg, noun) {
+    svg.querySelectorAll('.hit').forEach((hit) => {
+      const show = (ev) => {
+        const r = (ev.touches ? ev.touches[0] : ev);
+        tip.innerHTML = hit.dataset.date + ' — <b>' + fmt(+hit.dataset.count) + '</b> ' + noun;
+        tip.style.opacity = 1;
+        const box = tip.getBoundingClientRect();
+        tip.style.left = Math.min(r.clientX + 12, window.innerWidth - box.width - 8) + 'px';
+        tip.style.top = (r.clientY - box.height - 10) + 'px';
+      };
+      hit.addEventListener('mousemove', show);
+      hit.addEventListener('mouseleave', () => { tip.style.opacity = 0; });
+      // Keyboard parity: focusing a bar shows the same reading as hover.
+      hit.setAttribute('tabindex', '0');
+      hit.addEventListener('focus', () => {
+        const b = hit.getBoundingClientRect();
+        show({ clientX: b.left + b.width / 2, clientY: b.top + b.height / 2 });
+      });
+      hit.addEventListener('blur', () => { tip.style.opacity = 0; });
+    });
+  }
+
+  // Boot
+  if (token) load(); else showGate('');
+})();
+</script>
+</body>
+</html>

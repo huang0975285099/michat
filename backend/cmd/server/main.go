@@ -129,6 +129,7 @@ func main() {
 	fistSvc := service.NewFistService(db)
 	fistHandler := handler.NewFistHandler(fistSvc)
 	ironFistSvc := service.NewIronFistService(db)
+	adminSvc := service.NewAdminService(db, rdb)
 
 	hub := ws.NewHub(rdb, friendSvc, identSvc, messageReadSvc)
 
@@ -155,6 +156,7 @@ func main() {
 	messagesHandler := handler.NewMessagesHandler(messageReadSvc)
 	deviceHandler := handler.NewDeviceHandler(db)
 	versionHandler := handler.NewVersionHandler(cfg.Version.Latest, cfg.Version.MinSupported, cfg.Version.URL, cfg.Version.Notes)
+	adminHandler := handler.NewAdminHandler(adminSvc)
 
 	// Current limiting (mainly mobile phone + operator CGNAT: relax the threshold by IP, the main line of defense is based on user authRL):
 	// - publicRL: Unauthenticated public interface 100 times/minute/IP (version check/login burst for multiple phones with the same IP)
@@ -223,7 +225,15 @@ func main() {
 		auth.DELETE("/games/ironfist/pvp/queue", ironFistHandler.CancelPVPQueue)
 		auth.GET("/games/ironfist/pvp/queue", ironFistHandler.GetPVPQueueStatus)
 
+		// Operator dashboard data. AdminOnly reads the flag Auth loaded, so it must
+		// stay chained after Auth — on its own it denies everything.
+		admin := api.Group("", middleware.Auth(identSvc), authRL.Limit(), middleware.AdminOnly())
+		admin.GET("/admin/stats", adminHandler.GetStats)
 	}
+
+	// The dashboard shell itself. It holds no data — it prompts for a token and then
+	// calls /api/admin/stats, which is where the actual authorisation happens.
+	r.GET("/admin", publicRL.Limit(), adminHandler.Page)
 
 	// Start a scheduled task: automatically reject friend requests that have not been processed for more than 7 days
 	go func() {

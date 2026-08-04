@@ -20,56 +20,20 @@ import (
 )
 
 var (
-	chatIDRe         = regexp.MustCompile(`^\d{4}-[A-Z]{4}$`)
-	msgIDRe          = regexp.MustCompile(`^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$`)
-	transferIDRe     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	allowedFileTypes = map[string]map[string]struct{}{
-		"jpg":  mimeSet("image/jpeg", "image/jpg"),
-		"jpeg": mimeSet("image/jpeg", "image/jpg"),
-		"png":  mimeSet("image/png"),
-		"gif":  mimeSet("image/gif"),
-		"webp": mimeSet("image/webp"),
-		"bmp":  mimeSet("image/bmp"),
-		"svg":  mimeSet("image/svg+xml"),
-		"mp4":  mimeSet("video/mp4"),
-		"webm": mimeSet("video/webm"),
-		"mov":  mimeSet("video/quicktime"),
-		"doc":  mimeSet("application/msword"),
-		"docx": mimeSet("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/zip"),
-		"xls":  mimeSet("application/vnd.ms-excel"),
-		"xlsx": mimeSet("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/zip"),
-		"ppt":  mimeSet("application/vnd.ms-powerpoint"),
-		"pptx": mimeSet("application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/zip"),
-		"pdf":  mimeSet("application/pdf"),
-		"zip":  mimeSet("application/zip", "application/x-zip-compressed", "application/x-zip"),
-		"rar":  mimeSet("application/x-rar-compressed", "application/vnd.rar", "application/x-rar", "application/x-compressed"),
-		"7z":   mimeSet("application/x-7z-compressed"),
-		"tar":  mimeSet("application/x-tar"),
-		"gz":   mimeSet("application/gzip", "application/x-gzip"),
-		"apk":  mimeSet("application/vnd.android.package-archive", "application/zip"),
+	chatIDRe              = regexp.MustCompile(`^\d{4}-[A-Z]{4}$`)
+	msgIDRe               = regexp.MustCompile(`^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$`)
+	transferIDRe          = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	allowedFileExtensions = map[string]struct{}{
+		"jpg": {}, "jpeg": {}, "png": {}, "gif": {}, "webp": {}, "bmp": {}, "svg": {},
+		"mp4": {}, "webm": {}, "mov": {},
+		"doc": {}, "docx": {}, "xls": {}, "xlsx": {}, "ppt": {}, "pptx": {}, "pdf": {},
+		"zip": {}, "rar": {}, "7z": {}, "tar": {}, "gz": {}, "apk": {},
 	}
 )
 
-func mimeSet(values ...string) map[string]struct{} {
-	set := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		set[value] = struct{}{}
-	}
-	return set
-}
-
-func validFileMetadata(filename, filetype string) bool {
+func validFileMetadata(filename, _ string) bool {
 	ext := strings.TrimPrefix(strings.ToLower(path.Ext(filename)), ".")
-	allowedMIMEs, ok := allowedFileTypes[ext]
-	if !ok {
-		return false
-	}
-
-	mimeType := strings.ToLower(strings.TrimSpace(strings.SplitN(filetype, ";", 2)[0]))
-	if mimeType == "" || mimeType == "application/octet-stream" {
-		return true
-	}
-	_, ok = allowedMIMEs[mimeType]
+	_, ok := allowedFileExtensions[ext]
 	return ok
 }
 

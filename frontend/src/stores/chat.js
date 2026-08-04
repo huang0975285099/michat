@@ -21,41 +21,14 @@ const CHUNK_SIZE = 128 * 1024  //128KB binary chunks
 const MAX_FILE_SIZE = 10 * 1024 * 1024  // 10MB
 const MAX_FILENAME_BYTES = 255
 const AES_GCM_TAG_SIZE = 16
-// The file extension must be in the whitelist; when the browser provides explicit MIME, it must also match the extension.
-// Empty MIME and application/octet-stream are only used as compatible values when the browser does not recognize the type.
-// It can no longer be used alone as a basis for permitting arbitrary file extensions.
-const ALLOWED_FILE_TYPES = new Map([
-  ['jpg', new Set(['image/jpeg', 'image/jpg'])],
-  ['jpeg', new Set(['image/jpeg', 'image/jpg'])],
-  ['png', new Set(['image/png'])],
-  ['gif', new Set(['image/gif'])],
-  ['webp', new Set(['image/webp'])],
-  ['bmp', new Set(['image/bmp'])],
-  ['svg', new Set(['image/svg+xml'])],
-  ['mp4', new Set(['video/mp4'])],
-  ['webm', new Set(['video/webm'])],
-  ['mov', new Set(['video/quicktime'])],
-  ['doc', new Set(['application/msword'])],
-  ['docx', new Set(['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/zip'])],
-  ['xls', new Set(['application/vnd.ms-excel'])],
-  ['xlsx', new Set(['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/zip'])],
-  ['ppt', new Set(['application/vnd.ms-powerpoint'])],
-  ['pptx', new Set(['application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/zip'])],
-  ['pdf', new Set(['application/pdf'])],
-  ['zip', new Set(['application/zip', 'application/x-zip-compressed', 'application/x-zip'])],
-  ['rar', new Set([
-    'application/x-rar-compressed',
-    'application/vnd.rar',
-    'application/x-rar',
-    'application/x-compressed'
-  ])],
-  ['7z', new Set(['application/x-7z-compressed'])],
-  ['tar', new Set(['application/x-tar'])],
-  ['gz', new Set(['application/gzip', 'application/x-gzip'])],
-  ['apk', new Set(['application/vnd.android.package-archive', 'application/zip'])]
+// Browsers and operating systems report MIME inconsistently, so file eligibility is based
+// only on the final filename extension. MIME is retained as display/download metadata.
+const ALLOWED_FILE_EXTENSIONS = new Set([
+  'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg',
+  'mp4', 'webm', 'mov',
+  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'pdf',
+  'zip', 'rar', '7z', 'tar', 'gz', 'apk'
 ])
-
-const GENERIC_BINARY_MIME_TYPES = new Set(['', 'application/octet-stream'])
 
 function expectedFileChunks(filesize) {
   return Math.ceil((filesize + AES_GCM_TAG_SIZE) / CHUNK_SIZE)
@@ -65,7 +38,7 @@ function expectedFileChunkSize(filesize, chunkIndex) {
   return Math.min(CHUNK_SIZE, filesize + AES_GCM_TAG_SIZE - chunkIndex * CHUNK_SIZE)
 }
 
-function validateFileMetadata(filename, filetype, filesize) {
+function validateFileMetadata(filename, _filetype, filesize) {
   if (typeof filename !== 'string' || !filename || new TextEncoder().encode(filename).length > MAX_FILENAME_BYTES) {
     throw new Error('File name is invalid or too long')
   }
@@ -73,13 +46,7 @@ function validateFileMetadata(filename, filetype, filesize) {
   if (filesize > MAX_FILE_SIZE) throw new Error('File exceeds 10MB Limit')
 
   const ext = filename.split('.').pop()?.toLowerCase() ?? ''
-  const allowedMimeTypes = ALLOWED_FILE_TYPES.get(ext)
-  if (!allowedMimeTypes) throw new Error('Unsupported file format')
-
-  const mimeType = (filetype || '').split(';', 1)[0].trim().toLowerCase()
-  if (!GENERIC_BINARY_MIME_TYPES.has(mimeType) && !allowedMimeTypes.has(mimeType)) {
-    throw new Error('File extension does not match file type')
-  }
+  if (!ALLOWED_FILE_EXTENSIONS.has(ext)) throw new Error('Unsupported file format')
 }
 
 // ── Message encryption key management ───────────────────────────────────────────

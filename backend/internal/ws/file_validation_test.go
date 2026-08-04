@@ -24,13 +24,15 @@ func TestValidFileMetadata(t *testing.T) {
 		{name: "rar modern mime", filename: "archive.rar", filetype: "application/vnd.rar", want: true},
 		{name: "rar x-rar alias", filename: "archive.rar", filetype: "application/x-rar", want: true},
 		{name: "rar x-compressed alias", filename: "archive.rar", filetype: "application/x-compressed", want: true},
+		{name: "rar vendor mime", filename: "archive.rar", filetype: "application/x-winrar", want: true},
+		{name: "rar nonstandard mime", filename: "archive.rar", filetype: "application/rar", want: true},
 		{name: "7z", filename: "archive.7z", filetype: "application/x-7z-compressed", want: true},
 		{name: "generic mime requires allowed extension", filename: "archive.rar", filetype: "application/octet-stream", want: true},
 		{name: "empty mime requires allowed extension", filename: "archive.gz", filetype: "", want: true},
 		{name: "office reported as zip", filename: "report.docx", filetype: "application/zip", want: true},
 		{name: "disallowed extension", filename: "malware.exe", filetype: "application/octet-stream", want: false},
 		{name: "missing extension", filename: "archive", filetype: "application/zip", want: false},
-		{name: "mismatched mime", filename: "archive.zip", filetype: "image/png", want: false},
+		{name: "allowed extension ignores mime", filename: "archive.zip", filetype: "image/png", want: true},
 		{name: "double extension uses final extension", filename: "archive.zip.exe", filetype: "application/zip", want: false},
 	}
 

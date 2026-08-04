@@ -326,18 +326,10 @@ const imagePreview = ref({ show: false, url: '' })
 
 // Allowed file types (for input accept attribute)
 const allowedFileTypes = [
-  'image/jpeg,image/png,image/gif,image/webp,image/bmp,image/svg+xml',
-  'video/mp4,video/webm,video/quicktime',
-  'application/pdf',
-  'application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  '.zip,application/zip,application/x-zip-compressed,application/x-zip',
-  '.rar,application/x-rar-compressed,application/vnd.rar,application/x-rar,application/x-compressed',
-  '.7z,application/x-7z-compressed',
-  '.tar,application/x-tar',
-  '.gz,application/gzip,application/x-gzip',
-  'application/vnd.android.package-archive,.apk'
+  '.jpg,.jpeg,.png,.gif,.webp,.bmp,.svg',
+  '.mp4,.webm,.mov',
+  '.doc,.docx,.xls,.xlsx,.ppt,.pptx,.pdf',
+  '.zip,.rar,.7z,.tar,.gz,.apk'
 ].join(',')
 
 // Transmission currently in progress (send or receive)
