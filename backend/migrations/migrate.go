@@ -86,11 +86,22 @@ func AutoMigrate(db *sql.DB) error {
 
 func splitStatements(src string) []string {
 	var result []string
-	for _, s := range strings.Split(src, ";") {
+	// Remove line comments before splitting on semicolons. A comment may itself
+	// contain a semicolon; splitting first would turn the remainder of that
+	// comment into an executable SQL statement.
+	var uncommented []string
+	for _, line := range strings.Split(src, "\n") {
+		if commentAt := strings.Index(line, "--"); commentAt >= 0 {
+			line = line[:commentAt]
+		}
+		uncommented = append(uncommented, line)
+	}
+
+	for _, s := range strings.Split(strings.Join(uncommented, "\n"), ";") {
 		var lines []string
 		for _, line := range strings.Split(s, "\n") {
 			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "--") {
+			if line == "" {
 				continue
 			}
 			lines = append(lines, line)
