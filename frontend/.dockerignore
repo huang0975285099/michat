@@ -7,6 +7,8 @@ dist
 *.log
 
 src-capacitor
+src-electron
+src-tauri
 package-lock.json
 
 # IDE

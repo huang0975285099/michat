@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   chat_id     CHAR(9)      NOT NULL UNIQUE,   -- Format NNNN-AAAA (such as 1234-ABCD)
   nickname    VARCHAR(64)  NOT NULL,           -- Automatically generated: color + animal
-  public_key  TEXT         NOT NULL,           -- X25519 public key (Base64 URL encoded)
+  public_key  TEXT         NOT NULL,           -- EC P-256 public key, SPKI DER, standard Base64 (not URL-safe)
   is_ready    TINYINT(1)   NOT NULL DEFAULT 0, -- 0=Public key to be uploaded 1=Registration completed
   created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_seen   DATETIME     NULL

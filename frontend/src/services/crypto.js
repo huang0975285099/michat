@@ -1,7 +1,12 @@
 /**
  * Encryption service
- * - X25519 key pair generation (replaced with ECDH P-256 as the Web Crypto API does not support X25519 natively,
- * Instead, ECDH with P-256/P-384 is supported. Uses P-256 for compatibility, safety level sufficient MVP)
+ * - EC P-256 key pair generation. The design originally called for X25519, but the
+ *   Web Crypto API does not implement it natively — it offers ECDH over P-256/P-384 —
+ *   so P-256 was chosen for compatibility.
+ *   The one key pair does double duty: ECDH to derive the message key, and ECDSA to
+ *   sign the reauth challenge (see verifyECDSASignature in backend identity.go).
+ *   The public key goes to the server as SPKI DER in standard Base64 (btoa, not URL-safe);
+ *   the backend decodes it with base64.StdEncoding + x509.ParsePKIXPublicKey.
  * - AES-256-GCM encryption and decryption
  * - IndexedDB private key persistence
  * - Security improvements: Private keys are stored encrypted by default and protected with device keys

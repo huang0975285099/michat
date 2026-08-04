@@ -61,9 +61,14 @@ export default defineConfig(() => {
         cfg.skipWaiting = true
         cfg.clientsClaim = true
         cfg.cleanupOutdatedCaches = true
+        // Paths served by the backend rather than by this SPA bundle. Without an
+        // entry here the navigation fallback answers them from the precached
+        // index.html, so the request never reaches nginx and the chat app is
+        // rendered instead — no matter how the proxy is configured.
         cfg.navigateFallbackDenylist = [
           ...(cfg.navigateFallbackDenylist || []),
-          /^\/download(?:\/|$)/
+          /^\/download(?:\/|$)/,
+          /^\/admin(?:\/|$)/
         ]
       },
       manifest: {
@@ -93,14 +98,6 @@ export default defineConfig(() => {
         win: {
           target: [{ target: 'nsis', arch: ['x64'] }],
           icon: 'src-electron/icons/icon.ico'
-        },
-        mac: {
-          target: [{ target: 'dmg', arch: ['x64', 'arm64'] }],
-          icon: 'src-electron/icons/icon.icns'
-        },
-        linux: {
-          target: [{ target: 'AppImage', arch: ['x64'] }],
-          icon: 'src-electron/icons/icon.png'
         },
         nsis: {
           oneClick: false,
