@@ -373,8 +373,6 @@ import { useFistStore } from "src/stores/fist";
 import { ironfistApi } from "src/services/api";
 import { ACHIEVEMENT_MAP } from "./game/ironfistMeta";
 import IronFistLobby from "./components/IronFistLobby.vue";
-// The international $FIST introduction page is temporarily disabled.
-// import IronFistFist from "./components/IronFistFist.vue";
 import IronFistLedger from "./components/IronFistLedger.vue";
 import IronFistRecords from "./components/IronFistRecords.vue";
 import IronFistAchievements from "./components/IronFistAchievements.vue";
@@ -382,8 +380,6 @@ import IronFistPvpLobby from "./components/IronFistPvpLobby.vue";
 import HealthBar from "./components/HealthBar.vue";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
 import { useRegion } from "./game/useRegion.js";
-// Phase 3: Babylon.js 3D rendering layer (Option B). The props interface is consistent with the first and second phases, and can be rolled back in one line.
-// The first phase of BattleArena.vue(2D-CSS) / the second phase of BattleArenaPhaser.vue are still reserved.
 import BattleArena from "./components/BattleArena3D.vue";
 import { IronFistGame } from "./game/IronFistGame.js";
 import { GameNet } from "./game/GameNet.js";

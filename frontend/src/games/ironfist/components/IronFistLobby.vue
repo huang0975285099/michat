@@ -240,8 +240,6 @@ defineEmits([
     "open-achievements",
     "start-pve",
     "open-pvp",
-    // The international version of $FIST introduction portal is temporarily disabled.
-    // "open-fist",
     "invite",
 ]);
 
