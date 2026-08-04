@@ -235,7 +235,12 @@ func (s *IdentityService) DeleteAccount(ctx context.Context, chatID string) erro
 	}
 	defer tx.Rollback()
 
-	if _, err = tx.ExecContext(ctx, `DELETE FROM message_reads WHERE msg_from = ? OR msg_to = ?`, chatID, chatID); err != nil {
+	// 已读回执是发件方阅后即焚的 tombstone。阅读方注销后仍需保留，直到发件方
+	// 再次上线同步；只有当前账号本身是发件方时才可一并删除。
+	if _, err = tx.ExecContext(ctx, `DELETE FROM message_reads WHERE msg_from = ?`, chatID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM message_deliveries WHERE msg_from = ? OR msg_to = ?`, chatID, chatID); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM friendships WHERE user_id = ? OR friend_id = ?`, userID, userID); err != nil {

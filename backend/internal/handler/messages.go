@@ -36,13 +36,18 @@ func (h *MessagesHandler) GetReadReceipts(c *gin.Context) {
 		return
 	}
 
-	ids, err := h.readSvc.GetReadReceiptsByPeer(c.Request.Context(), myChatID, peerChatID)
+	receipts, err := h.readSvc.GetReadReceiptsByPeer(c.Request.Context(), myChatID, peerChatID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
-	if ids == nil {
-		ids = []string{}
+	if receipts == nil {
+		receipts = []service.ReadReceipt{}
 	}
-	c.JSON(http.StatusOK, gin.H{"msg_ids": ids})
+	// msg_ids 保留一个发布周期，兼容尚未升级到权威 read_at 协议的客户端。
+	ids := make([]string, 0, len(receipts))
+	for _, receipt := range receipts {
+		ids = append(ids, receipt.MsgID)
+	}
+	c.JSON(http.StatusOK, gin.H{"receipts": receipts, "msg_ids": ids})
 }

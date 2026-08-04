@@ -61,7 +61,7 @@
               <img v-if="isMsgImage(msg) && msg.objectUrl" :src="msg.objectUrl" class="file-img" @click="imagePreview = { show: true, url: msg.objectUrl }" />
               <video v-else-if="isMsgVideo(msg) && msg.objectUrl" :src="msg.objectUrl" controls class="file-video" />
               <div v-else class="file-card file-card-theirs">
-                <span class="file-icon">{{ getFileIcon(msg.filetype) }}</span>
+                <span class="file-icon">{{ getFileIcon(msg.filetype, msg.filename) }}</span>
                 <div class="file-meta">
                   <div class="file-name">{{ msg.filename }}</div>
                   <div class="file-size">{{ formatFileSize(msg.filesize) }}</div>
@@ -104,7 +104,7 @@
               <img v-if="isMsgImage(msg) && msg.objectUrl" :src="msg.objectUrl" class="file-img" @click="imagePreview = { show: true, url: msg.objectUrl }" />
               <video v-else-if="isMsgVideo(msg) && msg.objectUrl" :src="msg.objectUrl" controls class="file-video" />
               <div v-else class="file-card file-card-mine">
-                <span class="file-icon">{{ getFileIcon(msg.filetype) }}</span>
+                <span class="file-icon">{{ getFileIcon(msg.filetype, msg.filename) }}</span>
                 <div class="file-meta">
                   <div class="file-name">{{ msg.filename }}</div>
                   <div class="file-size">{{ formatFileSize(msg.filesize) }}</div>
@@ -138,7 +138,7 @@
                 <q-tooltip v-else>对方未读：对方阅读后2小时自动删除</q-tooltip>
               </q-icon>
             </div>
-            <q-menu context-menu>
+            <q-menu v-if="msg.status !== 'pending'" context-menu>
               <q-list dense style="min-width: 100px">
                 <q-item v-if="canRecall(msg)" clickable v-close-popup @click="recall(msg)" class="text-negative items-center q-gutter-xs">
                   <q-icon name="undo" size="sm" />
@@ -226,8 +226,8 @@
             </q-tabs>
             <div class="q-pa-xs overflow-auto" style="max-height: 200px">
               <span
-                v-for="e in currentEmojis"
-                :key="e"
+                v-for="(e, emojiIndex) in currentEmojis"
+                :key="emojiTab + '-' + emojiIndex"
                 class="emoji-item"
                 @click="insertEmoji(e)"
               >{{ e }}</span>
@@ -262,12 +262,16 @@ import { useChatStore } from 'src/stores/chat'
 import { useIdentityStore } from 'src/stores/identity'
 import { useCallStore } from 'src/stores/call'
 import { friendApi } from 'src/services/api'
-import { on, off } from 'src/services/websocket'
+import { on, off, getServerNow } from 'src/services/websocket'
 import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
 
 // ── 文件工具函数 ────────────────────────────────────────────────
 
-function getFileIcon(filetype) {
+const COMPRESSED_EXTENSIONS = new Set(['zip', 'rar', '7z', 'tar', 'gz'])
+
+function getFileIcon(filetype, filename) {
+  const ext = filename?.split('.').pop()?.toLowerCase() ?? ''
+  if (COMPRESSED_EXTENSIONS.has(ext)) return '🗜️'
   if (!filetype) return '📎'
   if (filetype.startsWith('image/')) return '🖼️'
   if (filetype.startsWith('video/')) return '🎬'
@@ -312,8 +316,8 @@ const sending = ref(false)
 const burnMode = ref(false)  // 阅后即焚模式
 // 初次滚动到底部完成后才显示消息区，避免用户看到从中间跳到最底的抖动
 const scrolled = ref(false)
-// 每分钟自增的响应式时间戳，驱动阅后即焚倒计时刷新（Date.now() 本身不是响应式的）
-const now = ref(Date.now())
+// 每分钟刷新的服务器校准时间，驱动阅后即焚倒计时显示。
+const now = ref(getServerNow())
 let nowTimer = null
 let nudgeTimer = null
 let heightResizeObserver = null
@@ -328,7 +332,11 @@ const allowedFileTypes = [
   'application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'application/zip,application/x-rar-compressed,application/x-7z-compressed,application/x-tar,application/gzip',
+  '.zip,application/zip,application/x-zip-compressed,application/x-zip',
+  '.rar,application/x-rar-compressed,application/vnd.rar',
+  '.7z,application/x-7z-compressed',
+  '.tar,application/x-tar',
+  '.gz,application/gzip,application/x-gzip',
   'application/vnd.android.package-archive,.apk'
 ].join(',')
 
@@ -389,14 +397,18 @@ const currentEmojis = computed(() => emojiData.find(c => c.name === emojiTab.val
 
 function insertEmoji(emoji) {
   const native = inputEl.value?.getNativeElement?.()
-  const input = native?.querySelector('input, textarea')
+  // QInput.getNativeElement() 返回的就是原生 input/textarea；兼容可能返回容器的旧版本。
+  const input = native?.matches?.('input, textarea')
+    ? native
+    : native?.querySelector?.('input, textarea')
   if (input) {
     const start = input.selectionStart ?? inputText.value.length
     const end = input.selectionEnd ?? inputText.value.length
     inputText.value = inputText.value.slice(0, start) + emoji + inputText.value.slice(end)
     nextTick(() => {
       input.focus()
-      const pos = start + [...emoji].length
+      // selectionStart/setSelectionRange 使用 UTF-16 code unit 索引，与 String.length 一致。
+      const pos = start + emoji.length
       input.setSelectionRange(pos, pos)
     })
   } else {
@@ -474,7 +486,8 @@ onMounted(async () => {
   // 确保用户离开聊天页后倒计时仍能继续推进并按时删除。
 
   // 每分钟刷新一次响应式时间，驱动倒计时显示递减
-  nowTimer = setInterval(() => { now.value = Date.now() }, 60000)
+  now.value = getServerNow()
+  nowTimer = setInterval(() => { now.value = getServerNow() }, 60000)
 
   // 以下为不影响首屏布局的异步操作，不阻塞滚动：
   // 获取好友信息、标记已读、同步已读回执——这些网络请求耗时较长，
@@ -555,8 +568,10 @@ function onFileSelected(e) {
   e.target.value = ''  // 允许重复选同一文件
   if (!file) return
 
-  if (file.size > 10 * 1024 * 1024) {
-    $q.notify({ type: 'warning', message: '文件超过 10MB 限制' })
+  try {
+    chatStore.validateFile(file)
+  } catch (error) {
+    $q.notify({ type: 'warning', message: error.message })
     return
   }
 

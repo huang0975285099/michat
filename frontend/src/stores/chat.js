@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { encryptMessage, decryptMessage, encryptFile, decryptFile, bufToB64, b64ToBuf } from 'src/services/crypto'
-import { send, on, off } from 'src/services/websocket'
+import { send, on, off, confirmPendingReads, getServerNow } from 'src/services/websocket'
 import { notifyNewMessage } from 'src/services/notify'
 import { useIdentityStore } from 'src/stores/identity'
 
@@ -19,31 +19,63 @@ const BURN_AFTER_READ_DELAY = 2 * 60 * 60 * 1000  // 2小时
 
 const CHUNK_SIZE = 128 * 1024  // 128KB 二进制分块
 const MAX_FILE_SIZE = 10 * 1024 * 1024  // 10MB
-const ALLOWED_MIME_TYPES = new Set([
-  'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml',
-  'video/mp4', 'video/webm', 'video/quicktime',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.ms-excel',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-powerpoint',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'application/pdf',
-  'application/zip', 'application/x-zip-compressed', 'application/x-zip',
-  'application/x-rar-compressed', 'application/vnd.rar',
-  'application/x-7z-compressed',
-  'application/x-tar', 'application/gzip', 'application/x-gzip',
-  'application/octet-stream',  // 部分浏览器对未知格式统一上报此类型
-  'application/vnd.android.package-archive',
+const MAX_FILENAME_BYTES = 255
+const AES_GCM_TAG_SIZE = 16
+// 文件扩展名必须在白名单中；浏览器提供明确 MIME 时，还必须与扩展名匹配。
+// 空 MIME 和 application/octet-stream 仅作为浏览器无法识别类型时的兼容值，
+// 不能再单独作为放行任意文件扩展名的依据。
+const ALLOWED_FILE_TYPES = new Map([
+  ['jpg', new Set(['image/jpeg', 'image/jpg'])],
+  ['jpeg', new Set(['image/jpeg', 'image/jpg'])],
+  ['png', new Set(['image/png'])],
+  ['gif', new Set(['image/gif'])],
+  ['webp', new Set(['image/webp'])],
+  ['bmp', new Set(['image/bmp'])],
+  ['svg', new Set(['image/svg+xml'])],
+  ['mp4', new Set(['video/mp4'])],
+  ['webm', new Set(['video/webm'])],
+  ['mov', new Set(['video/quicktime'])],
+  ['doc', new Set(['application/msword'])],
+  ['docx', new Set(['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/zip'])],
+  ['xls', new Set(['application/vnd.ms-excel'])],
+  ['xlsx', new Set(['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/zip'])],
+  ['ppt', new Set(['application/vnd.ms-powerpoint'])],
+  ['pptx', new Set(['application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/zip'])],
+  ['pdf', new Set(['application/pdf'])],
+  ['zip', new Set(['application/zip', 'application/x-zip-compressed', 'application/x-zip'])],
+  ['rar', new Set(['application/x-rar-compressed', 'application/vnd.rar'])],
+  ['7z', new Set(['application/x-7z-compressed'])],
+  ['tar', new Set(['application/x-tar'])],
+  ['gz', new Set(['application/gzip', 'application/x-gzip'])],
+  ['apk', new Set(['application/vnd.android.package-archive', 'application/zip'])]
 ])
 
-const ALLOWED_EXTENSIONS = new Set([
-  'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg',
-  'mp4', 'webm', 'mov',
-  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'pdf',
-  'zip', 'rar', '7z', 'tar', 'gz',
-  'apk'
-])
+const GENERIC_BINARY_MIME_TYPES = new Set(['', 'application/octet-stream'])
+
+function expectedFileChunks(filesize) {
+  return Math.ceil((filesize + AES_GCM_TAG_SIZE) / CHUNK_SIZE)
+}
+
+function expectedFileChunkSize(filesize, chunkIndex) {
+  return Math.min(CHUNK_SIZE, filesize + AES_GCM_TAG_SIZE - chunkIndex * CHUNK_SIZE)
+}
+
+function validateFileMetadata(filename, filetype, filesize) {
+  if (typeof filename !== 'string' || !filename || new TextEncoder().encode(filename).length > MAX_FILENAME_BYTES) {
+    throw new Error('文件名无效或过长')
+  }
+  if (!Number.isInteger(filesize) || filesize <= 0) throw new Error('不能发送空文件')
+  if (filesize > MAX_FILE_SIZE) throw new Error('文件超过 10MB 限制')
+
+  const ext = filename.split('.').pop()?.toLowerCase() ?? ''
+  const allowedMimeTypes = ALLOWED_FILE_TYPES.get(ext)
+  if (!allowedMimeTypes) throw new Error('不支持的文件格式')
+
+  const mimeType = (filetype || '').split(';', 1)[0].trim().toLowerCase()
+  if (!GENERIC_BINARY_MIME_TYPES.has(mimeType) && !allowedMimeTypes.has(mimeType)) {
+    throw new Error('文件扩展名与文件类型不匹配')
+  }
+}
 
 // ── 消息加密密钥管理 ──────────────────────────────────────────────
 
@@ -206,6 +238,17 @@ async function dbGetAllMessages() {
   })
 }
 
+async function dbGetExpiredBurnMessages(now) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly')
+    const index = tx.objectStore(STORE_NAME).index('burnAt')
+    const req = index.getAll(IDBKeyRange.upperBound(now))
+    req.onsuccess = (e) => resolve((e.target.result || []).filter(m => Number.isFinite(m.burnAt) && m.burnAt <= now))
+    req.onerror = (e) => reject(e.target.error)
+  })
+}
+
 async function dbAddMessage(msg) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {
@@ -324,9 +367,11 @@ async function dbStartBurnCountdown(msgId, readReceivedAt, burnAt) {
     const tx = db.transaction(STORE_NAME, 'readwrite')
     const store = tx.objectStore(STORE_NAME)
     const req = store.get(msgId)
+    let found = false
     req.onsuccess = (e) => {
       const record = e.target.result
       if (record) {
+        found = true
         record.read = true
         // 仅对阅后即焚消息且尚未启动倒计时时设置销毁时间，
         // 避免重放回执（syncReadStatus 每次返回同一批 ID）导致倒计时反复重置
@@ -334,6 +379,27 @@ async function dbStartBurnCountdown(msgId, readReceivedAt, burnAt) {
           record.readReceivedAt = readReceivedAt
           record.burnAt = burnAt
         }
+        store.put(record)
+      }
+    }
+    tx.oncomplete = () => resolve(found)
+    tx.onerror = (e) => reject(e.target.error)
+  })
+}
+
+// 阅读方收到服务器 read_ack 后，用数据库中的首次阅读时间校正本地预启动的倒计时。
+async function dbCorrectBurnCountdown(msgId, readReceivedAt, burnAt) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    const store = tx.objectStore(STORE_NAME)
+    const req = store.get(msgId)
+    req.onsuccess = (e) => {
+      const record = e.target.result
+      if (record?.burnAfterRead) {
+        record.read = true
+        record.readReceivedAt = readReceivedAt
+        record.burnAt = burnAt
         store.put(record)
       }
     }
@@ -446,6 +512,10 @@ export const useChatStore = defineStore('chat', () => {
   // 等待服务器 ACK 的文字消息。ACK 超时只改变本地展示状态，不自动重发，避免重复消息。
   const ackTimers = new Map()
   const MESSAGE_ACK_TIMEOUT_MS = 15000
+  // 消息入库是异步的；对方可能在极短窗口内已经打开会话并发回已读通知。
+  // 暂存这类早到回执，待本地消息入库时立即应用。
+  const earlyReadReceipts = new Map()
+  const EARLY_READ_RECEIPT_MAX = 500
 
   // 消息加密密钥（用于加密 IndexedDB 存储）
   let messageEncryptKey = null
@@ -480,6 +550,35 @@ export const useChatStore = defineStore('chat', () => {
     return false
   }
 
+  function applyEarlyReadReceipt(msg) {
+    if (!msg.mine) return null
+    const receipt = earlyReadReceipts.get(msg.id)
+    if (!receipt) return null
+    msg.read = true
+    msg.status = 'sent'
+    if (msg.burnAfterRead && !msg.readReceivedAt) {
+      msg.readReceivedAt = receipt.read_at
+      msg.burnAt = receipt.read_at + BURN_AFTER_READ_DELAY
+    }
+    earlyReadReceipts.delete(msg.id)
+    return receipt
+  }
+
+  function rememberEarlyReadReceipt(receipt) {
+    if (earlyReadReceipts.size >= EARLY_READ_RECEIPT_MAX && !earlyReadReceipts.has(receipt.msg_id)) {
+      earlyReadReceipts.delete(earlyReadReceipts.keys().next().value)
+    }
+    earlyReadReceipts.set(receipt.msg_id, receipt)
+  }
+
+  function confirmReadReceiptsApplied(readerChatId, msgIds) {
+    if (!validateChatId(readerChatId) || !Array.isArray(msgIds)) return
+    const uniqueIds = [...new Set(msgIds.filter(validateMsgId))]
+    for (let i = 0; i < uniqueIds.length; i += 100) {
+      send('read_receipt_applied', { to: readerChatId, msg_id: uniqueIds.slice(i, i + 100) })
+    }
+  }
+
   /**
    * 添加消息到内存并加密持久化到 IndexedDB
    */
@@ -490,6 +589,7 @@ export const useChatStore = defineStore('chat', () => {
       return false
     }
 
+    const earlyReceipt = applyEarlyReadReceipt(msg)
     ensureThread(chatId)
     messages.value[chatId].push(msg)
 
@@ -508,9 +608,11 @@ export const useChatStore = defineStore('chat', () => {
         read: msg.read || false,
         receiptSent: msg.receiptSent || false,
         burnAfterRead: msg.burnAfterRead || false,
+        readReceivedAt: msg.readReceivedAt || null,
         burnAt: msg.burnAt || null,
         status: msg.status || (msg.mine ? 'sent' : undefined)
       })
+      if (earlyReceipt) confirmReadReceiptsApplied(chatId, [earlyReceipt.msg_id])
     } catch (e) {
       // DB 写入失败：保留内存中的消息（用户仍可见），仅刷新后丢失。
       // 回滚内存会导致「消息已发出但发送方看不到」的不一致——
@@ -758,8 +860,9 @@ export const useChatStore = defineStore('chat', () => {
       if (msg.objectUrl) URL.revokeObjectURL(msg.objectUrl)
       return false
     }
+    const fullMsg = { ...msg, type: 'file', read: msg.read || false, burnAt: msg.burnAt || null }
+    const earlyReceipt = applyEarlyReadReceipt(fullMsg)
     ensureThread(chatId)
-    const fullMsg = { ...msg, type: 'file', read: false, burnAt: null }
     messages.value[chatId].push(fullMsg)
     try {
       await ensureMessageKey()
@@ -779,8 +882,11 @@ export const useChatStore = defineStore('chat', () => {
         read: fullMsg.read || false,
         receiptSent: fullMsg.receiptSent || false,
         burnAfterRead: msg.burnAfterRead || false,
-        burnAt: fullMsg.burnAt || null
+        readReceivedAt: fullMsg.readReceivedAt || null,
+        burnAt: fullMsg.burnAt || null,
+        status: fullMsg.status || (fullMsg.mine ? 'sent' : undefined)
       })
+      if (earlyReceipt) confirmReadReceiptsApplied(chatId, [earlyReceipt.msg_id])
     } catch (e) {
       // DB 写入失败：保留内存中的消息（用户仍可见），清理孤儿文件体（刷新后消息丢失）
       await dbDeleteFile(msg.id).catch(() => {})
@@ -891,6 +997,9 @@ export const useChatStore = defineStore('chat', () => {
         iv: transfer.iv,
         ciphertext: combined.buffer
       })
+      if (plainBuf.byteLength !== transfer.filesize) {
+        throw new Error('解密后的文件大小与发送方声明不一致')
+      }
 
       const blob = new Blob([plainBuf], { type: transfer.filetype })
       const objectUrl = URL.createObjectURL(blob)
@@ -933,9 +1042,7 @@ export const useChatStore = defineStore('chat', () => {
    * 验证文件类型和大小
    */
   function validateFile(file) {
-    if (file.size > MAX_FILE_SIZE) throw new Error('文件超过 10MB 限制')
-    const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-    if (!ALLOWED_MIME_TYPES.has(file.type) && !ALLOWED_EXTENSIONS.has(ext)) throw new Error('不支持的文件格式')
+    validateFileMetadata(file.name, file.type, file.size)
   }
 
   /**
@@ -967,6 +1074,23 @@ export const useChatStore = defineStore('chat', () => {
       // 读取并加密文件
       const fileBuffer = await file.arrayBuffer()
       const { ephemeralPubKey, iv, ciphertext } = await encryptFile(fileBuffer, recipientPubKey)
+
+      // 先建立发送方本地待确认记录并保存文件体。这样接收端的 file_done 即使在发送方
+      // 瞬时断线后离线补投，重启应用也能凭 msg_id 把该文件恢复为发送成功。
+      const localObjectUrl = URL.createObjectURL(new Blob([fileBuffer], { type: file.type }))
+      await persistFileBlob(toChatId, msgId, fileBuffer, file.type)
+      await addFileMessage(toChatId, {
+        id: msgId,
+        from: 'me',
+        filename: file.name,
+        filesize: file.size,
+        filetype: file.type,
+        objectUrl: localObjectUrl,
+        mine: true,
+        status: 'pending',
+        burnAfterRead,
+        ts: getServerNow()
+      })
 
       // 分块
       const cipherArr = new Uint8Array(ciphertext)
@@ -1031,26 +1155,12 @@ export const useChatStore = defineStore('chat', () => {
       fileTransfers.value[transferId].status = 'done'
       scheduleTransferCleanup(transferId, 1000)
 
-      // 发送方本地展示
-      const blob = new Blob([fileBuffer], { type: file.type })
-      const objectUrl = URL.createObjectURL(blob)
-      // 持久化加密文件体，刷新后仍可下载/预览
-      await persistFileBlob(toChatId, msgId, fileBuffer, file.type)
-      const added = await addFileMessage(toChatId, {
-        id: msgId,
-        from: 'me',
-        filename: file.name,
-        filesize: file.size,
-        filetype: file.type,
-        objectUrl,
-        mine: true,
-        burnAfterRead,
-        ts: (typeof doneTs === 'number' && doneTs > 0) ? doneTs : Date.now()  // 接收端时间戳，两端一致
-      })
-      if (!added) {
-        // 消息未入库（重复 ID 或 DB 失败），addFileMessage 内部已处理清理
-        console.warn('[chat] file message not saved locally, transfer succeeded:', msgId)
-      }
+      // file_done 的时间戳由后端从 offer 会话中注入，两端统一；全局监听也会执行同样
+      // 的幂等更新，以覆盖断线补投或页面重启后的完成通知。
+      const finalTs = (typeof doneTs === 'number' && doneTs > 0) ? doneTs : getServerNow()
+      const localMsg = messages.value[toChatId]?.find(m => m.id === msgId)
+      if (localMsg) { localMsg.status = 'sent'; localMsg.ts = finalTs }
+      await dbUpdateMessageDelivery(msgId, 'sent', finalTs).catch(() => {})
 
       return transferId
     } catch (e) {
@@ -1060,6 +1170,9 @@ export const useChatStore = defineStore('chat', () => {
         fileTransfers.value[transferId].errorAt = Date.now()
         scheduleTransferCleanup(transferId, 6000)
       }
+      const localMsg = messages.value[toChatId]?.find(m => m.id === msgId)
+      if (localMsg?.status === 'pending') localMsg.status = 'failed'
+      await dbUpdateMessageDelivery(msgId, 'failed').catch(() => {})
       send('file_error', { to: toChatId, transfer_id: transferId, reason: e.message })
       throw e
     }
@@ -1085,6 +1198,7 @@ export const useChatStore = defineStore('chat', () => {
 
 const CHAT_ID_PATTERN = /^\d{4}-[A-Z]{4}$/
 const MSG_ID_PATTERN = /^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/
+const TRANSFER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * 验证 payload 中的 chat_id 格式
@@ -1235,29 +1349,88 @@ function validateMsgId(msgId) {
         console.warn('[chat] invalid from in read_receipt:', payload.from)
         return
       }
-      if (!Array.isArray(payload.msg_id) || payload.msg_id.length === 0) {
-        console.warn('[chat] invalid msg_id in read_receipt:', payload.msg_id)
+      let receipts = payload.receipts
+      // 兼容滚动发布期间旧后端的仅 ID 格式；新后端始终提供权威 read_at。
+      if (!Array.isArray(receipts) && Array.isArray(payload.msg_id)) {
+        const fallbackTime = getServerNow()
+        receipts = payload.msg_id.map(msg_id => ({ msg_id, read_at: fallbackTime }))
+      }
+      if (!Array.isArray(receipts) || receipts.length === 0) {
+        console.warn('[chat] invalid receipts in read_receipt:', receipts)
         return
       }
-      for (const id of payload.msg_id) {
-        if (!validateMsgId(id)) {
-          console.warn('[chat] invalid msg_id item:', id)
+      for (const receipt of receipts) {
+        if (!validateMsgId(receipt?.msg_id) || !Number.isFinite(receipt?.read_at) || receipt.read_at <= 0) {
+          console.warn('[chat] invalid read receipt item:', receipt)
           return
         }
       }
-      await handleReadReceipt(payload.from, payload.msg_id)
+      await handleReadReceipt(payload.from, receipts, payload.replay !== true)
+    }
+
+    async function onReadAck(payload) {
+      if (!validateChatId(payload?.to) || !Array.isArray(payload?.msg_id) || payload.msg_id.length === 0) return
+      const ids = payload.msg_id.filter(validateMsgId)
+      if (ids.length === 0) return
+      confirmPendingReads(payload.to, ids)
+      const idSet = new Set(ids)
+      const msgs = messages.value[payload.to] || []
+      for (const msg of msgs) {
+        if (!msg.mine && idSet.has(msg.id)) msg.receiptSent = true
+      }
+      await Promise.all(ids.map(id => dbMarkReceiptSent(id).catch(() => {})))
+
+      // 用服务器首次阅读时间校准阅读方自己的销毁时刻，覆盖认证前极短窗口内的本机时间退化值。
+      const receipts = Array.isArray(payload.receipts) ? payload.receipts : []
+      await Promise.all(receipts.map(async receipt => {
+        if (!validateMsgId(receipt?.msg_id) || !Number.isFinite(receipt?.read_at) || receipt.read_at <= 0) return
+        const msg = msgs.find(m => !m.mine && m.id === receipt.msg_id)
+        if (msg?.burnAfterRead) {
+          msg.readReceivedAt = receipt.read_at
+          msg.burnAt = receipt.read_at + BURN_AFTER_READ_DELAY
+        }
+        await dbCorrectBurnCountdown(
+          receipt.msg_id,
+          receipt.read_at,
+          receipt.read_at + BURN_AFTER_READ_DELAY
+        ).catch(() => {})
+      }))
     }
 
     // ── 文件传输事件 ────────────────────────────────────────────
 
+    function failIncomingTransfer(transfer, reason) {
+      if (!transfer || transfer.status === 'done' || transfer.status === 'error') return
+      transfer.status = 'error'
+      transfer.errorReason = reason
+      transfer.errorAt = Date.now()
+      clearReceiveWatchdog(transfer.id)
+      scheduleTransferCleanup(transfer.id, 6000)
+      send('file_error', { to: transfer.fromChatId, transfer_id: transfer.id, reason })
+    }
+
     function onFileOffer(payload) {
       const { from, transfer_id, msg_id, filename, filesize, filetype, total_chunks, ephemeral_pub_key, iv } = payload
-      if (!validateChatId(from) || !transfer_id || !filename || !total_chunks) return
-      if (!ephemeral_pub_key || !iv) return  // 缺少加密参数，拒绝
+      if (!validateChatId(from) || !TRANSFER_ID_PATTERN.test(transfer_id)) return
+      try {
+        validateFileMetadata(filename, filetype, filesize)
+        if (!validateMsgId(msg_id)) throw new Error('文件消息编号无效')
+        if (!Number.isInteger(total_chunks) || total_chunks !== expectedFileChunks(filesize)) {
+          throw new Error('文件分块数量与声明大小不匹配')
+        }
+        if (typeof ephemeral_pub_key !== 'string' || !ephemeral_pub_key || typeof iv !== 'string' || !iv) {
+          throw new Error('缺少文件加密参数')
+        }
+        if (fileTransfers.value[transfer_id]) throw new Error('文件传输编号重复')
+      } catch (error) {
+        console.warn('[chat] rejected invalid file offer:', error.message)
+        send('file_error', { to: from, transfer_id, reason: error.message })
+        return
+      }
 
       fileTransfers.value[transfer_id] = {
         id: transfer_id,
-        msgId: (msg_id && validateMsgId(msg_id)) ? msg_id : genMsgId(),  // 优先使用发送方的 msgId，确保两端 ID 一致
+        msgId: msg_id,
         direction: 'receive',
         fromChatId: from,
         filename,
@@ -1281,10 +1454,23 @@ function validateMsgId(msgId) {
     }
 
     function onFileChunk(payload) {
-      const { transfer_id, chunk_index, data } = payload
+      const { from, transfer_id, chunk_index, data } = payload
       const transfer = fileTransfers.value[transfer_id]
       if (!transfer || transfer.direction !== 'receive' || transfer.status !== 'transferring') return
-      if (chunk_index < 0 || chunk_index >= transfer.totalChunks || transfer.chunks[chunk_index]) return
+      if (from !== transfer.fromChatId || !Number.isInteger(chunk_index) || chunk_index < 0 ||
+          chunk_index >= transfer.totalChunks || transfer.chunks[chunk_index] || typeof data !== 'string') {
+        failIncomingTransfer(transfer, '收到无效的文件分块')
+        return
+      }
+      try {
+        const decodedSize = b64ToBuf(data).byteLength
+        if (decodedSize !== expectedFileChunkSize(transfer.filesize, chunk_index)) {
+          throw new Error('文件分块长度不匹配')
+        }
+      } catch {
+        failIncomingTransfer(transfer, '文件分块内容或长度无效')
+        return
+      }
 
       transfer.chunks[chunk_index] = data
       transfer.receivedCount++
@@ -1298,9 +1484,13 @@ function validateMsgId(msgId) {
     }
 
     function onFileComplete(payload) {
-      const { transfer_id } = payload
+      const { from, transfer_id } = payload
       const transfer = fileTransfers.value[transfer_id]
       if (!transfer || transfer.direction !== 'receive' || transfer.status !== 'transferring') return
+      if (from !== transfer.fromChatId) {
+        failIncomingTransfer(transfer, '无效的文件完成信号')
+        return
+      }
       // 收齐则组装；缺块则判定失败并通知发送方，避免发送端误以为成功
       if (transfer.receivedCount < transfer.totalChunks || transfer.chunks.some(c => !c)) {
         transfer.status = 'error'
@@ -1326,23 +1516,36 @@ function validateMsgId(msgId) {
       }
     }
 
+    async function onFileDone(payload) {
+      const { from, transfer_id, msg_id, ts } = payload || {}
+      if (!validateChatId(from) || !TRANSFER_ID_PATTERN.test(transfer_id) || !validateMsgId(msg_id)) return
+      if (!Number.isFinite(ts) || ts <= 0) return
+      const msg = messages.value[from]?.find(m => m.mine && m.id === msg_id)
+      if (msg) { msg.status = 'sent'; msg.ts = ts }
+      await dbUpdateMessageDelivery(msg_id, 'sent', ts).catch(() => {})
+    }
+
     on('message', onMessage)
     on('recall', onRecall)
     on('ack', onAck)
     on('read_receipt', onReadReceipt)
+    on('read_ack', onReadAck)
     on('file_offer', onFileOffer)
     on('file_chunk', onFileChunk)
     on('file_complete', onFileComplete)
     on('file_error', onFileError)
+    on('file_done', onFileDone)
     return () => {
       off('message', onMessage)
       off('recall', onRecall)
       off('ack', onAck)
       off('read_receipt', onReadReceipt)
+      off('read_ack', onReadAck)
       off('file_offer', onFileOffer)
       off('file_chunk', onFileChunk)
       off('file_complete', onFileComplete)
       off('file_error', onFileError)
+      off('file_done', onFileDone)
     }
   }
 
@@ -1378,8 +1581,11 @@ function validateMsgId(msgId) {
     try {
       const { friendApi } = await import('src/services/api')
       const { data } = await friendApi.getReadReceipts(peerChatId)
-      if (Array.isArray(data.msg_ids) && data.msg_ids.length > 0) {
-        await handleReadReceipt(peerChatId, data.msg_ids)
+      if (Array.isArray(data.receipts) && data.receipts.length > 0) {
+        await handleReadReceipt(peerChatId, data.receipts, false)
+      } else if (Array.isArray(data.msg_ids) && data.msg_ids.length > 0) {
+        const fallbackTime = getServerNow()
+        await handleReadReceipt(peerChatId, data.msg_ids.map(msg_id => ({ msg_id, read_at: fallbackTime })), false)
       }
     } catch (e) {
       console.warn('[chat] syncReadStatus failed:', e)
@@ -1391,7 +1597,7 @@ function validateMsgId(msgId) {
    */
   async function markAsRead(chatId) {
     const msgs = messages.value[chatId] || []
-    const readReceivedAt = Date.now()
+    const readReceivedAt = getServerNow()
     const newlyRead = []        // 本次新标记为已读的（用于持久化 read）
     const burnReads = []        // 接收端首次读到的阅后即焚消息，需启动销毁倒计时
     const pendingReceiptIds = []  // 需要（重）发回执的：本地已读但回执尚未确认送达
@@ -1420,31 +1626,25 @@ function validateMsgId(msgId) {
       ))
     }
     if (pendingReceiptIds.length === 0) return
-    // 发送已读回执到服务器，to 是消息发送者（对方）（send 已在文件顶部静态导入）
-    const ok = send('read', { to: chatId, msg_id: pendingReceiptIds })
-    // 仅在确认成功发出后才记录 receiptSent；否则保持 false，下次打开聊天会重发，
-    // 避免「本地已读但回执丢失」导致发送方永远停在单勾
-    if (ok) {
-      const sentSet = new Set(pendingReceiptIds)
-      for (const m of msgs) {
-        if (sentSet.has(m.id)) m.receiptSent = true
-      }
-      await Promise.all(pendingReceiptIds.map(id => dbMarkReceiptSent(id).catch(() => {})))
-    }
+    // WebSocket 层统一去重、拆成每批最多 100 条并只 flush 一次，避免循环发送时把前面
+    // 尚未 ACK 的批次反复发送，形成 O(n²) 请求风暴。
+    send('read', { to: chatId, msg_id: pendingReceiptIds })
   }
 
   /**
    * 处理对方发来的已读回执通知（我发的消息被对方读了）
-   * 对于阅后即焚消息，使用相对计时（防止系统时间篡改）
+   * 对于阅后即焚消息，使用服务器记录的首次阅读时间。
    */
-  async function handleReadReceipt(fromChatId, msgIds) {
-    // 使用相对计时：记录收到回执的时间，而不是计算绝对删除时间
-    const readReceivedAt = Date.now()
-    const idSet = new Set(msgIds)
+  async function handleReadReceipt(fromChatId, receipts, rememberMissing = true) {
+    if (!validateChatId(fromChatId) || !Array.isArray(receipts)) return
+    const validReceipts = receipts.filter(r => validateMsgId(r?.msg_id) && Number.isFinite(r?.read_at) && r.read_at > 0)
+    if (validReceipts.length === 0) return
+    const receiptByID = new Map(validReceipts.map(r => [r.msg_id, r]))
     for (const chatId in messages.value) {
       if (chatId !== fromChatId) continue
       for (const m of messages.value[chatId]) {
-        if (!(m.mine && idSet.has(m.id))) continue
+        const receipt = receiptByID.get(m.id)
+        if (!(m.mine && receipt)) continue
         const timer = ackTimers.get(m.id)
         if (timer) {
           clearTimeout(timer)
@@ -1457,8 +1657,8 @@ function validateMsgId(msgId) {
         // 每次重新进入聊天/重连都会把 readReceivedAt 重置为当前时间，
         // 导致倒计时反复从 2 小时重新开始。
         if (m.burnAfterRead && !m.readReceivedAt) {
-          m.readReceivedAt = readReceivedAt
-          m.burnAt = readReceivedAt + BURN_AFTER_READ_DELAY  // 仍保留用于显示倒计时
+          m.readReceivedAt = receipt.read_at
+          m.burnAt = receipt.read_at + BURN_AFTER_READ_DELAY
         }
       }
     }
@@ -1466,49 +1666,32 @@ function validateMsgId(msgId) {
     // 因此对非阅后即焚消息仅置 read=true，对已在内存中处理过的消息为幂等操作。
     // 关键修复：即使消息未加载进内存（发送方不在聊天页），也能正确启动销毁倒计时，
     // 避免 DB 记录停留在 read=true 但 readReceivedAt/burnAt 为空导致永不删除。
-    const burnAt = readReceivedAt + BURN_AFTER_READ_DELAY
-    await Promise.all(msgIds.map(id => dbStartBurnCountdown(id, readReceivedAt, burnAt).catch(() => {})))
-    await Promise.all(msgIds.map(id => dbUpdateMessageDelivery(id, 'sent').catch(() => {})))
+    const appliedIds = []
+    await Promise.all(validReceipts.map(async receipt => {
+      const found = await dbStartBurnCountdown(
+        receipt.msg_id,
+        receipt.read_at,
+        receipt.read_at + BURN_AFTER_READ_DELAY
+      ).catch(() => false)
+      if (!found && rememberMissing) rememberEarlyReadReceipt(receipt)
+      if (found || !rememberMissing) appliedIds.push(receipt.msg_id)
+      await dbUpdateMessageDelivery(receipt.msg_id, 'sent').catch(() => {})
+    }))
+    confirmReadReceiptsApplied(fromChatId, appliedIds)
   }
 
   // ── 定时删除过期消息 ────────────────────────────────────────
 
   let burnTimer = null
+  let burnCheckRunning = false
 
   /**
    * 启动定时删除检查（每分钟检查一次）
-   * 使用相对计时，防止系统时间篡改绕过删除
+   * 使用认证时校准的服务器时间，防止修改设备系统时间绕过删除。
    */
   function startBurnTimer() {
     if (burnTimer) return
-    burnTimer = setInterval(async () => {
-      const now = Date.now()
-      for (const chatId in messages.value) {
-        const msgs = messages.value[chatId]
-        const toDelete = []
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i]
-          // 使用相对计时：检查从收到已读回执后是否超过2小时
-          if (m.burnAfterRead && m.readReceivedAt) {
-            const elapsed = now - m.readReceivedAt
-            if (elapsed >= BURN_AFTER_READ_DELAY) {
-              toDelete.push(m)
-              msgs.splice(i, 1)
-            }
-          }
-          // 兼容旧数据：使用 burnAt
-          else if (m.burnAt && m.burnAt <= now) {
-            toDelete.push(m)
-            msgs.splice(i, 1)
-          }
-        }
-        // 删除 IndexedDB 中的过期消息，并清理文件副本（内存 blob + 文件体）
-        for (const m of toDelete) {
-          await dbDeleteMessage(m.id).catch(() => {})
-          await deleteFileArtifacts(m, m.id)
-        }
-      }
-    }, 60000)  // 每分钟检查一次
+    burnTimer = setInterval(() => { checkExpiredMessages() }, 60000)
   }
 
   /**
@@ -1523,33 +1706,38 @@ function validateMsgId(msgId) {
 
   /**
    * 立即检查并删除过期消息
-   * 使用相对计时，防止系统时间篡改绕过删除
+   * 同时扫描 IndexedDB 的 burnAt 索引，即使相关会话尚未加载进内存，也会删除消息
+   * 元数据和加密文件体。应用关闭期间到期的数据会在下次启动后立即清理。
    */
   async function checkExpiredMessages() {
-    const now = Date.now()
-    for (const chatId in messages.value) {
-      const msgs = messages.value[chatId]
-      const toDelete = []
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        const m = msgs[i]
-        // 使用相对计时
-        if (m.burnAfterRead && m.readReceivedAt) {
-          const elapsed = now - m.readReceivedAt
-          if (elapsed >= BURN_AFTER_READ_DELAY) {
-            toDelete.push(m)
-            msgs.splice(i, 1)
-          }
-        }
-        // 兼容旧数据
-        else if (m.burnAt && m.burnAt <= now) {
-          toDelete.push(m)
+    if (burnCheckRunning) return
+    burnCheckRunning = true
+    try {
+      const now = getServerNow()
+      const expiredRecords = await dbGetExpiredBurnMessages(now).catch(() => [])
+      const expiredIDs = new Set(expiredRecords.map(m => m.id))
+      const memoryMessages = new Map()
+
+      for (const chatId in messages.value) {
+        const msgs = messages.value[chatId]
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i]
+          const expired = expiredIDs.has(m.id) ||
+            (m.burnAfterRead && Number.isFinite(m.burnAt) && m.burnAt <= now) ||
+            (m.burnAfterRead && !m.burnAt && m.readReceivedAt && now - m.readReceivedAt >= BURN_AFTER_READ_DELAY)
+          if (!expired) continue
+          expiredIDs.add(m.id)
+          memoryMessages.set(m.id, m)
           msgs.splice(i, 1)
         }
       }
-      for (const m of toDelete) {
-        await dbDeleteMessage(m.id).catch(() => {})
-        await deleteFileArtifacts(m, m.id)
+
+      for (const id of expiredIDs) {
+        await dbDeleteMessage(id).catch(() => {})
+        await deleteFileArtifacts(memoryMessages.get(id), id)
       }
+    } finally {
+      burnCheckRunning = false
     }
   }
 
@@ -1605,6 +1793,7 @@ function validateMsgId(msgId) {
     fileTransfers,
     sendMessage,
     sendFile,
+    validateFile,
     recallMessage,
     startListening,
     getMessages,

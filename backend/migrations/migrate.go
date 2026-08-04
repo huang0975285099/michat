@@ -58,17 +58,25 @@ var ironfistPveRewardClaimSQL string
 //go:embed 016_ironfist_points_ledger_fix.sql
 var ironfistPointsLedgerFixSQL string
 
+//go:embed 017_message_deliveries.sql
+var messageDeliveriesSQL string
+
+//go:embed 018_message_read_tombstones.sql
+var messageReadTombstonesSQL string
+
 // AutoMigrate 自动执行建表 SQL，幂等（IF NOT EXISTS）。
-// MySQL 1060（列已存在）和 1061（索引已存在）被视为已完成，静默跳过。
+// MySQL 1060（列已存在）、1061（索引已存在）和 1091（待删除键已不存在）
+// 被视为已完成，静默跳过。
 func AutoMigrate(db *sql.DB) error {
-	migrations := []string{initSQL, messageReadsSQL, deviceTokensSQL, fistTokenSQL, ironfistStatsSQL, ironfistMatchesSQL, ironfistFriendModeSQL, ironfistPvpMatchmakingSQL, ironfistMatchPvpRoomSQL, ironfistPvpReportsSQL, fistTxPvpRefundSQL, slgWorldsSQL, slgSharedAiSQL, slgMarchesSQL, ironfistPveRewardClaimSQL, ironfistPointsLedgerFixSQL}
+	migrations := []string{initSQL, messageReadsSQL, deviceTokensSQL, fistTokenSQL, ironfistStatsSQL, ironfistMatchesSQL, ironfistFriendModeSQL, ironfistPvpMatchmakingSQL, ironfistMatchPvpRoomSQL, ironfistPvpReportsSQL, fistTxPvpRefundSQL, slgWorldsSQL, slgSharedAiSQL, slgMarchesSQL, ironfistPveRewardClaimSQL, ironfistPointsLedgerFixSQL, messageDeliveriesSQL, messageReadTombstonesSQL}
 	for _, sql := range migrations {
 		for _, stmt := range splitStatements(sql) {
 			if _, err := db.Exec(stmt); err != nil {
 				var myErr *mysql.MySQLError
-				if errors.As(err, &myErr) && (myErr.Number == 1060 || myErr.Number == 1061) {
+				if errors.As(err, &myErr) && (myErr.Number == 1060 || myErr.Number == 1061 || myErr.Number == 1091) {
 					// 1060 = ER_DUP_FIELDNAME (ADD COLUMN 已存在)
 					// 1061 = ER_DUP_KEY_NAME  (ADD INDEX 已存在)
+					// 1091 = ER_CANT_DROP_FIELD_OR_KEY（兼容新库上已不存在的旧外键）
 					continue
 				}
 				preview := stmt

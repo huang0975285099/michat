@@ -2,10 +2,13 @@ package ws
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log"
+	"path"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,22 +20,87 @@ import (
 )
 
 var (
-	chatIDRe     = regexp.MustCompile(`^\d{4}-[A-Z]{4}$`)
-	msgIDRe      = regexp.MustCompile(`^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$`)
-	transferIDRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	chatIDRe         = regexp.MustCompile(`^\d{4}-[A-Z]{4}$`)
+	msgIDRe          = regexp.MustCompile(`^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$`)
+	transferIDRe     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	allowedFileTypes = map[string]map[string]struct{}{
+		"jpg":  mimeSet("image/jpeg", "image/jpg"),
+		"jpeg": mimeSet("image/jpeg", "image/jpg"),
+		"png":  mimeSet("image/png"),
+		"gif":  mimeSet("image/gif"),
+		"webp": mimeSet("image/webp"),
+		"bmp":  mimeSet("image/bmp"),
+		"svg":  mimeSet("image/svg+xml"),
+		"mp4":  mimeSet("video/mp4"),
+		"webm": mimeSet("video/webm"),
+		"mov":  mimeSet("video/quicktime"),
+		"doc":  mimeSet("application/msword"),
+		"docx": mimeSet("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/zip"),
+		"xls":  mimeSet("application/vnd.ms-excel"),
+		"xlsx": mimeSet("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/zip"),
+		"ppt":  mimeSet("application/vnd.ms-powerpoint"),
+		"pptx": mimeSet("application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/zip"),
+		"pdf":  mimeSet("application/pdf"),
+		"zip":  mimeSet("application/zip", "application/x-zip-compressed", "application/x-zip"),
+		"rar":  mimeSet("application/x-rar-compressed", "application/vnd.rar"),
+		"7z":   mimeSet("application/x-7z-compressed"),
+		"tar":  mimeSet("application/x-tar"),
+		"gz":   mimeSet("application/gzip", "application/x-gzip"),
+		"apk":  mimeSet("application/vnd.android.package-archive", "application/zip"),
+	}
 )
 
+func mimeSet(values ...string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	return set
+}
+
+func validFileMetadata(filename, filetype string) bool {
+	ext := strings.TrimPrefix(strings.ToLower(path.Ext(filename)), ".")
+	allowedMIMEs, ok := allowedFileTypes[ext]
+	if !ok {
+		return false
+	}
+
+	mimeType := strings.ToLower(strings.TrimSpace(strings.SplitN(filetype, ";", 2)[0]))
+	if mimeType == "" || mimeType == "application/octet-stream" {
+		return true
+	}
+	_, ok = allowedMIMEs[mimeType]
+	return ok
+}
+
 const (
-	writeWait      = 10 * time.Second
-	pongWait       = 60 * time.Second
-	pingPeriod     = 30 * time.Second
-	maxMessageSize = 256 * 1024       // 256KB（支持文件分块传输）
-	maxChunkData   = 200 * 1024       // 单块 base64 数据最大长度
-	fileChunkSize  = 128 * 1024       // 前端分块大小（原始字节），用于校验 total_chunks 与 filesize 是否相符
-	maxFileSize    = 10 * 1024 * 1024 // 10MB
-	maxFilename    = 255
-	maxTotalChunks = 100
+	writeWait       = 10 * time.Second
+	pongWait        = 60 * time.Second
+	pingPeriod      = 30 * time.Second
+	maxMessageSize  = 256 * 1024 // 256KB（支持文件分块传输）
+	fileChunkSize   = 128 * 1024 // 前端分块大小（原始密文字节）
+	maxChunkData    = ((fileChunkSize + 2) / 3) * 4
+	aesGCMTagSize   = 16               // WebCrypto AES-GCM 默认 128-bit tag
+	maxFileSize     = 10 * 1024 * 1024 // 10MB 明文上限
+	maxFilename     = 255
+	maxTotalChunks  = 100
+	fileTransferTTL = 3 * time.Minute
 )
+
+func expectedFileChunks(filesize int64) int {
+	ciphertextSize := filesize + aesGCMTagSize
+	return int((ciphertextSize + fileChunkSize - 1) / fileChunkSize)
+}
+
+func expectedFileChunkSize(filesize int64, chunkIndex int) int {
+	ciphertextSize := filesize + aesGCMTagSize
+	offset := int64(chunkIndex * fileChunkSize)
+	remaining := ciphertextSize - offset
+	if remaining > fileChunkSize {
+		return fileChunkSize
+	}
+	return int(remaining)
+}
 
 // Message 是 WebSocket 消息的通用结构
 type Message struct {
@@ -120,6 +188,24 @@ type Hub struct {
 	// 上限为 pvpPartCacheTTL，对越权校验足够（参与方 chatID 撮合后不变）。
 	pvpPartMu    sync.Mutex
 	pvpPartCache map[uint64]pvpPartCacheEntry
+
+	// 文件分块只允许在已登记且由接收方接受的会话中中继，防止任意用户绕过
+	// file_offer 的好友校验向在线用户灌入大块数据。
+	fileTransferMu sync.Mutex
+	fileTransfers  map[string]*fileTransferSession
+}
+
+type fileTransferSession struct {
+	sender         string
+	recipient      string
+	msgID          string
+	filesize       int64
+	totalChunks    int
+	receivedChunks []bool
+	receivedCount  int
+	accepted       bool
+	done           bool
+	timestamp      int64
 }
 
 // pvpPartCacheEntry 缓存项；part 为 nil 表示"已确认房间不存在"，同样缓存以挡住
@@ -141,6 +227,7 @@ func NewHub(redis *rdb.Client, friendSvc *service.FriendService, identitySvc *se
 		messageReadSvc: messageReadSvc,
 		pvpLobby:       make(map[string]*service.LobbyUserProfile),
 		pvpPartCache:   make(map[uint64]pvpPartCacheEntry),
+		fileTransfers:  make(map[string]*fileTransferSession),
 	}
 }
 
@@ -370,6 +457,47 @@ func (h *Hub) FlushOffline(c *Client) {
 	}
 }
 
+// FlushStoredReadReceipts 从数据库补投发送者尚未消费的全部已读 tombstone。Redis 离线
+// 队列只有有限 TTL，而阅后即焚必须在用户长期离线后仍能按首次阅读时间立即清理。
+func (h *Hub) FlushStoredReadReceipts(c *Client) {
+	if h.messageReadSvc == nil {
+		return
+	}
+	grouped, err := h.messageReadSvc.GetReadReceiptsForSender(context.Background(), c.ChatID)
+	if err != nil {
+		log.Printf("[ws] load stored read receipts for %s: %v", c.ChatID, err)
+		return
+	}
+	const receiptBatchSize = 100
+	for reader, receipts := range grouped {
+		for i := 0; i < len(receipts); i += receiptBatchSize {
+			end := i + receiptBatchSize
+			if end > len(receipts) {
+				end = len(receipts)
+			}
+			batch := receipts[i:end]
+			ids := make([]string, 0, len(batch))
+			for _, receipt := range batch {
+				ids = append(ids, receipt.MsgID)
+			}
+			msg, _ := json.Marshal(Message{
+				Type: "read_receipt",
+				Payload: mustMarshal(struct {
+					From     string                `json:"from"`
+					MsgID    []string              `json:"msg_id"`
+					Receipts []service.ReadReceipt `json:"receipts"`
+					Replay   bool                  `json:"replay"`
+				}{From: reader, MsgID: ids, Receipts: batch, Replay: true}),
+			})
+			select {
+			case c.send <- msg:
+			case <-c.closed:
+				return
+			}
+		}
+	}
+}
+
 func (h *Hub) storeOffline(chatID string, msg []byte) {
 	ctx := context.Background()
 	key := pkgredis.OfflineKey(chatID)
@@ -386,6 +514,7 @@ func (h *Hub) ServeClient(c *Client) {
 	// 该连接死锁、彻底收不到消息。writePump 先跑起来即可边写边消费，仅退化为背压。
 	go c.writePump(h)
 	h.FlushOffline(c)
+	h.FlushStoredReadReceipts(c)
 
 	c.readPump(h) // 阻塞直到断开
 	h.Unregister(c)
@@ -462,9 +591,9 @@ func (c *Client) writePump(h *Hub) {
 
 // requeueUndelivered 非阻塞地抽干 send 缓冲，把其中尚未写出的「离线可存储」消息按序
 // 回收进离线队列。每个连接仅有一个 writePump，故本函数每连接至多执行一次，不会重复回收。
-// 只回收 message/read_receipt：这两类才是对方离线时需要补投的；status/ack/信令/游戏/
-// 文件块等瞬时消息即便还在缓冲里，也直接丢弃——否则重连后重放会造成幻象来电、残留游戏
-// 状态等。非可存储类型仍会被抽出通道（丢弃），不留在缓冲里。
+// 回收 message/read_receipt/ack：消息、已读回执和送达确认都需要在重连后补投；
+// status/信令/游戏/文件块等瞬时消息直接丢弃，避免重连后产生幻象来电或残留游戏状态。
+// 非可存储类型仍会被抽出通道（丢弃），不留在缓冲里。
 // 注：极小概率下，生产者在本函数抽干后仍可能向 send 写入（抢占的固有竞态），该消息会
 // 滞留缓冲；此窗口远小于原先「半死连接整条缓冲丢失」的缺口，且不会 panic。
 func (h *Hub) requeueUndelivered(c *Client) {
@@ -490,9 +619,8 @@ func (h *Hub) requeueUndelivered(c *Client) {
 	h.redis.Expire(ctx, key, pkgredis.OfflineMsgTTL)
 }
 
-// offlineStorable 判断一条已序列化的出站消息是否属于「离线可存储」类型。仅聊天消息与
-// 已读回执需要在对方离线时补投，与 handleChatMessage / handleRead 里走 Send→storeOffline
-// 的类型保持一致。解析失败按不可存储处理。
+// offlineStorable 判断一条已序列化的出站消息是否属于「离线可存储」类型。聊天消息、
+// 已读回执及两类 ACK 需要在重连后补投。解析失败按不可存储处理。
 func offlineStorable(msg []byte) bool {
 	var m struct {
 		Type string `json:"type"`
@@ -500,7 +628,8 @@ func offlineStorable(msg []byte) bool {
 	if err := json.Unmarshal(msg, &m); err != nil {
 		return false
 	}
-	return m.Type == "message" || m.Type == "read_receipt"
+	return m.Type == "message" || m.Type == "read_receipt" || m.Type == "ack" ||
+		m.Type == "read_ack" || m.Type == "file_done"
 }
 
 // dispatch 路由消息
@@ -512,6 +641,8 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 		h.handleRecall(c, msg.Payload)
 	case "read":
 		h.handleRead(c, msg.Payload)
+	case "read_receipt_applied":
+		h.handleReadReceiptApplied(c, msg.Payload)
 	case "file_offer":
 		h.handleFileOffer(c, msg.Payload)
 	case "file_chunk":
@@ -571,8 +702,8 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 		log.Printf("[ws] invalid to chat_id from %s: %q", from.ChatID, p.To)
 		return
 	}
-	// Validate msg_id format if present
-	if p.MsgID != "" && !msgIDRe.MatchString(p.MsgID) {
+	// msg_id 是接收端去重、发送端 ACK 关联的必要字段，禁止为空。
+	if !msgIDRe.MatchString(p.MsgID) {
 		log.Printf("[ws] invalid msg_id from %s: %q", from.ChatID, p.MsgID)
 		return
 	}
@@ -589,6 +720,16 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 		log.Printf("[ws] %s tried to message non-friend %s", from.ChatID, p.To)
 		return
 	}
+	// 在转发前持久化消息归属，后续已读回执只能由这条投递的真实接收者创建。
+	// 数据库异常时失败关闭，避免出现已送达但永远无法安全确认阅读的阅后即焚消息。
+	if h.messageReadSvc == nil {
+		log.Printf("[ws] message read service unavailable; rejected message from %s", from.ChatID)
+		return
+	}
+	if err = h.messageReadSvc.RecordMessage(ctx, p.MsgID, from.ChatID, p.To); err != nil {
+		log.Printf("[ws] failed to record delivery %q from %s: %v", p.MsgID, from.ChatID, err)
+		return
+	}
 
 	type ForwardPayload struct {
 		From            string `json:"from"`
@@ -599,6 +740,7 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 		Timestamp       int64  `json:"ts"`
 		BurnAfterRead   bool   `json:"burn_after_read"`
 	}
+	timestamp := time.Now().UnixMilli()
 	fwd, _ := json.Marshal(Message{
 		Type: "message",
 		Payload: mustMarshal(ForwardPayload{
@@ -607,7 +749,7 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 			EphemeralPubKey: p.EphemeralPubKey,
 			IV:              p.IV,
 			Ciphertext:      p.Ciphertext,
-			Timestamp:       time.Now().UnixMilli(),
+			Timestamp:       timestamp,
 			BurnAfterRead:   p.BurnAfterRead,
 		}),
 	})
@@ -630,12 +772,15 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 		Type: "ack",
 		Payload: mustMarshal(AckPayload{
 			MsgID:     p.MsgID,
-			Timestamp: time.Now().UnixMilli(),
+			Timestamp: timestamp,
 		}),
 	})
+	// ACK 不能静默丢弃：它决定发送方是否把已实际送达的消息误标为失败。
+	// 队列短暂拥塞时等待 writePump 腾出位置；连接异常时落入离线队列，重连后补投。
 	select {
 	case from.send <- ack:
-	default:
+	case <-time.After(2 * time.Second):
+		h.storeOffline(from.ChatID, ack)
 	}
 }
 
@@ -709,24 +854,104 @@ func (h *Hub) handleRead(from *Client, payload json.RawMessage) {
 			return
 		}
 	}
+	ctx := context.Background()
+	if ok, err := h.friendSvc.AreFriends(ctx, from.UserID, p.To); err != nil || !ok {
+		log.Printf("[ws] %s tried to send read receipt to non-friend %s", from.ChatID, p.To)
+		return
+	}
+	if h.messageReadSvc == nil {
+		log.Printf("[ws] read service unavailable for %s", from.ChatID)
+		return
+	}
 
-	// 记录到数据库
-	if h.messageReadSvc != nil {
-		for _, msgID := range p.MsgID {
-			// 幂等插入，忽略重复
-			_ = h.messageReadSvc.RecordRead(context.Background(), msgID, p.To, from.ChatID, from.ChatID)
+	// 服务端按投递归属逐条验证，并返回数据库中的首次阅读时间。去重可避免同一批次
+	// 重复 ID 产生多余查询；不属于该发送者/接收者的 ID 不会被转发。
+	uniqueIDs := make([]string, 0, len(p.MsgID))
+	seen := make(map[string]struct{}, len(p.MsgID))
+	for _, msgID := range p.MsgID {
+		if _, exists := seen[msgID]; exists {
+			continue
+		}
+		seen[msgID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, msgID)
+	}
+	receipts, err := h.messageReadSvc.RecordReads(ctx, uniqueIDs, p.To, from.ChatID)
+	if err != nil {
+		// 数据库瞬时错误时不 ACK，前端保留整批并在重连/再次打开会话时重试。
+		log.Printf("[ws] failed to record read batch from %s: %v", from.ChatID, err)
+		return
+	}
+	acceptedSet := make(map[string]struct{}, len(receipts))
+	for _, receipt := range receipts {
+		acceptedSet[receipt.MsgID] = struct{}{}
+	}
+	for _, msgID := range uniqueIDs {
+		if _, accepted := acceptedSet[msgID]; !accepted {
+			log.Printf("[ws] rejected unowned read receipt %q from %s", msgID, from.ChatID)
 		}
 	}
 
 	// 转发给发送者（在线则推送，离线则存 Redis 离线队列）
-	fwd, _ := json.Marshal(Message{
-		Type: "read_receipt",
+	if len(receipts) > 0 {
+		acceptedIDs := make([]string, 0, len(receipts))
+		for _, receipt := range receipts {
+			acceptedIDs = append(acceptedIDs, receipt.MsgID)
+		}
+		fwd, _ := json.Marshal(Message{
+			Type: "read_receipt",
+			Payload: mustMarshal(struct {
+				From     string                `json:"from"`
+				MsgID    []string              `json:"msg_id"`
+				Receipts []service.ReadReceipt `json:"receipts"`
+			}{From: from.ChatID, MsgID: acceptedIDs, Receipts: receipts}),
+		})
+		h.Send(p.To, fwd)
+	}
+
+	// 服务端完成持久化或确定拒绝后才确认；数据库瞬时错误时不会到达这里，
+	// 因而仍会留在前端队列等待重试。receipts 同时把权威首次阅读时间回给阅读方。
+	ack, _ := json.Marshal(Message{
+		Type: "read_ack",
 		Payload: mustMarshal(struct {
-			From  string   `json:"from"`
-			MsgID []string `json:"msg_id"`
-		}{From: from.ChatID, MsgID: p.MsgID}),
+			To       string                `json:"to"`
+			MsgID    []string              `json:"msg_id"`
+			Receipts []service.ReadReceipt `json:"receipts,omitempty"`
+		}{To: p.To, MsgID: uniqueIDs, Receipts: receipts}),
 	})
-	h.Send(p.To, fwd)
+	h.Send(from.ChatID, ack)
+}
+
+// handleReadReceiptApplied 在发送方已经把权威阅读时间持久化后停止数据库登录回放。
+// 不要求当前仍为好友：回执可能在解除好友或阅读方注销后才被长期离线的发送方收到。
+func (h *Hub) handleReadReceiptApplied(from *Client, payload json.RawMessage) {
+	var p ReadPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		log.Printf("[ws] invalid read_receipt_applied payload from %s: %v", from.ChatID, err)
+		return
+	}
+	if !chatIDRe.MatchString(p.To) || len(p.MsgID) == 0 || len(p.MsgID) > 100 {
+		log.Printf("[ws] invalid read_receipt_applied payload from %s", from.ChatID)
+		return
+	}
+	uniqueIDs := make([]string, 0, len(p.MsgID))
+	seen := make(map[string]struct{}, len(p.MsgID))
+	for _, msgID := range p.MsgID {
+		if !msgIDRe.MatchString(msgID) {
+			log.Printf("[ws] invalid msg_id in read_receipt_applied from %s: %q", from.ChatID, msgID)
+			return
+		}
+		if _, exists := seen[msgID]; exists {
+			continue
+		}
+		seen[msgID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, msgID)
+	}
+	if h.messageReadSvc == nil {
+		return
+	}
+	if err := h.messageReadSvc.MarkReadReceiptsApplied(context.Background(), uniqueIDs, from.ChatID, p.To); err != nil {
+		log.Printf("[ws] failed to mark read receipts applied for %s: %v", from.ChatID, err)
+	}
 }
 
 // NotifyFriendRequest 向目标用户推送好友申请通知
@@ -806,6 +1031,47 @@ func (h *Hub) NotifyPVPMatched(toChatID string, payload any) {
 
 // ── 文件传输处理 ──────────────────────────────────────────────────
 
+func (h *Hub) sendFileError(to *Client, transferID, reason string) {
+	errMsg, _ := json.Marshal(Message{
+		Type: "file_error",
+		Payload: mustMarshal(map[string]string{
+			"transfer_id": transferID,
+			"reason":      reason,
+		}),
+	})
+	select {
+	case to.send <- errMsg:
+	default:
+	}
+}
+
+func (h *Hub) registerFileTransfer(transferID string, session *fileTransferSession) bool {
+	h.fileTransferMu.Lock()
+	if _, exists := h.fileTransfers[transferID]; exists {
+		h.fileTransferMu.Unlock()
+		return false
+	}
+	h.fileTransfers[transferID] = session
+	h.fileTransferMu.Unlock()
+
+	// 前端等待接受和完成回执的总时限小于 3 分钟；定时清理保证即使双方断线，
+	// 会话记录也不会永久滞留。transfer_id 是 UUID，不允许在 TTL 内复用。
+	time.AfterFunc(fileTransferTTL, func() {
+		h.fileTransferMu.Lock()
+		if current := h.fileTransfers[transferID]; current == session {
+			delete(h.fileTransfers, transferID)
+		}
+		failed := !session.done
+		h.fileTransferMu.Unlock()
+		// 被拒绝、报错、断线或超时的文件不会形成聊天消息，撤销其投递归属。
+		// 成功 file_done 的记录必须保留，以便接收者稍后首次打开时仍可验证已读回执。
+		if failed && h.messageReadSvc != nil {
+			_ = h.messageReadSvc.DeleteMessage(context.Background(), session.msgID, session.sender, session.recipient)
+		}
+	})
+	return true
+}
+
 // FileOfferPayload 文件发送请求负载
 type FileOfferPayload struct {
 	To              string `json:"to"`
@@ -826,66 +1092,86 @@ func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
 		log.Printf("[ws] invalid file_offer from %s: %v", from.ChatID, err)
 		return
 	}
+	reject := func(reason string) {
+		log.Printf("[ws] rejected file_offer %q from %s: %s", p.TransferID, from.ChatID, reason)
+		if transferIDRe.MatchString(p.TransferID) {
+			h.sendFileError(from, p.TransferID, reason)
+		}
+	}
 
 	if !chatIDRe.MatchString(p.To) {
-		log.Printf("[ws] file_offer invalid to: %q from %s", p.To, from.ChatID)
+		reject("无效的接收方")
 		return
 	}
 	if !transferIDRe.MatchString(p.TransferID) {
 		log.Printf("[ws] file_offer invalid transfer_id from %s", from.ChatID)
 		return
 	}
+	if !msgIDRe.MatchString(p.MsgID) {
+		reject("无效的消息编号")
+		return
+	}
 	if len(p.Filename) == 0 || len(p.Filename) > maxFilename {
-		log.Printf("[ws] file_offer invalid filename from %s", from.ChatID)
+		reject("文件名无效或过长")
+		return
+	}
+	if !validFileMetadata(p.Filename, p.Filetype) {
+		reject("不支持的文件格式或文件类型不匹配")
 		return
 	}
 	if p.Filesize <= 0 || p.Filesize > maxFileSize {
-		log.Printf("[ws] file_offer invalid filesize %d from %s", p.Filesize, from.ChatID)
+		reject("文件大小必须大于 0 且不能超过 10MB")
 		return
 	}
-	if p.TotalChunks <= 0 || p.TotalChunks > maxTotalChunks {
-		log.Printf("[ws] file_offer invalid total_chunks %d from %s", p.TotalChunks, from.ChatID)
-		return
-	}
-	// 交叉校验：total_chunks 必须与声明的 filesize 相符，防止 filesize 很小却用大量分块放大流量
-	// 密文 = filesize + GCM tag，按 fileChunkSize 分块；+1 容纳加密开销与边界
-	maxChunksForSize := int((p.Filesize+fileChunkSize-1)/fileChunkSize) + 1
-	if p.TotalChunks > maxChunksForSize {
-		log.Printf("[ws] file_offer total_chunks %d exceeds size-implied max %d (filesize=%d) from %s", p.TotalChunks, maxChunksForSize, p.Filesize, from.ChatID)
+	expectedChunks := expectedFileChunks(p.Filesize)
+	if p.TotalChunks != expectedChunks || p.TotalChunks > maxTotalChunks {
+		reject("文件分块数量与声明大小不匹配")
 		return
 	}
 	if p.EphemeralPubKey == "" || p.IV == "" {
-		log.Printf("[ws] file_offer missing encryption fields from %s", from.ChatID)
+		reject("缺少文件加密参数")
 		return
 	}
 
 	ctx := context.Background()
 	isFriend, err := h.friendSvc.AreFriends(ctx, from.UserID, p.To)
 	if err != nil || !isFriend {
-		log.Printf("[ws] file_offer: %s not friends with %s", from.ChatID, p.To)
+		reject("只能向好友发送文件")
 		return
 	}
-
 	h.mu.RLock()
 	recipientClient, online := h.clients[p.To]
 	h.mu.RUnlock()
 
-	sendError := func(reason string) {
-		errMsg, _ := json.Marshal(Message{
-			Type: "file_error",
-			Payload: mustMarshal(map[string]string{
-				"transfer_id": p.TransferID,
-				"reason":      reason,
-			}),
-		})
-		select {
-		case from.send <- errMsg:
-		default:
-		}
+	if !online {
+		h.sendFileError(from, p.TransferID, "对方不在线，无法发送文件")
+		return
+	}
+	if h.messageReadSvc == nil {
+		reject("消息服务暂不可用")
+		return
 	}
 
-	if !online {
-		sendError("对方不在线，无法发送文件")
+	timestamp := time.Now().UnixMilli()
+	session := &fileTransferSession{
+		sender:         from.ChatID,
+		recipient:      p.To,
+		msgID:          p.MsgID,
+		filesize:       p.Filesize,
+		totalChunks:    p.TotalChunks,
+		receivedChunks: make([]bool, p.TotalChunks),
+		timestamp:      timestamp,
+	}
+	if !h.registerFileTransfer(p.TransferID, session) {
+		h.sendFileError(from, p.TransferID, "传输编号重复，请重新发送")
+		return
+	}
+	if err = h.messageReadSvc.RecordMessage(ctx, p.MsgID, from.ChatID, p.To); err != nil {
+		h.fileTransferMu.Lock()
+		delete(h.fileTransfers, p.TransferID)
+		h.fileTransferMu.Unlock()
+		log.Printf("[ws] failed to record file delivery %q from %s: %v", p.MsgID, from.ChatID, err)
+		reject("无法建立安全文件传输")
 		return
 	}
 
@@ -915,13 +1201,17 @@ func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
 			EphemeralPubKey: p.EphemeralPubKey,
 			IV:              p.IV,
 			BurnAfterRead:   p.BurnAfterRead,
-			Timestamp:       time.Now().UnixMilli(),
+			Timestamp:       timestamp,
 		}),
 	})
 	select {
 	case recipientClient.send <- fwd:
 	default:
-		sendError("对方连接繁忙，请稍后重试")
+		h.fileTransferMu.Lock()
+		delete(h.fileTransfers, p.TransferID)
+		h.fileTransferMu.Unlock()
+		_ = h.messageReadSvc.DeleteMessage(ctx, p.MsgID, from.ChatID, p.To)
+		h.sendFileError(from, p.TransferID, "对方连接繁忙，请稍后重试")
 	}
 }
 
@@ -943,10 +1233,46 @@ func (h *Hub) handleFileChunk(from *Client, payload json.RawMessage) {
 	}
 	if p.ChunkIndex < 0 || p.ChunkIndex >= maxTotalChunks {
 		log.Printf("[ws] file_chunk invalid index %d from %s", p.ChunkIndex, from.ChatID)
+		h.sendFileError(from, p.TransferID, "文件分块序号无效")
 		return
 	}
 	if len(p.Data) == 0 || len(p.Data) > maxChunkData {
 		log.Printf("[ws] file_chunk invalid data length %d from %s", len(p.Data), from.ChatID)
+		h.sendFileError(from, p.TransferID, "文件分块大小无效")
+		return
+	}
+
+	h.fileTransferMu.Lock()
+	session, ok := h.fileTransfers[p.TransferID]
+	if !ok {
+		h.fileTransferMu.Unlock()
+		h.sendFileError(from, p.TransferID, "文件传输不存在或已过期")
+		return
+	}
+	if from.ChatID != session.sender || p.To != session.recipient {
+		h.fileTransferMu.Unlock()
+		h.sendFileError(from, p.TransferID, "无权发送该文件分块")
+		return
+	}
+	if !session.accepted {
+		h.fileTransferMu.Unlock()
+		h.sendFileError(from, p.TransferID, "接收方尚未接受文件传输")
+		return
+	}
+	if p.ChunkIndex >= session.totalChunks {
+		h.fileTransferMu.Unlock()
+		h.sendFileError(from, p.TransferID, "文件分块序号超出范围")
+		return
+	}
+	if session.receivedChunks[p.ChunkIndex] {
+		h.fileTransferMu.Unlock()
+		h.sendFileError(from, p.TransferID, "收到重复的文件分块")
+		return
+	}
+	decoded, err := base64.StdEncoding.Strict().DecodeString(p.Data)
+	if err != nil || len(decoded) != expectedFileChunkSize(session.filesize, p.ChunkIndex) {
+		h.fileTransferMu.Unlock()
+		h.sendFileError(from, p.TransferID, "文件分块内容或长度无效")
 		return
 	}
 
@@ -967,14 +1293,24 @@ func (h *Hub) handleFileChunk(from *Client, payload json.RawMessage) {
 	})
 
 	h.mu.RLock()
-	c, ok := h.clients[p.To]
+	c, online := h.clients[p.To]
 	h.mu.RUnlock()
-	if ok {
-		select {
-		case c.send <- fwd:
-		default:
-			log.Printf("[ws] file_chunk dropped for %s (buffer full)", p.To)
-		}
+	if !online {
+		delete(h.fileTransfers, p.TransferID)
+		h.fileTransferMu.Unlock()
+		h.sendFileError(from, p.TransferID, "接收方已离线，文件传输中断")
+		return
+	}
+	select {
+	case c.send <- fwd:
+		session.receivedChunks[p.ChunkIndex] = true
+		session.receivedCount++
+		h.fileTransferMu.Unlock()
+	default:
+		delete(h.fileTransfers, p.TransferID)
+		h.fileTransferMu.Unlock()
+		log.Printf("[ws] file_chunk dropped for %s (buffer full)", p.To)
+		h.sendFileError(from, p.TransferID, "接收方连接繁忙，文件传输中断")
 	}
 }
 
@@ -994,10 +1330,71 @@ func (h *Hub) handleFileSimpleRelay(from *Client, msgType string, payload json.R
 		log.Printf("[ws] invalid %s fields from %s", msgType, from.ChatID)
 		return
 	}
+	if len(p.Reason) > 512 {
+		h.sendFileError(from, p.TransferID, "文件传输错误信息过长")
+		return
+	}
+
+	h.fileTransferMu.Lock()
+	session, ok := h.fileTransfers[p.TransferID]
+	if !ok {
+		h.fileTransferMu.Unlock()
+		// 对已完成会话的迟到 file_complete/file_error 静默忽略，避免成功后又显示失败。
+		if msgType != "file_complete" && msgType != "file_error" {
+			h.sendFileError(from, p.TransferID, "文件传输不存在或已过期")
+		}
+		return
+	}
+
+	senderToRecipient := from.ChatID == session.sender && p.To == session.recipient
+	recipientToSender := from.ChatID == session.recipient && p.To == session.sender
+	deleteAfterRelay := false
+	switch msgType {
+	case "file_accept":
+		if !recipientToSender {
+			h.fileTransferMu.Unlock()
+			h.sendFileError(from, p.TransferID, "无权接受该文件传输")
+			return
+		}
+	case "file_reject":
+		if !recipientToSender {
+			h.fileTransferMu.Unlock()
+			h.sendFileError(from, p.TransferID, "无权拒绝该文件传输")
+			return
+		}
+		deleteAfterRelay = true
+	case "file_complete":
+		if !senderToRecipient || !session.accepted {
+			h.fileTransferMu.Unlock()
+			h.sendFileError(from, p.TransferID, "无权完成该文件传输")
+			return
+		}
+		if session.receivedCount != session.totalChunks {
+			delete(h.fileTransfers, p.TransferID)
+			h.fileTransferMu.Unlock()
+			h.sendFileError(from, p.TransferID, "文件分块未完整送达")
+			return
+		}
+	case "file_done":
+		if !recipientToSender || !session.accepted || session.receivedCount != session.totalChunks {
+			h.fileTransferMu.Unlock()
+			h.sendFileError(from, p.TransferID, "无权确认该文件传输")
+			return
+		}
+		p.Timestamp = session.timestamp
+	case "file_error":
+		if !senderToRecipient && !recipientToSender {
+			h.fileTransferMu.Unlock()
+			h.sendFileError(from, p.TransferID, "无权终止该文件传输")
+			return
+		}
+		deleteAfterRelay = true
+	}
 
 	type Forward struct {
 		From       string `json:"from"`
 		TransferID string `json:"transfer_id"`
+		MsgID      string `json:"msg_id,omitempty"`
 		Reason     string `json:"reason,omitempty"`
 		Timestamp  int64  `json:"ts,omitempty"`
 	}
@@ -1006,19 +1403,44 @@ func (h *Hub) handleFileSimpleRelay(from *Client, msgType string, payload json.R
 		Payload: mustMarshal(Forward{
 			From:       from.ChatID,
 			TransferID: p.TransferID,
+			MsgID:      session.msgID,
 			Reason:     p.Reason,
 			Timestamp:  p.Timestamp,
 		}),
 	})
 
+	// 接收端已经完成解密并落盘后，file_done 就是不可丢失的最终结果。无论发送方此刻
+	// 在线、缓冲已满还是刚好断线，都标记会话成功并通过通用 Send 做在线/离线补投。
+	if msgType == "file_done" {
+		session.done = true
+		delete(h.fileTransfers, p.TransferID)
+		h.fileTransferMu.Unlock()
+		h.Send(p.To, fwd)
+		return
+	}
+
 	h.mu.RLock()
-	c, ok := h.clients[p.To]
+	c, online := h.clients[p.To]
 	h.mu.RUnlock()
-	if ok {
-		select {
-		case c.send <- fwd:
-		default:
+	if !online {
+		delete(h.fileTransfers, p.TransferID)
+		h.fileTransferMu.Unlock()
+		h.sendFileError(from, p.TransferID, "对方已离线，文件传输中断")
+		return
+	}
+	select {
+	case c.send <- fwd:
+		if msgType == "file_accept" {
+			session.accepted = true
 		}
+		if deleteAfterRelay {
+			delete(h.fileTransfers, p.TransferID)
+		}
+		h.fileTransferMu.Unlock()
+	default:
+		delete(h.fileTransfers, p.TransferID)
+		h.fileTransferMu.Unlock()
+		h.sendFileError(from, p.TransferID, "对方连接繁忙，文件传输中断")
 	}
 }
 
