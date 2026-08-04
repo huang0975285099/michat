@@ -333,7 +333,7 @@ const allowedFileTypes = [
   'application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation',
   '.zip,application/zip,application/x-zip-compressed,application/x-zip',
-  '.rar,application/x-rar-compressed,application/vnd.rar',
+  '.rar,application/x-rar-compressed,application/vnd.rar,application/x-rar,application/x-compressed',
   '.7z,application/x-7z-compressed',
   '.tar,application/x-tar',
   '.gz,application/gzip,application/x-gzip',

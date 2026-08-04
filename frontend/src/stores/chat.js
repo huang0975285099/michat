@@ -43,7 +43,12 @@ const ALLOWED_FILE_TYPES = new Map([
   ['pptx', new Set(['application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/zip'])],
   ['pdf', new Set(['application/pdf'])],
   ['zip', new Set(['application/zip', 'application/x-zip-compressed', 'application/x-zip'])],
-  ['rar', new Set(['application/x-rar-compressed', 'application/vnd.rar'])],
+  ['rar', new Set([
+    'application/x-rar-compressed',
+    'application/vnd.rar',
+    'application/x-rar',
+    'application/x-compressed'
+  ])],
   ['7z', new Set(['application/x-7z-compressed'])],
   ['tar', new Set(['application/x-tar'])],
   ['gz', new Set(['application/gzip', 'application/x-gzip'])],

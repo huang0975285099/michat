@@ -22,6 +22,8 @@ func TestValidFileMetadata(t *testing.T) {
 		{name: "zip", filename: "archive.zip", filetype: "application/zip", want: true},
 		{name: "zip alias", filename: "archive.ZIP", filetype: "application/x-zip-compressed", want: true},
 		{name: "rar modern mime", filename: "archive.rar", filetype: "application/vnd.rar", want: true},
+		{name: "rar x-rar alias", filename: "archive.rar", filetype: "application/x-rar", want: true},
+		{name: "rar x-compressed alias", filename: "archive.rar", filetype: "application/x-compressed", want: true},
 		{name: "7z", filename: "archive.7z", filetype: "application/x-7z-compressed", want: true},
 		{name: "generic mime requires allowed extension", filename: "archive.rar", filetype: "application/octet-stream", want: true},
 		{name: "empty mime requires allowed extension", filename: "archive.gz", filetype: "", want: true},

@@ -42,7 +42,7 @@ var (
 		"pptx": mimeSet("application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/zip"),
 		"pdf":  mimeSet("application/pdf"),
 		"zip":  mimeSet("application/zip", "application/x-zip-compressed", "application/x-zip"),
-		"rar":  mimeSet("application/x-rar-compressed", "application/vnd.rar"),
+		"rar":  mimeSet("application/x-rar-compressed", "application/vnd.rar", "application/x-rar", "application/x-compressed"),
 		"7z":   mimeSet("application/x-7z-compressed"),
 		"tar":  mimeSet("application/x-tar"),
 		"gz":   mimeSet("application/gzip", "application/x-gzip"),
