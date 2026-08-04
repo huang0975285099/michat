@@ -1,0 +1,3 @@
+# Rust build artifacts (multi-GB) and Tauri codegen output
+/target/
+/gen/

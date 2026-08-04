@@ -1,10 +1,13 @@
 /**
  * Message reminder tool
  * - Electron: Taskbar flash (window.myAPI.flashWindow)
+ * - Tauri: Taskbar flash (requestUserAttention) + notification plugin
  * - Web page: System desktop notification (Notification API) + tab title flashing
  *
  * Privacy: This application is end-to-end encrypted, and system notifications only display "new message received" and do not display clear text content.
  */
+
+import { isTauri } from './platform'
 
 const NOTIFY_TITLE = 'Yunmi'
 const NOTIFY_BODY = 'new message received'
@@ -62,9 +65,41 @@ function stopTitleFlash() {
 // Stop flickering when window regains focus
 if (typeof window !== 'undefined') {
   window.addEventListener('focus', stopTitleFlash)
+  window.addEventListener('focus', clearTauriAttention)
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) stopTitleFlash()
   })
+}
+
+// ── Tauri native reminder ───────────────────────────────────────
+// Replaces the three Electron IPC handlers. Imported dynamically so the Tauri
+// packages never land in the web/Electron bundles.
+
+async function tauriWindow() {
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  return getCurrentWindow()
+}
+
+async function notifyTauri() {
+  const win = await tauriWindow()
+  // Same guard the Electron main process applied: stay quiet while the user is looking at us.
+  if (await win.isFocused()) return
+
+  const notification = await import('@tauri-apps/plugin-notification')
+  let granted = await notification.isPermissionGranted()
+  if (!granted) granted = (await notification.requestPermission()) === 'granted'
+  if (granted) notification.sendNotification({ title: NOTIFY_TITLE, body: NOTIFY_BODY })
+
+  const { UserAttentionType } = await import('@tauri-apps/api/window')
+  await win.requestUserAttention(UserAttentionType.Informational)
+}
+
+// Passing null cancels the taskbar highlight, mirroring Electron's flashFrame(false) on focus.
+function clearTauriAttention() {
+  if (!isTauri()) return
+  tauriWindow()
+    .then((win) => win.requestUserAttention(null))
+    .catch(() => {})
 }
 
 // ──Desktop notifications───────────────────────────────────────────
@@ -92,9 +127,17 @@ function showWebNotification() {
  */
 export function notifyNewMessage() {
   // Electron: Play native system Toast + taskbar flashing
+  // Keyed on the preload bridge, not on isElectron(): if the bridge is missing
+  // there is nothing to call, so falling through to the web path is better.
   if (window.myAPI?.isElectron) {
     window.myAPI.notify?.(NOTIFY_BODY)
     window.myAPI.flashWindow?.()
+    return
+  }
+
+  // Tauri: same behaviour, driven from the renderer instead of the main process
+  if (isTauri()) {
+    notifyTauri().catch(() => {})
     return
   }
 

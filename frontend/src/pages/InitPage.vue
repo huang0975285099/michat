@@ -143,6 +143,7 @@ import {
     signChallenge,
 } from "src/services/crypto";
 import { identityApi, inviteApi } from "src/services/api";
+import { isNativeShell } from "src/services/platform";
 import { registerPushToken } from "src/boot/chat-service";
 import logoUrl from "src/assets/logo.png";
 
@@ -160,9 +161,8 @@ const inviteCode = ref("");
 const inviterInfo = ref(null);
 const inviteError = ref(false);
 
-// Electron (file://) or Capacitor Android (https://localhost) can also be registered without an invitation code
-const isNativeApp = window.location.protocol === 'file:' ||
-    (window.location.protocol === 'https:' && window.location.hostname === 'localhost');
+// Native clients (Electron / Tauri desktop, Capacitor Android) can also be registered without an invitation code
+const isNativeApp = isNativeShell();
 
 function goHome() {
     router.push("/");

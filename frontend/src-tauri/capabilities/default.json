@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for the main window: system notifications plus the window focus/attention calls that replace the Electron IPC handlers.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-is-focused",
+    "core:window:allow-is-minimized",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
+    "core:window:allow-request-user-attention",
+    "notification:default"
+  ]
+}

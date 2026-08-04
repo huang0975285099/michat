@@ -33,7 +33,7 @@ const messages = {
         },
         profile: {
             editNickname: "修改昵称",
-            myId: "我的 ID",
+            myId: "我的 Chat ID",
             copyId: "复制我的 Chat ID: {id}",
             shareId: "分享给朋友，让他们添加你",
             inviteFriend: "邀请好友",
@@ -94,7 +94,7 @@ const messages = {
         },
         profile: {
             editNickname: "Edit nickname",
-            myId: "My ID",
+            myId: "My Chat ID",
             copyId: "Copy my Chat ID: {id}",
             shareId: "Share it with friends so they can add you",
             inviteFriend: "Invite friends",

@@ -25,13 +25,15 @@ const (
 )
 
 // IsLocalDevOrigin determines whether origin is a local development/native shell origin that should always be allowed:
-// - file:// / capacitor:// (mobile terminal native shell, no standard http origin)
+// - file:// / capacitor:// / tauri:// (native shell, no standard http origin)
 // - http(s)://localhost, 127.0.0.1, [::1] on any port (local debugging)
+// - http(s)://tauri.localhost (Tauri v2 serves the bundled assets from this host on Windows)
 //
 // Use exact host comparison instead of prefix matching to avoid bypasses such as https://localhost.evil.com.
 // CheckOrigin and corsMiddleware share this judgment.
 func IsLocalDevOrigin(origin string) bool {
-	if strings.HasPrefix(origin, "file://") || strings.HasPrefix(origin, "capacitor://") {
+	if strings.HasPrefix(origin, "file://") || strings.HasPrefix(origin, "capacitor://") ||
+		strings.HasPrefix(origin, "tauri://") {
 		return true
 	}
 	u, err := url.Parse(origin)
@@ -39,7 +41,7 @@ func IsLocalDevOrigin(origin string) bool {
 		return false
 	}
 	switch u.Hostname() { //Hostname() has removed the port and IPv6 square brackets
-	case "localhost", "127.0.0.1", "::1":
+	case "localhost", "127.0.0.1", "::1", "tauri.localhost":
 		return true
 	}
 	return false

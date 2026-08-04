@@ -101,27 +101,4 @@ export const versionApi = {
   get: () => api.get('/version')
 }
 
-// Jiuzhou Journey (SLG) Multiplayer World
-export const slgApi = {
-  // Join world → return { world_id, seed, season, spawn_x, spawn_y, is_new_player, state, territories, players }
-  // Returns 403 {error:'world_full'} when full
-  join: () => api.post('/games/slg/join'),
-  // Get a world snapshot (territory list + online players)
-  getWorld: () => api.get('/games/slg/world'),
-  // Query world status { player_count, max_players, full }
-  getStatus: () => api.get('/games/slg/status'),
-  // Save player state
-  saveState: (state) => api.put('/games/slg/state', { state }),
-  // Update territory ownership { x, y, is_city, action: 'claim'|'abandon' }
-  updateTerritory: (payload) => api.post('/games/slg/territory', payload),
-  // Expedition/march start reporting { march_uid, intent, from, to, path, depart_at_ms, arrive_at_ms, units }
-  marchStart: (payload) => api.post('/games/slg/march', payload),
-  // Reporting at the end of the march (arrival/station/recall/cleaning up after being eliminated) { march_uid }
-  marchEnd: (marchUid) => api.post('/games/slg/march/end', { march_uid: marchUid }),
-  // Reporting of player unit collision encounter results { march_uid, units, status, other_march_uid, other_units, other_status, seed }
-  reportMarchBattle: (payload) => api.post('/games/slg/march/battle', payload),
-  // The administrator resets the current world (clears all players and territories, and joins to create a new world next time)
-  resetWorld: () => api.post('/games/slg/reset'),
-}
-
 export default api

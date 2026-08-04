@@ -17,13 +17,13 @@
         </div>
 
         <q-card class="q-mb-md">
-            <q-card-section style="display: flex;justify-content: space-evenly;">
+            <q-card-section style="display: flex;justify-content: space-evenly;align-items: center;">
                 <deterministic-avatar
                     :seed="identity.chatId"
                     :size="60"
                     class="q-mb-sm"
                 />
-                <div class="row items-center justify-center q-gutter-xs">
+                <div>
                     <div>
                         <span class="text-h6">{{ identity.nickname }}</span>
                         <q-btn
@@ -33,15 +33,20 @@
                             <q-tooltip>{{ t("profile.editNickname") }}</q-tooltip>
                         </q-btn>
                     </div>
-                    <div>
-                        {{ t("profile.myId") }}
+                    <div class="text-grey-6">
+                        {{ t("profile.myId") }}： {{ identity.chatId }}
+                        <q-btn
+                            flat round dense size="sm" icon="content_copy" color="grey-6"
+                            @click="copyId"
+                        >
+                        </q-btn>
                     </div>
                 </div>
             </q-card-section>
         </q-card>
 
         <q-list bordered separator rounded-borders>
-            <q-item clickable @click="copyId">
+            <!-- <q-item clickable @click="copyId">
                 <q-item-section avatar
                     ><q-icon name="fingerprint"
                 /></q-item-section>
@@ -49,7 +54,7 @@
                     <q-item-label>{{ t("profile.copyId", { id: identity.chatId }) }}</q-item-label>
                     <q-item-label caption>{{ t("profile.shareId") }}</q-item-label>
                 </q-item-section>
-            </q-item>
+            </q-item> -->
 
             <q-item
                 clickable
@@ -591,6 +596,7 @@ import {
     isNativeClient,
     forceRefresh,
 } from "src/services/version";
+import { isNativeShell } from "src/services/platform";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
 import { useI18n } from "src/i18n";
 
@@ -758,9 +764,9 @@ function copyId() {
 }
 
 function generateInviteLink() {
-    const isElectron = window.location.protocol === 'file:';
-    const isCapacitorAndroid = window.location.protocol === 'https:' && window.location.hostname === 'localhost';
-    const baseUrl = (isElectron || isCapacitorAndroid) ? 'https://yb.yzs88.com' : window.location.origin;
+    // Native shells serve from file:// or a private scheme, so their own origin is
+    // useless in a shareable link — point those at the public site instead.
+    const baseUrl = isNativeShell() ? 'https://yb.yzs88.com' : window.location.origin;
     inviteLink.value = baseUrl + "/#/init?invite=" + identity.chatId;
     showInviteDialog.value = true;
 }
