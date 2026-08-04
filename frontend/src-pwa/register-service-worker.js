@@ -1,6 +1,7 @@
 import { register } from 'register-service-worker'
 import { Notify } from 'quasar'
-import { fetchVersionInfo, cmpVersion, APP_VERSION } from 'src/services/version'
+import { fetchVersionInfo, getUpdateStatus, APP_VERSION } from 'src/services/version'
+import { t } from 'src/i18n'
 
 // The ready(), registered(), cached(), updatefound() and updated()
 // events passes a ServiceWorkerRegistration instance in their arguments.
@@ -36,18 +37,17 @@ register(process.env.SERVICE_WORKER_FILE, {
       const info = await fetchVersionInfo()
       const latest = info.latest || ''
       if (!latest || !APP_VERSION) return                  //If the version information is missing, it will not play.
-      if (cmpVersion(APP_VERSION, latest) >= 0) return     //Already the latest / rebuilt with the same version → will not play
-      // Lower than min_supported belongs to the forced update range and is handed over to the hard pop-up window of MainLayout. The soft prompt will not pop up repeatedly.
-      if (info.min_supported && cmpVersion(APP_VERSION, info.min_supported) < 0) return
+      const updateStatus = getUpdateStatus(APP_VERSION, latest, info.min_supported)
+      if (updateStatus !== 'available') return
       Notify.create({
         type: 'info',
-        message: 'new version found',
-        caption: 'Click Refresh to update to the latest version',
+        message: t('update.available'),
+        caption: t('update.refreshHint'),
         timeout: 0,
         position: 'top',
         actions: [
-          { label: 'Refresh', color: 'white', handler: () => window.location.reload() },
-          { label: 'later', color: 'white', handler: () => {} }
+          { label: t('update.refresh'), color: 'white', handler: () => window.location.reload() },
+          { label: t('update.later'), color: 'white', handler: () => {} }
         ]
       })
     } catch {

@@ -120,8 +120,8 @@
                 </q-card-section>
                 <q-card-section class="text-body2 text-grey-8 q-pt-none">
                     {{ t("update.requiredMessage", { version: appVersion }) }}
-                    <div v-if="forceUpdateNotes" class="text-caption text-grey q-mt-sm">
-                        {{ forceUpdateNotes }}
+                    <div v-if="updateNotes" class="text-caption text-grey q-mt-sm">
+                        {{ updateNotes }}
                     </div>
                 </q-card-section>
                 <q-card-actions align="right">
@@ -131,6 +131,31 @@
                         :label="t('update.updateNow')"
                         :loading="forceUpdating"
                         @click="doForceUpdate"
+                    />
+                </q-card-actions>
+            </q-card>
+        </q-dialog>
+
+        <!-- Native clients do not run the PWA update hook, so announce optional releases here. -->
+        <q-dialog v-model="nativeUpdateAvailable">
+            <q-card style="min-width: 300px; max-width: 360px">
+                <q-card-section class="row items-center q-gutter-sm">
+                    <q-icon name="system_update" color="primary" size="28px" />
+                    <div class="text-h6">{{ t("update.available") }}</div>
+                </q-card-section>
+                <q-card-section class="text-body2 text-grey-8 q-pt-none">
+                    {{ t("update.availableMessage", { version: latestVersion }) }}
+                    <div v-if="updateNotes" class="text-caption text-grey q-mt-sm">
+                        {{ updateNotes }}
+                    </div>
+                </q-card-section>
+                <q-card-actions align="right">
+                    <q-btn flat :label="t('update.later')" v-close-popup />
+                    <q-btn
+                        unelevated
+                        color="primary"
+                        :label="t('update.updateNow')"
+                        @click="doNativeUpdate"
                     />
                 </q-card-actions>
             </q-card>
@@ -149,8 +174,8 @@ import { wsConnected, on, off } from "src/services/websocket";
 import { notifyNewMessage, initNotifications } from "src/services/notify";
 import {
     APP_VERSION,
-    cmpVersion,
     fetchVersionInfo,
+    getUpdateStatus,
     isNativeClient,
     forceRefresh,
 } from "src/services/version";
@@ -198,32 +223,40 @@ function onFriendRequestGlobal() {
 // Forced update: Block use when the current version is lower than the backend min_supported
 const appVersion = APP_VERSION || "unknown";
 const forceUpdate = ref(false);
-const forceUpdateNotes = ref("");
-let forceUpdateUrl = "";
+const nativeUpdateAvailable = ref(false);
+const latestVersion = ref("");
+const updateNotes = ref("");
+let updateUrl = "";
 
-const FORCE_UPDATE_TRIED_KEY = "force_update_tried";
-async function checkForceUpdate() {
+async function checkAppUpdate() {
     if (!APP_VERSION) return; //The version is not forced when it is not injected (exception) to avoid accidental locking.
     try {
         const info = await fetchVersionInfo();
-        forceUpdateUrl = info.url || "";
-        forceUpdateNotes.value = info.notes || "";
-        if (info.min_supported && cmpVersion(APP_VERSION, info.min_supported) < 0) {
-            // Anti-dead loop: If this session has been forcibly refreshed but the version has not changed (the new version has not been deployed/is configured incorrectly),
-            // It is no longer mandatory to avoid permanently locking the user.
-            if (sessionStorage.getItem(FORCE_UPDATE_TRIED_KEY) === APP_VERSION) {
-                console.warn(
-                    "[version] Tried force update but version is still " + APP_VERSION +
-                    "，lower than min_supported " + info.min_supported +
-                    "：The new version may not be deployed yet，Force skipped to prevent infinite loop",
-                );
-                return;
-            }
+        updateUrl = info.url || "";
+        updateNotes.value = info.notes || "";
+        const updateStatus = getUpdateStatus(APP_VERSION, info.latest, info.min_supported);
+        if (updateStatus === "required") {
             forceUpdate.value = true;
+            nativeUpdateAvailable.value = false;
+            return;
         }
-    } catch {
+        if (isNativeClient() && updateStatus === "available") {
+            latestVersion.value = info.latest;
+            nativeUpdateAvailable.value = true;
+        }
+    } catch (error) {
+        console.warn("[version] Unable to check for updates", error);
         // If the pull fails, it will not be forced to avoid accidentally locking the user due to network problems.
     }
+}
+
+function openNativeUpdateUrl() {
+    if (!updateUrl) {
+        Notify.create({ type: "warning", message: t("update.urlMissing"), timeout: 2500 });
+        return false;
+    }
+    window.open(updateUrl, "_blank");
+    return true;
 }
 
 const forceUpdating = ref(false);
@@ -232,17 +265,15 @@ async function doForceUpdate() {
     forceUpdating.value = true;
     if (isNativeClient()) {
         // The native side (desktop/Android) can only download new installation package updates, and it is meaningless to refresh the old version packaged into the binary.
-        if (forceUpdateUrl) window.open(forceUpdateUrl, "_blank");
+        openNativeUpdateUrl();
         forceUpdating.value = false;
         return;
     }
-    // Record the source version of this forced flash: if the version remains unchanged after the refresh, it will no longer be forced (see checkForceUpdate)
-    try {
-        sessionStorage.setItem(FORCE_UPDATE_TRIED_KEY, APP_VERSION);
-    } catch {
-        // Ignored when sessionStorage is unavailable
-    }
     await forceRefresh();
+}
+
+function doNativeUpdate() {
+    if (openNativeUpdateUrl()) nativeUpdateAvailable.value = false;
 }
 
 onMounted(() => {
@@ -251,7 +282,7 @@ onMounted(() => {
     stopGameListening = gameStore.startListening();
     on("friend_request", onFriendRequestGlobal);
     initNotifications();
-    checkForceUpdate();
+    checkAppUpdate();
     // If it is already unlocked at startup, the ciphertext temporarily stored during the last lock period will be decrypted.
     if (!identity.isLocked) chatStore.processPendingMessages();
     // The scheduled deletion check is hung in the application-level life cycle to ensure that users leave the specific chat page after reading.

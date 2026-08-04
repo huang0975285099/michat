@@ -61,6 +61,10 @@ export default defineConfig(() => {
         cfg.skipWaiting = true
         cfg.clientsClaim = true
         cfg.cleanupOutdatedCaches = true
+        cfg.navigateFallbackDenylist = [
+          ...(cfg.navigateFallbackDenylist || []),
+          /^\/download(?:\/|$)/
+        ]
       },
       manifest: {
         name: 'Yunmi',

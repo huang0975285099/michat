@@ -586,8 +586,8 @@ import { useIdentityStore } from "src/stores/identity";
 import {
     APP_VERSION,
     BUILD_TIME,
-    cmpVersion,
     fetchVersionInfo,
+    getUpdateStatus,
     isNativeClient,
     forceRefresh,
 } from "src/services/version";
@@ -631,10 +631,11 @@ async function checkVersion() {
             updateState.value = "unknown";
             return;
         }
-        updateState.value =
-            cmpVersion(APP_VERSION, latestVersion.value) < 0
-                ? "outdated"
-                : "latest";
+        updateState.value = getUpdateStatus(
+            APP_VERSION,
+            latestVersion.value,
+            info.min_supported,
+        ) === "current" ? "latest" : "outdated";
     } catch {
         updateState.value = "unknown";
     }
@@ -647,7 +648,7 @@ async function onUpdateClick() {
         return;
     }
     // Browser/PWA: clear cache + log out of SW and refresh, users do not need to force refresh manually
-    $q.loading.show({ message: "Updating to the latest version…" });
+    $q.loading.show({ message: t("update.updating") });
     await forceRefresh();
 }
 

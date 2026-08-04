@@ -22,7 +22,14 @@ const messages = {
         update: {
             required: "需要更新",
             requiredMessage: "当前版本（v{version}）过低，无法继续使用，请更新到最新版本。",
+            available: "发现新版本",
+            availableMessage: "新版本 v{version} 已发布，建议立即更新。",
             updateNow: "立即更新",
+            refresh: "刷新",
+            later: "稍后",
+            refreshHint: "点击“刷新”即可更新到最新版本",
+            updating: "正在更新到最新版…",
+            urlMissing: "暂未配置更新下载地址",
         },
         profile: {
             editNickname: "修改昵称",
@@ -76,7 +83,14 @@ const messages = {
         update: {
             required: "Update required",
             requiredMessage: "Version v{version} is no longer supported. Please update to continue.",
+            available: "New version available",
+            availableMessage: "Version {version} is available. Update now for the latest improvements.",
             updateNow: "Update now",
+            refresh: "Refresh",
+            later: "Later",
+            refreshHint: "Select Refresh to update to the latest version",
+            updating: "Updating to the latest version…",
+            urlMissing: "No update download URL is configured",
         },
         profile: {
             editNickname: "Edit nickname",
