@@ -26,6 +26,37 @@ type authorityAchievementFacts struct {
 	HighHPWin        bool
 }
 
+type wagerSettlement struct {
+	Result       ironfistengine.Outcome
+	WinnerAmount int64
+	RefundA      int64
+	RefundB      int64
+	FeeBurn      int64
+	FeeTreasury  int64
+}
+
+func calculateWagerSettlement(stake int64, outcome ironfistengine.Outcome) (wagerSettlement, error) {
+	settlement := wagerSettlement{Result: outcome}
+	totalPool := stake * 2
+	switch outcome {
+	case ironfistengine.WinA, ironfistengine.WinB:
+		totalFee := totalPool * 5 / 100
+		settlement.WinnerAmount = totalPool - totalFee
+		settlement.FeeBurn = totalFee / 2
+		settlement.FeeTreasury = totalFee - settlement.FeeBurn
+	case ironfistengine.Draw, ironfistengine.DoubleLose:
+		nominalFee := totalPool * 25 / 1000
+		refund := (totalPool - nominalFee) / 2
+		settlement.RefundA, settlement.RefundB = refund, refund
+		actualFee := totalPool - refund*2
+		settlement.FeeBurn = actualFee / 2
+		settlement.FeeTreasury = actualFee - settlement.FeeBurn
+	default:
+		return wagerSettlement{}, fmt.Errorf("unsupported authoritative wager outcome %q", outcome)
+	}
+	return settlement, nil
+}
+
 func pveRewardFor(priorWins int, outcome ironfistengine.Outcome) (base, bonus int64, wins int) {
 	wins = priorWins
 	if outcome != ironfistengine.WinA || priorWins >= PvEDailyMaxWins {
@@ -83,6 +114,11 @@ func (s *IronFistService) settleCompletedGameTx(ctx context.Context, tx *sql.Tx,
 			return err
 		}
 	}
+	if game.Mode == "pvp" && game.PVPRoomID.Valid {
+		if err := s.settleWageredPVPTx(ctx, tx, game); err != nil {
+			return err
+		}
+	}
 	settledAt := s.authorityNow()
 	result, err := tx.ExecContext(ctx, `UPDATE ironfist_games SET settled_at = ? WHERE game_id = ? AND settled_at IS NULL`, settledAt, game.GameID)
 	if err != nil {
@@ -95,6 +131,89 @@ func (s *IronFistService) settleCompletedGameTx(ctx context.Context, tx *sql.Tx,
 	}
 	game.SettledAt = sqlNullTime(settledAt)
 	return nil
+}
+
+func (s *IronFistService) settleWageredPVPTx(ctx context.Context, tx *sql.Tx, game *lockedGame) error {
+	var status, tier, chatA, chatB string
+	var stake int64
+	var userA, userB uint64
+	err := tx.QueryRowContext(ctx, `
+		SELECT status, tier, stake_amount, player_a_user_id, player_b_user_id,
+		       player_a_chat_id, player_b_chat_id
+		FROM ironfist_pvp_rooms WHERE id = ? FOR UPDATE`, game.PVPRoomID.Int64).Scan(
+		&status, &tier, &stake, &userA, &userB, &chatA, &chatB,
+	)
+	if err != nil {
+		return err
+	}
+	if userA != game.PlayerAUserID || userB != game.PlayerBUserID {
+		return fmt.Errorf("wager room participants do not match authoritative game %s", game.GameID)
+	}
+	if status == "settled" {
+		return nil
+	}
+	if status != "matched" {
+		return fmt.Errorf("wager room %d has status %s", game.PVPRoomID.Int64, status)
+	}
+	settlement, err := calculateWagerSettlement(stake, game.Result)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureFistAccountTx(ctx, tx, userA); err != nil {
+		return err
+	}
+	if err := s.ensureFistAccountTx(ctx, tx, userB); err != nil {
+		return err
+	}
+	roomRef := pvpRoomRef(uint64(game.PVPRoomID.Int64))
+	switch game.Result {
+	case ironfistengine.WinA:
+		if err := creditAuthorityWagerTx(ctx, tx, userA, settlement.WinnerAmount, true, "pvp_win", roomRef, "game:"+game.GameID+":pvp-win", "Authoritative PvP win vs "+chatB); err != nil {
+			return err
+		}
+	case ironfistengine.WinB:
+		if err := creditAuthorityWagerTx(ctx, tx, userB, settlement.WinnerAmount, true, "pvp_win", roomRef, "game:"+game.GameID+":pvp-win", "Authoritative PvP win vs "+chatA); err != nil {
+			return err
+		}
+	case ironfistengine.Draw, ironfistengine.DoubleLose:
+		if err := creditAuthorityWagerTx(ctx, tx, userA, settlement.RefundA, false, "pvp_refund", roomRef, "game:"+game.GameID+":refund-a", "Authoritative PvP draw refund ("+tier+")"); err != nil {
+			return err
+		}
+		if err := creditAuthorityWagerTx(ctx, tx, userB, settlement.RefundB, false, "pvp_refund", roomRef, "game:"+game.GameID+":refund-b", "Authoritative PvP draw refund ("+tier+")"); err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE ironfist_pvp_rooms SET status = 'settled', result = ?, winner_amount = ?,
+		       refund_a = ?, refund_b = ?, fee_burn = ?, fee_treasury = ?, settled_at = ?
+		WHERE id = ? AND status = 'matched'`,
+		settlement.Result, settlement.WinnerAmount, settlement.RefundA, settlement.RefundB,
+		settlement.FeeBurn, settlement.FeeTreasury, s.authorityNow(), game.PVPRoomID.Int64,
+	)
+	return err
+}
+
+func creditAuthorityWagerTx(ctx context.Context, tx *sql.Tx, userID uint64, amount int64, earned bool, transactionType, refID, settlementRef, remark string) error {
+	if amount <= 0 {
+		return nil
+	}
+	earnedAmount := int64(0)
+	if earned {
+		earnedAmount = amount
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE fist_accounts SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id = ?`, amount, earnedAmount, userID); err != nil {
+		return err
+	}
+	var balance int64
+	if err := tx.QueryRowContext(ctx, `SELECT balance FROM fist_accounts WHERE user_id = ?`, userID).Scan(&balance); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO fist_transactions (user_id, amount, balance_after, type, ref_id, settlement_ref, remark)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		userID, amount, balance, transactionType, refID, settlementRef, remark,
+	)
+	return err
 }
 
 func loadStoredAuthorityRoundsTx(ctx context.Context, tx *sql.Tx, gameID string) ([]storedAuthorityRound, error) {
