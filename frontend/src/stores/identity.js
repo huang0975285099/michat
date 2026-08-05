@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { loadKeyPair, generateAndStoreKeyPair, clearKeyPair, exportPrivateKey, hasSecurityCode, isUnlocked, unlock, lock, startAutoLock, loadLockConfig, saveLockConfig, setupSecurityCode, disableSecurityCode } from 'src/services/crypto'
-import { identityApi, friendApi, inviteApi, deviceApi } from 'src/services/api'
+import { identityApi, friendApi, inviteApi } from 'src/services/api'
 import { registerPushToken } from 'src/boot/chat-service'
 import { connect, clearPendingQueue } from 'src/services/websocket'
 import { useChatStore } from 'src/stores/chat'
+import { deleteAccountThenClear } from './account-deletion.mjs'
 
 export const useIdentityStore = defineStore('identity', () => {
   const chatId = ref(localStorage.getItem('chat_id') || '')
@@ -238,41 +239,32 @@ export const useIdentityStore = defineStore('identity', () => {
    * Clear local identity (user actively logs out)
    */
   async function clear() {
-    // Clean auto lock
-    if (autoLockCleanup) {
-      autoLockCleanup()
-      autoLockCleanup = null
-    }
-
-    try {
-      await deviceApi.remove()
-    } catch {
-      // Ignore, local data will be cleared as usual
-    }
-    try {
-      await identityApi.deleteAccount()
-    } catch {
-      console.warn('[identity] deleteAccount failed, clearing local data anyway')
-    }
-
-    sessionStorage.removeItem('sec_code_unlocked')
-    localStorage.removeItem('sec_code_errors')
-    localStorage.removeItem('sec_code_cooldown_end')
-
-    await clearKeyPair()
-    await useChatStore().clearAll()
-    clearPendingQueue()
-    localStorage.removeItem('session_token')
-    localStorage.removeItem('chat_id')
-    localStorage.removeItem('nickname')
-    chatId.value = ''
-    nickname.value = ''
-    isAdmin.value = false
-    hasPrivateKey.value = false
-    serverReady.value = false
-    hasCode.value = false
-    isLocked.value = false
-    friendPubKeys.value = {}
+    await deleteAccountThenClear(
+      () => identityApi.deleteAccount(),
+      async () => {
+        if (autoLockCleanup) {
+          autoLockCleanup()
+          autoLockCleanup = null
+        }
+        sessionStorage.removeItem('sec_code_unlocked')
+        localStorage.removeItem('sec_code_errors')
+        localStorage.removeItem('sec_code_cooldown_end')
+        await clearKeyPair()
+        await useChatStore().clearAll()
+        clearPendingQueue()
+        localStorage.removeItem('session_token')
+        localStorage.removeItem('chat_id')
+        localStorage.removeItem('nickname')
+        chatId.value = ''
+        nickname.value = ''
+        isAdmin.value = false
+        hasPrivateKey.value = false
+        serverReady.value = false
+        hasCode.value = false
+        isLocked.value = false
+        friendPubKeys.value = {}
+      },
+    )
   }
 
   async function updateNickname(name) {

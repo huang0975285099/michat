@@ -3,12 +3,13 @@ import { ref } from 'vue'
 import { Notify } from 'quasar'
 import { send, on, off } from 'src/services/websocket'
 import { useIdentityStore } from 'src/stores/identity'
+import { ironFistAcceptCommand, ironFistReadyRoute } from './ironfist-invite-core.mjs'
 
 function randomId() { return Math.random().toString(36).slice(2, 10) }
 function randomSeed() { return (Math.random() * 2 ** 31) >>> 0 }
 
 export const useGameStore = defineStore('game', () => {
-  // idle | inviting | invited | playing
+  // idle | inviting | invited | waiting | playing
   const state      = ref('idle')
   const opponentId = ref('')
   const opponentNickname = ref('')
@@ -61,6 +62,11 @@ export const useGameStore = defineStore('game', () => {
 
   function acceptInvite() {
     if (state.value !== 'invited') return
+    if (game.value === 'ironfist') {
+      send('game_accept', ironFistAcceptCommand(opponentId.value, roomId.value))
+      state.value = 'waiting'
+      return
+    }
     const s = randomSeed()
     seed.value = s
     send('game_accept', { to: opponentId.value, room_id: roomId.value, seed: s })
@@ -98,6 +104,7 @@ export const useGameStore = defineStore('game', () => {
 
   function _onAccept(payload) {
     if (state.value !== 'inviting') return
+    if (game.value === 'ironfist') return
     clearTimeout(_inviteTimer)
     seed.value = payload.seed
     state.value = 'playing'
@@ -110,6 +117,16 @@ export const useGameStore = defineStore('game', () => {
         role: 'host',
       },
     })
+  }
+
+  function _onReady(payload) {
+    if (payload.game !== 'ironfist' || payload.room_id !== roomId.value) return
+    if (state.value !== 'inviting' && state.value !== 'waiting') return
+    if (!payload.game_id) return
+    clearTimeout(_inviteTimer)
+    state.value = 'playing'
+    opponentId.value = payload.opponent || opponentId.value
+    _router?.push(ironFistReadyRoute(payload))
   }
 
   function _onReject(payload) {
@@ -134,10 +151,12 @@ export const useGameStore = defineStore('game', () => {
   function startListening() {
     on('game_invite', _onInvite)
     on('game_accept', _onAccept)
+    on('game_ready', _onReady)
     on('game_reject', _onReject)
     return () => {
       off('game_invite', _onInvite)
       off('game_accept', _onAccept)
+      off('game_ready', _onReady)
       off('game_reject', _onReject)
     }
   }

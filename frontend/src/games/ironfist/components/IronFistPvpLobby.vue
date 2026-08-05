@@ -183,7 +183,7 @@ function onPVPMatched(payload) {
 }
 
 // Unified exit: Bring the room number and opponent file to the parent router to switch to the battle page
-function emitMatched({ room_id, opponent, tier, stake }) {
+function emitMatched({ room_id, game_id, opponent, tier, stake }) {
   clearTimeout(matchTimer);
   clearTimeout(pollTimer);
   // First temporarily store matchTier and then set it to null, otherwise the fallback below will always get null.
@@ -192,6 +192,7 @@ function emitMatched({ room_id, opponent, tier, stake }) {
   matchTier.value = null;
   emit("matched", {
     roomId: room_id,
+    gameId: game_id,
     opponent,
     tier: tier || savedTier?.key,
     stake: stake ?? savedTier?.stake,
@@ -243,6 +244,7 @@ function leaveLobby() {
         if (data?.status === "matched" && data.room_id) {
           emit("matched", {
             roomId: data.room_id,
+            gameId: data.game_id,
             opponent: data.opponent,
             tier: data.tier,
             stake: data.stake,
@@ -273,6 +275,7 @@ async function startMatch(tier) {
       // Matched rooms cannot be canceled. Forcibly discarding them will only make the opponent wait for nothing and trigger a 15-minute timeout refund.
       emitMatched({
         room_id: data.room_id,
+        game_id: data.game_id,
         opponent: data.opponent,
         tier: data.tier,
         stake: data.stake,
@@ -325,6 +328,7 @@ function startMatchPoll(epoch) {
       if (data?.status === "matched" && data.room_id) {
         emitMatched({
           room_id: data.room_id,
+          game_id: data.game_id,
           opponent: data.opponent,
           tier: data.tier,
           stake: data.stake,

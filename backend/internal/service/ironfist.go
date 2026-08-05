@@ -2,24 +2,39 @@ package service
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 	"unicode/utf8"
 
+	"e2eechat/internal/ironfistengine"
 	"e2eechat/internal/model"
 	"github.com/go-sql-driver/mysql"
 )
 
 // IronFistService Iron Fist battle statistics and achievement service
 type IronFistService struct {
-	db *sql.DB
+	db            *sql.DB
+	now           func() time.Time
+	random        io.Reader
+	newGameID     func() string
+	outboxPublish func(context.Context, string) error
 }
 
 func NewIronFistService(db *sql.DB) *IronFistService {
-	return &IronFistService{db: db}
+	return &IronFistService{
+		db:     db,
+		now:    time.Now,
+		random: cryptorand.Reader,
+		newGameID: func() string {
+			id, _ := generateAuthorityUUID(cryptorand.Reader)
+			return id
+		},
+	}
 }
 
 // StatsView returns an overview of statistics to the front end
@@ -556,23 +571,25 @@ var PVPTierStakes = map[string]int64{
 }
 
 var (
-	ErrPVPInvalidTier      = fmt.Errorf("invalid pvp tier")
-	ErrPVPInsufficientFist = fmt.Errorf("insufficient $FIST balance")
-	ErrPVPAlreadyQueued    = fmt.Errorf("already in pvp queue")
-	ErrPVPNotInQueue       = fmt.Errorf("not in pvp queue")
-	ErrPVPRoomNotFound     = fmt.Errorf("pvp room not found")
-	ErrPVPRoomNotMatched   = fmt.Errorf("pvp room not in matched state")
-	ErrPVPNotParticipant   = fmt.Errorf("caller is not a participant of this room")
-	ErrPVPAlreadySettled   = fmt.Errorf("pvp room already settled")
-	ErrPVPInvalidResult    = fmt.Errorf("invalid pvp result")
-	ErrPVPSelfMatch        = fmt.Errorf("cannot match with self")
-	ErrPVPAlreadyInMatch   = fmt.Errorf("already in an active pvp match")
+	ErrPVPInvalidTier          = fmt.Errorf("invalid pvp tier")
+	ErrPVPInsufficientFist     = fmt.Errorf("insufficient $FIST balance")
+	ErrPVPAlreadyQueued        = fmt.Errorf("already in pvp queue")
+	ErrPVPNotInQueue           = fmt.Errorf("not in pvp queue")
+	ErrPVPRoomNotFound         = fmt.Errorf("pvp room not found")
+	ErrPVPRoomNotMatched       = fmt.Errorf("pvp room not in matched state")
+	ErrPVPNotParticipant       = fmt.Errorf("caller is not a participant of this room")
+	ErrPVPAlreadySettled       = fmt.Errorf("pvp room already settled")
+	ErrPVPInvalidResult        = fmt.Errorf("invalid pvp result")
+	ErrPVPSelfMatch            = fmt.Errorf("cannot match with self")
+	ErrPVPAlreadyInMatch       = fmt.Errorf("already in an active pvp match")
+	ErrLegacyPVPReportDisabled = fmt.Errorf("legacy PvP result reports are disabled")
 )
 
 // PVPMatchResult The return value of joining the matching queue
 type PVPMatchResult struct {
 	Status   string            `json:"status"` // "queued" | "matched"
 	RoomID   uint64            `json:"room_id,omitempty"`
+	GameID   string            `json:"game_id,omitempty"`
 	Tier     string            `json:"tier,omitempty"`
 	Stake    int64             `json:"stake,omitempty"`
 	Opponent *LobbyUserProfile `json:"opponent,omitempty"`        //When the match is successful, the opponent's file is returned (for local direct start)
@@ -698,13 +715,29 @@ func (s *IronFistService) enqueuePVPOnce(ctx context.Context, userID uint64, cha
 			fmt.Sprintf("PVP 质押（%s场，对手：%s）", tier, aChatID)); err != nil {
 			return nil, err
 		}
+		now := s.authorityNow()
 		// Room status advancement
 		if _, err = tx.ExecContext(ctx, `
 			UPDATE ironfist_pvp_rooms
 			SET player_b_user_id = ?, player_b_chat_id = ?,
-			    status = 'matched', matched_at = CURRENT_TIMESTAMP(3)
+			    status = 'matched', matched_at = ?
 			WHERE id = ? AND status = 'matching'
-		`, userID, chatID, roomID); err != nil {
+		`, userID, chatID, now, roomID); err != nil {
+			return nil, err
+		}
+		gameID := s.newGameID()
+		if !authorityUUIDPattern.MatchString(gameID) {
+			return nil, fmt.Errorf("generate authority game id")
+		}
+		deadline := sqlNullTime(now.Add(authorityActionWindow))
+		if err := insertAuthorityGameTx(ctx, tx, &lockedGame{
+			GameID: gameID, Mode: "pvp", Status: "active",
+			PlayerAUserID: aUserID, PlayerBUserID: userID,
+			PVPRoomID:    sql.NullInt64{Int64: int64(roomID), Valid: true},
+			RulesVersion: ironfistengine.RulesVersion, CurrentRound: 1, StateVersion: 1,
+			State: ironfistengine.InitialState(), ActionDeadlineA: deadline, ActionDeadlineB: deadline,
+			LastActivityAt: now, PendingActions: map[ironfistengine.Seat]lockedAction{},
+		}); err != nil {
 			return nil, err
 		}
 		if err = tx.Commit(); err != nil {
@@ -718,6 +751,7 @@ func (s *IronFistService) enqueuePVPOnce(ctx context.Context, userID uint64, cha
 		return &PVPMatchResult{
 			Status:   "matched",
 			RoomID:   roomID,
+			GameID:   gameID,
 			Tier:     tier,
 			Stake:    stake,
 			Opponent: opp,
@@ -773,16 +807,19 @@ func (s *IronFistService) GetPVPQueueStatus(ctx context.Context, userID uint64) 
 		stake                 int64
 		bUserID               sql.NullInt64
 		bChatID               sql.NullString
+		gameID                sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tier, stake_amount, status,
-		       player_a_user_id, player_a_chat_id,
-		       player_b_user_id, player_b_chat_id
-		FROM ironfist_pvp_rooms
-		WHERE (player_a_user_id = ? OR player_b_user_id = ?)
-		  AND status IN ('matching', 'matched')
-		ORDER BY id DESC LIMIT 1
-	`, userID, userID).Scan(&roomID, &tier, &stake, &status, &aUserID, &aChatID, &bUserID, &bChatID)
+		SELECT r.id, r.tier, r.stake_amount, r.status,
+		       r.player_a_user_id, r.player_a_chat_id,
+		       r.player_b_user_id, r.player_b_chat_id,
+		       g.game_id
+		FROM ironfist_pvp_rooms r
+		LEFT JOIN ironfist_games g ON g.pvp_room_id = r.id
+		WHERE (r.player_a_user_id = ? OR r.player_b_user_id = ?)
+		  AND r.status IN ('matching', 'matched')
+		ORDER BY r.id DESC LIMIT 1
+	`, userID, userID).Scan(&roomID, &tier, &stake, &status, &aUserID, &aChatID, &bUserID, &bChatID, &gameID)
 	if err == sql.ErrNoRows {
 		return &PVPMatchResult{Status: "idle"}, nil
 	}
@@ -806,6 +843,7 @@ func (s *IronFistService) GetPVPQueueStatus(ctx context.Context, userID uint64) 
 	return &PVPMatchResult{
 		Status:   "matched",
 		RoomID:   roomID,
+		GameID:   gameID.String,
 		Tier:     tier,
 		Stake:    stake,
 		Opponent: opp,
@@ -1118,6 +1156,10 @@ func (s *IronFistService) SweepTimeoutPVPMatched(ctx context.Context) (int, erro
 // The fee (destruction + treasury) is not actually transferred during the MVP stage, but is only written into the room field and transaction notes for reconciliation;
 // In the future, it will be changed to real burn/treasury transfer when connecting to the on-chain contract.
 func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID uint64, callerResult string) (*PVPSettleResult, error) {
+	return nil, ErrLegacyPVPReportDisabled
+
+	// Retained temporarily for migration archaeology. Authoritative games call
+	// settleWageredPVPTx inside their terminal game transaction instead.
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err

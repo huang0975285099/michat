@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"strconv"
 	"strings"
@@ -234,6 +235,12 @@ func (s *IdentityService) DeleteAccount(ctx context.Context, chatID string) erro
 		return err
 	}
 	defer tx.Rollback()
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM users WHERE id = ? FOR UPDATE`, userID).Scan(&userID); err != nil {
+		return err
+	}
+	if err = s.eraseIronFistAccountTx(ctx, tx, userID, chatID); err != nil {
+		return err
+	}
 
 	// Read receipts are tombstones that disappear after the sender reads them. After the reader logs out, it still needs to be retained until the sender
 	// Go online again and synchronize; only if the current account itself is the sender, it can be deleted together.
@@ -241,6 +248,9 @@ func (s *IdentityService) DeleteAccount(ctx context.Context, chatID string) erro
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM message_deliveries WHERE msg_from = ? OR msg_to = ?`, chatID, chatID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM device_tokens WHERE chat_id = ?`, chatID); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM friendships WHERE user_id = ? OR friend_id = ?`, userID, userID); err != nil {
@@ -256,8 +266,12 @@ func (s *IdentityService) DeleteAccount(ctx context.Context, chatID string) erro
 		return err
 	}
 
-	s.revokeAllSessions(ctx, chatID)
-	s.redis.Del(ctx, pkgredis.OnlineKey(chatID))
+	if err := s.revokeAllSessions(ctx, chatID); err != nil {
+		log.Printf("[identity] account %s deleted but session revocation cleanup failed: %v", chatID, err)
+	}
+	if err := s.eraseAccountRedisData(ctx, chatID); err != nil {
+		log.Printf("[identity] account %s deleted but Redis trace cleanup failed: %v", chatID, err)
+	}
 	return nil
 }
 

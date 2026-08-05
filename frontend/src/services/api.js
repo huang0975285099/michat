@@ -77,7 +77,6 @@ export const deviceApi = {
 // $FIST Token
 export const fistApi = {
   getAccount: () => api.get('/fist/account'),
-  claimPvEReward: () => api.post('/fist/pve-reward'),
   getTransactions: (beforeId, limit = 20) =>
     api.get('/fist/transactions', { params: { before_id: beforeId || undefined, limit } })
 }
@@ -85,7 +84,6 @@ export const fistApi = {
 // Tekken Battle Statistics and Achievements
 export const ironfistApi = {
   getStats: () => api.get('/games/ironfist/stats'),
-  reportMatch: (payload) => api.post('/games/ironfist/stats', payload),
   listMatches: (beforeId, limit = 20) =>
     api.get('/games/ironfist/matches', { params: { before_id: beforeId || undefined, limit } }),
   // Join the PVP matching queue → return {status:'queued'|'matched', room_id, opponent, tier, stake}
@@ -94,6 +92,11 @@ export const ironfistApi = {
   cancelPVPQueue: () => api.delete('/games/ironfist/pvp/queue'),
   // Query the current matching queue status → {status:'idle'|'queued'|'matched', ...} (Polling when WS notification is lost)
   getPVPQueueStatus: () => api.get('/games/ironfist/pvp/queue'),
+  startPVESession: (replace = false) => api.post('/games/ironfist/pve/sessions', { replace }),
+  getActiveSession: () => api.get('/games/ironfist/sessions/active'),
+  getGame: (id) => api.get(`/games/ironfist/games/${encodeURIComponent(id)}`),
+  submitAction: (id, body) => api.post(`/games/ironfist/games/${encodeURIComponent(id)}/actions`, body),
+  resignGame: (id) => api.post(`/games/ironfist/games/${encodeURIComponent(id)}/resign`),
 }
 
 // Version information (public interface, returns the latest online version)

@@ -165,3 +165,48 @@ export function initialState() {
     bothChargedStalemate: 0,
   }
 }
+
+// Adapter used only to keep offline practice aligned with the server's neutral
+// seat-based rules fixtures. Trusted online games never resolve in JavaScript.
+export function resolveAuthoritativeRound(actionA, actionB, before) {
+  const resolved = resolveRound(actionA, actionB, {
+    playerHP: before.hp_a,
+    opponentHP: before.hp_b,
+    playerCharged: before.charged_a,
+    opponentCharged: before.charged_b,
+    playerChargeUnused: before.charge_unused_a,
+    opponentChargeUnused: before.charge_unused_b,
+    consecutiveNoDamageRounds: before.consecutive_no_damage_rounds,
+    totalRounds: before.total_rounds,
+    bothChargedStalemate: before.both_charged_stalemate,
+  })
+
+  const outcome = {
+    win: 'win_a',
+    lose: 'win_b',
+    draw: 'draw',
+    doubleLose: 'doubleLose',
+  }[resolved.gameResult] || ''
+
+  return {
+    damageA: resolved.playerDmg,
+    damageB: resolved.opponentDmg,
+    environmentDamage: resolved.envDmg,
+    state: {
+      hp_a: resolved.playerHP,
+      hp_b: resolved.opponentHP,
+      charged_a: resolved.playerCharged,
+      charged_b: resolved.opponentCharged,
+      charge_unused_a: resolved.playerChargeUnused,
+      charge_unused_b: resolved.opponentChargeUnused,
+      consecutive_no_damage_rounds: resolved.consecutiveNoDamageRounds,
+      total_rounds: resolved.totalRounds,
+      both_charged_stalemate: resolved.bothChargedStalemate,
+      ai_charge_interrupted:
+        actionB === 'charge' && resolved.opponentDmg > 0
+          ? before.ai_charge_interrupted + 1
+          : 0,
+    },
+    outcome,
+  }
+}

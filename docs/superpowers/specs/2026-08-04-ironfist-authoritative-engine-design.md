@@ -1,5 +1,7 @@
 # IronFist Unified Server-Authoritative Engine Design
 
+Implementation status: implemented on `feature/ironfist-authority` on 2026-08-04. Migration 021, authoritative routes, deadline/outbox processing, legacy rollout, trusted-mode frontend routing, and complete account-erasure ordering are included. MySQL-backed integration tests require `MYSQL_TEST_DSN` and are skipped when it is unavailable.
+
 Date: 2026-08-04
 
 Status: approved design, pending implementation plan

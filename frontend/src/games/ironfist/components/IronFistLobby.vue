@@ -91,6 +91,18 @@
             <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
         </div>
 
+        <div class="mode-card" @click="$emit('start-practice')">
+            <div class="mode-emoji">🎯</div>
+            <div class="mode-text">
+                <div class="mode-name">
+                    Offline practice
+                    <span class="mode-tag mode-tag--fun">No rewards</span>
+                </div>
+                <div class="mode-desc">Local training only · results never affect records or {{ currency }}</div>
+            </div>
+            <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
+        </div>
+
         <div class="mode-card mode-card--pvp" @click="$emit('open-pvp')">
             <div class="mode-emoji">⚔️</div>
             <div class="mode-text">
@@ -239,6 +251,7 @@ defineEmits([
     "open-records",
     "open-achievements",
     "start-pve",
+    "start-practice",
     "open-pvp",
     "invite",
 ]);

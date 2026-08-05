@@ -1,0 +1,57 @@
+[
+  {
+    "name": "attack-vs-defend",
+    "before": {"hp_a":100,"hp_b":100,"charged_a":false,"charged_b":false,"charge_unused_a":0,"charge_unused_b":0,"consecutive_no_damage_rounds":0,"total_rounds":0,"both_charged_stalemate":0,"ai_charge_interrupted":0},
+    "action_a": "attack",
+    "action_b": "defend",
+    "after": {"hp_a":100,"hp_b":95,"charged_a":false,"charged_b":false,"charge_unused_a":0,"charge_unused_b":0,"consecutive_no_damage_rounds":0,"total_rounds":1,"both_charged_stalemate":0,"ai_charge_interrupted":0},
+    "damage_a": 0,
+    "damage_b": 5,
+    "environment_damage": 0,
+    "outcome": ""
+  },
+  {
+    "name": "charged-attack-is-consumed",
+    "before": {"hp_a":100,"hp_b":100,"charged_a":true,"charged_b":false,"charge_unused_a":0,"charge_unused_b":0,"consecutive_no_damage_rounds":0,"total_rounds":0,"both_charged_stalemate":0,"ai_charge_interrupted":0},
+    "action_a": "attack",
+    "action_b": "attack",
+    "after": {"hp_a":88,"hp_b":76,"charged_a":false,"charged_b":false,"charge_unused_a":0,"charge_unused_b":0,"consecutive_no_damage_rounds":0,"total_rounds":1,"both_charged_stalemate":0,"ai_charge_interrupted":0},
+    "damage_a": 12,
+    "damage_b": 24,
+    "environment_damage": 0,
+    "outcome": ""
+  },
+  {
+    "name": "low-hp-buff-then-shield",
+    "before": {"hp_a":10,"hp_b":15,"charged_a":false,"charged_b":false,"charge_unused_a":0,"charge_unused_b":0,"consecutive_no_damage_rounds":0,"total_rounds":0,"both_charged_stalemate":0,"ai_charge_interrupted":0},
+    "action_a": "attack",
+    "action_b": "attack",
+    "after": {"hp_a":4,"hp_b":6,"charged_a":false,"charged_b":false,"charge_unused_a":0,"charge_unused_b":0,"consecutive_no_damage_rounds":0,"total_rounds":1,"both_charged_stalemate":0,"ai_charge_interrupted":0},
+    "damage_a": 6,
+    "damage_b": 9,
+    "environment_damage": 0,
+    "outcome": ""
+  },
+  {
+    "name": "environment-simultaneous-knockout",
+    "before": {"hp_a":5,"hp_b":5,"charged_a":false,"charged_b":false,"charge_unused_a":0,"charge_unused_b":0,"consecutive_no_damage_rounds":4,"total_rounds":4,"both_charged_stalemate":0,"ai_charge_interrupted":0},
+    "action_a": "defend",
+    "action_b": "defend",
+    "after": {"hp_a":0,"hp_b":0,"charged_a":false,"charged_b":false,"charge_unused_a":0,"charge_unused_b":0,"consecutive_no_damage_rounds":5,"total_rounds":5,"both_charged_stalemate":0,"ai_charge_interrupted":0},
+    "damage_a": 0,
+    "damage_b": 0,
+    "environment_damage": 5,
+    "outcome": "draw"
+  },
+  {
+    "name": "maximum-round-double-lose",
+    "before": {"hp_a":5,"hp_b":5,"charged_a":false,"charged_b":false,"charge_unused_a":0,"charge_unused_b":0,"consecutive_no_damage_rounds":0,"total_rounds":19,"both_charged_stalemate":0,"ai_charge_interrupted":0},
+    "action_a": "counter",
+    "action_b": "counter",
+    "after": {"hp_a":2,"hp_b":2,"charged_a":false,"charged_b":false,"charge_unused_a":0,"charge_unused_b":0,"consecutive_no_damage_rounds":0,"total_rounds":20,"both_charged_stalemate":0,"ai_charge_interrupted":0},
+    "damage_a": 3,
+    "damage_b": 3,
+    "environment_damage": 0,
+    "outcome": "doubleLose"
+  }
+]
