@@ -146,6 +146,98 @@ test('wave animation preserves survivor displays and creates only actual refills
   assert.deepEqual(survivor.boardPosition, { row: 1, col: 1 })
 })
 
+test('multi-wave resolution remaps survivors before the next clear without a full redraw', async () => {
+  const destroyed = []
+  const created = []
+  let fullRedraws = 0
+  const signature = (cell) => `${cell.id}:${cell.special}:${cell.jelly}:${cell.frosting}`
+  const cell = (id) => ({ id, special: null, jelly: false, frosting: 0 })
+  const makeDisplay = (name, value, position) => ({
+    name,
+    cellSignature: signature(value),
+    boardPosition: { ...position },
+    positions: [],
+    setPosition(x, y) { this.x = x; this.y = y; this.positions.push({ x, y }); return this },
+    setAlpha(alpha) { this.alpha = alpha; return this },
+    disableInteractive() {},
+    destroy() { destroyed.push({ name: this.name, at: { ...this.boardPosition } }) },
+  })
+  const initialValues = Array.from({ length: 8 }, (_, row) => cell(`c${row}`))
+  initialValues[0] = cell('berry')
+  initialValues[1] = cell('doomed')
+  const initialDisplays = initialValues.map((value, row) => makeDisplay(
+    row === 0 ? 'survivor' : `initial-${row}`,
+    value,
+    { row, col: 0 },
+  ))
+  const waveOneBoard = Array.from({ length: 8 }, () => Array(8).fill(null))
+  waveOneBoard[0][0] = cell('mint')
+  waveOneBoard[1][0] = initialValues[0]
+  for (let row = 2; row < 8; row += 1) waveOneBoard[row][0] = initialValues[row]
+  const waveTwoBoard = structuredClone(waveOneBoard)
+  waveTwoBoard[0][0] = cell('orange')
+  waveTwoBoard[1][0] = cell('lemon')
+  const waveOne = {
+    removed: [{ row: 1, col: 0 }],
+    board: waveOneBoard,
+    movements: [
+      ...Array.from({ length: 6 }, (_, index) => {
+        const row = 7 - index
+        return { from: { row, col: 0 }, to: { row, col: 0 } }
+      }),
+      { from: { row: 0, col: 0 }, to: { row: 1, col: 0 } },
+    ],
+    refills: [{ from: { row: -1, col: 0 }, to: { row: 0, col: 0 } }],
+  }
+  const waveTwo = {
+    removed: [{ row: 1, col: 0 }, { row: 0, col: 0 }],
+    board: waveTwoBoard,
+    movements: Array.from({ length: 6 }, (_, index) => {
+      const row = 7 - index
+      return { from: { row, col: 0 }, to: { row, col: 0 } }
+    }),
+    refills: [
+      { from: { row: -1, col: 0 }, to: { row: 1, col: 0 } },
+      { from: { row: -2, col: 0 }, to: { row: 0, col: 0 } },
+    ],
+  }
+  const view = {
+    cells: new Map(initialDisplays.map((display, row) => [`${row},0`, display])),
+    enabled: false,
+    board: null,
+    layout: { x: 0, y: 0, cellSize: 10 },
+    layer: { add() {} },
+    scene: { tweens: { add: ({ onComplete }) => onComplete() } },
+    cellCenter: BoardView.prototype.cellCenter,
+    animateWaveMovement: BoardView.prototype.animateWaveMovement,
+    reconcileBoard: BoardView.prototype.reconcileBoard,
+    createCell: (value, position) => {
+      const display = makeDisplay(`refill-${created.length + 1}`, value, position)
+      created.push({ display, destination: { ...position } })
+      return display
+    },
+    replaceDisplay() { throw new Error('settled board must not replace unchanged displays') },
+    render() { fullRedraws += 1 },
+  }
+
+  await BoardView.prototype.animateResolution.call(view, [waveOne, waveTwo], waveTwoBoard)
+
+  assert.deepEqual(destroyed.filter(({ name }) => name === 'survivor'), [
+    { name: 'survivor', at: { row: 1, col: 0 } },
+  ])
+  assert.deepEqual(destroyed.filter(({ name }) => name === 'refill-1'), [
+    { name: 'refill-1', at: { row: 0, col: 0 } },
+  ])
+  assert.deepEqual(created.map(({ destination }) => destination), [
+    { row: 0, col: 0 },
+    { row: 1, col: 0 },
+    { row: 0, col: 0 },
+  ])
+  assert.ok(created.every(({ display }) => display.positions[0].y < 0))
+  for (let row = 2; row < 8; row += 1) assert.equal(view.cells.get(`${row},0`), initialDisplays[row])
+  assert.equal(fullRedraws, 0)
+})
+
 test('accepted turn keeps input locked through swap and resolution promises', async () => {
   const board = createBoard({ seed: 7 })
   const move = findLegalMoves(board)[0]
