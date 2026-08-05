@@ -220,8 +220,12 @@ function confirmReset() {
             ok: "I'm sure I want to log out",
             color: "negative",
         }).onOk(async () => {
-            await identity.clear();
-            router.replace("/#/init");
+            try {
+                await identity.clear();
+                router.replace("/#/init");
+            } catch {
+                $q.notify({ type: "negative", message: "Account was not deleted. Your recovery key and local messages were retained." });
+            }
         });
     });
 }
