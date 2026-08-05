@@ -25,6 +25,7 @@ dist/config.prod.yaml
 
 # IDE / AI
 .claude/
+.worktrees/
 .idea/
 .vscode/
 *.swp
