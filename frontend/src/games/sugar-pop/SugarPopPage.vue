@@ -4,13 +4,14 @@
 
 <script setup>
 import { onMounted, onUnmounted, ref } from 'vue'
+import Phaser from 'phaser'
 import { createSugarPopGame } from './game/createSugarPopGame.js'
 
 const container = ref(null)
 let game
 
 onMounted(() => {
-  game = createSugarPopGame(container.value)
+  game = createSugarPopGame(container.value, { phaser: Phaser })
 })
 
 onUnmounted(() => {

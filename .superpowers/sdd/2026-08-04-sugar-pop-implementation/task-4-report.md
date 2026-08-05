@@ -8,6 +8,20 @@ Verification:
 
 - `npm run test:sugar-pop` — passed (31 tests).
 - `npm run build` — passed.
+
+## Public module import revision
+
+`createSugarPopGame.js` no longer imports Phaser at module evaluation time, so Node can import its public `createSugarPopConfig` re-export directly. The Vue page imports Phaser at the browser boundary and passes that runtime to the synchronous game factory; the factory still constructs and returns `new Phaser.Game(createSugarPopConfig(container))` during mounting.
+
+The smoke test now imports `createSugarPopConfig` from `createSugarPopGame.js` itself and verifies the real responsive, no-audio configuration and five concrete scene classes.
+
+Final verification:
+
+- `npm run test:sugar-pop` — passed (31 tests).
+- `npm run test:ironfist` — passed (2 tests).
+- `npm run test:version` — passed (4 tests).
+- `npm run lint` — passed with 7 existing unrelated warnings.
+- `npm run build` — passed.
 - `git diff --check` — passed.
 - `npm run lint` — could not run because the resolved ESLint 9 expects `eslint.config.*`, while this repository does not provide one.
 

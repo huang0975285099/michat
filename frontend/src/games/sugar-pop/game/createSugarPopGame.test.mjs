@@ -8,8 +8,8 @@ import LevelScene from '../scenes/LevelScene.js'
 import OverlayScene from '../scenes/OverlayScene.js'
 import TransitionScene from '../scenes/TransitionScene.js'
 
-test('createSugarPopConfig returns a responsive no-audio config with concrete scenes', async () => {
-  const { createSugarPopConfig } = await import('./sugarPopConfig.js')
+test('public createSugarPopGame module exposes the concrete Node-safe config', async () => {
+  const { createSugarPopConfig } = await import('./createSugarPopGame.js')
 
   const config = createSugarPopConfig('sugar-pop-canvas')
 
