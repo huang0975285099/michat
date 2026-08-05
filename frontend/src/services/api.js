@@ -94,6 +94,11 @@ export const ironfistApi = {
   cancelPVPQueue: () => api.delete('/games/ironfist/pvp/queue'),
   // Query the current matching queue status → {status:'idle'|'queued'|'matched', ...} (Polling when WS notification is lost)
   getPVPQueueStatus: () => api.get('/games/ironfist/pvp/queue'),
+  startPVESession: (replace = false) => api.post('/games/ironfist/pve/sessions', { replace }),
+  getActiveSession: () => api.get('/games/ironfist/sessions/active'),
+  getGame: (id) => api.get(`/games/ironfist/games/${encodeURIComponent(id)}`),
+  submitAction: (id, body) => api.post(`/games/ironfist/games/${encodeURIComponent(id)}/actions`, body),
+  resignGame: (id) => api.post(`/games/ironfist/games/${encodeURIComponent(id)}/resign`),
 }
 
 // Version information (public interface, returns the latest online version)
