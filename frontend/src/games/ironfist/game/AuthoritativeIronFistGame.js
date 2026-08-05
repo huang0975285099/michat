@@ -87,7 +87,10 @@ export class AuthoritativeIronFistGame {
     const view = await this.resume(this.gameId)
     if (typeof payload?.connected !== 'boolean' || payload.seat === view.seat) return
     if (!payload.connected) {
-      const deadline = Date.parse(view.opponent_reconnect_deadline || payload.reconnect_deadline)
+      // The outbox can deliver an older disconnect after a successful reconnect.
+      // Only the freshly fetched authoritative view may enter reconnect waiting.
+      if (!view.opponent_reconnect_deadline) return
+      const deadline = Date.parse(view.opponent_reconnect_deadline)
       const serverTime = Date.parse(view.server_time)
       const timeoutMs = Number.isFinite(deadline) && Number.isFinite(serverTime)
         ? Math.max(0, deadline - serverTime)
@@ -96,10 +99,11 @@ export class AuthoritativeIronFistGame {
       this._emit('opponent-disconnected', { timeoutMs })
       return
     }
+    if (view.status !== 'active' || view.my_locked || view.last_round || !view.action_deadline) return
     this._emit('phase', 'deciding')
     this._emit('round-resume', {
       round: view.current_round,
-      startedAt: view.action_deadline ? Date.parse(view.action_deadline) - 30_000 : Date.parse(view.server_time),
+      startedAt: Date.parse(view.action_deadline) - 30_000,
     })
   }
 

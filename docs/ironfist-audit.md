@@ -103,3 +103,17 @@ go test ./migrations -run TestAuthorityMigrationCreatesConstraints -count=1 -v  
 3. 增加真实 MySQL 事务、迁移和并发 smoke test。
 4. 清理 IronFist 相关 lint warning，再处理全项目 warning。
 5. Babylon.js 拆包和 Node ESM 警告治理已完成；后续仅需按性能数据决定是否继续细分 3D chunk。
+
+## TODO
+
+- [ ] 在高延迟、丢包和重连事件乱序条件下，验证 PvP 重连倒计时不会跳变或倒退。
+- [ ] 生产部署验收：MySQL 迁移幂等与回滚、Redis/WebSocket 多实例广播、HTTPS/WSS 证书与跨网络访问。
+
+### 生产部署检查记录（2026-08-05）
+
+- [x] Compose 配置路径已修正为 `./backend/config.prod.yaml`。
+- [x] Compose 已强制要求通过环境注入 `JWT_SECRET`、`MYSQL_DSN`、`TURN_SECRET`；不得依赖提交文件中的明文凭据。
+- [x] 启动流程包含 `migrations.AutoMigrate`，Redis Pub/Sub 使用 `ironfist:events`，各实例可将事件投递到本地 WebSocket Hub。
+- [ ] 在生产主机执行 `docker compose config --quiet`、双后端实例广播测试和真实迁移回滚演练。
+- [ ] 轮换当前生产配置中已经存在过的敏感凭据，并将生产配置文件限制为部署机私有文件。
+- [ ] 用真实域名、证书和外网设备验证 HTTPS/WSS、WebSocket 长连接、断线重连及跨网络 PvP。
