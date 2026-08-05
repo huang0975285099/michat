@@ -104,6 +104,8 @@ type lockedGame struct {
 	AISeed              []byte
 	ActionDeadlineA     sql.NullTime
 	ActionDeadlineB     sql.NullTime
+	RemainingActionMSA  sql.NullInt64
+	RemainingActionMSB  sql.NullInt64
 	DisconnectDeadlineA sql.NullTime
 	DisconnectDeadlineB sql.NullTime
 	LastActivityAt      time.Time
@@ -302,7 +304,7 @@ func (s *IronFistService) SubmitAuthoritativeAction(ctx context.Context, userID 
 			return original, tx.Commit()
 		}
 	}
-	if err := advanceDueGameTx(ctx, tx, game, now); err != nil {
+	if err := s.advanceDueGameTx(ctx, tx, game, now); err != nil {
 		var authorityErr *AuthorityError
 		if errors.As(err, &authorityErr) && authorityErr.Code == "session_expired" {
 			if commitErr := tx.Commit(); commitErr != nil {
@@ -359,6 +361,15 @@ func (s *IronFistService) SubmitAuthoritativeAction(ctx context.Context, userID 
 	}
 
 	view := gameViewForSeat(game, seat, now)
+	eventType := "ironfist_player_locked"
+	if game.Status == "completed" {
+		eventType = "ironfist_game_finished"
+	} else if game.LastRound != nil && game.LastRound.Round == command.Round {
+		eventType = "ironfist_round_resolved"
+	}
+	if err := s.enqueueIronFistOutboxTx(ctx, tx, game, eventType, seat, now); err != nil {
+		return nil, err
+	}
 	responseJSON, err := json.Marshal(view)
 	if err != nil {
 		return nil, err
@@ -516,17 +527,6 @@ func authoritySeat(game *lockedGame, userID uint64) (ironfistengine.Seat, bool) 
 
 func authorityGameExpired(game *lockedGame, now time.Time) bool {
 	return game.Mode == "pve" && game.ExpiresAt.Valid && !now.Before(game.ExpiresAt.Time)
-}
-
-func advanceDueGameTx(ctx context.Context, tx *sql.Tx, game *lockedGame, now time.Time) error {
-	if authorityGameExpired(game, now) && game.Status == "active" {
-		if err := abandonPVEGameTx(ctx, tx, game.GameID, game.PlayerAUserID, "session_expired", now); err != nil {
-			return err
-		}
-		game.Status = "abandoned"
-		return authorityError("session_expired", nil)
-	}
-	return nil
 }
 
 func (s *IronFistService) authorityNow() time.Time {

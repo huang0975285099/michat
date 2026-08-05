@@ -247,6 +247,7 @@ func (h *Hub) SetIronFistService(svc *service.IronFistService) {
 // Register Register the client, mark online, notify friends
 func (h *Hub) Register(c *Client) {
 	h.mu.Lock()
+	_, wasOnline := h.clients[c.ChatID]
 	// If there is already a connection with the same chatID, notify the old connection to exit (do not close(send) directly to avoid producer panic
 	// And let the writePump of the old connection recycle the unsent messages in the buffer into the offline queue when exiting)
 	if old, ok := h.clients[c.ChatID]; ok {
@@ -254,6 +255,11 @@ func (h *Hub) Register(c *Client) {
 	}
 	h.clients[c.ChatID] = c
 	h.mu.Unlock()
+	if !wasOnline && h.ironFistSvc != nil {
+		if err := h.ironFistSvc.SetIronFistPresence(context.Background(), c.UserID, true); err != nil {
+			log.Printf("[ws] set IronFist presence online for %s: %v", c.ChatID, err)
+		}
+	}
 
 	ctx := context.Background()
 	h.redis.Set(ctx, pkgredis.OnlineKey(c.ChatID), "1", pkgredis.OnlineTTL)
@@ -280,6 +286,11 @@ func (h *Hub) Unregister(c *Client) {
 	// If the new connection has preempted the chatID (such as reconnection), skip the cleanup to avoid accidentally deleting the Redis key of the new connection and accidentally sending status:false
 	if !isCurrent {
 		return
+	}
+	if h.ironFistSvc != nil {
+		if err := h.ironFistSvc.SetIronFistPresence(context.Background(), c.UserID, false); err != nil {
+			log.Printf("[ws] set IronFist presence offline for %s: %v", c.ChatID, err)
+		}
 	}
 
 	ctx := context.Background()
@@ -310,6 +321,32 @@ func (h *Hub) Unregister(c *Client) {
 				log.Printf("[ws] auto cancel pvp queue for %s: %v", chatID, err)
 			}
 		}(c.ChatID)
+	}
+}
+
+// DeliverIronFistEvent fans a committed event out to recipients connected to
+// this server. A state fetch is the recovery path for missed notifications.
+func (h *Hub) DeliverIronFistEvent(raw string) {
+	var event service.IronFistOutboxEvent
+	if err := json.Unmarshal([]byte(raw), &event); err != nil {
+		log.Printf("[ws] decode IronFist outbox event: %v", err)
+		return
+	}
+	message, err := json.Marshal(Message{Type: event.Type, Payload: event.Payload})
+	if err != nil {
+		return
+	}
+	for _, chatID := range event.RecipientChatIDs {
+		h.mu.RLock()
+		client := h.clients[chatID]
+		h.mu.RUnlock()
+		if client == nil {
+			continue
+		}
+		select {
+		case client.send <- message:
+		default:
+		}
 	}
 }
 
@@ -607,12 +644,6 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 	case "game_invite", "game_accept", "game_reject", "game_ready",
 		"game_move", "game_bomb", "game_powerup", "game_death", "game_resign":
 		h.handleGameRelay(c, msg.Type, msg.Payload)
-	case "ironfist_action":
-		// Temporarily save to Redis (for disconnection and reconnection) + relay to the other party
-		h.handleIronFistAction(c, msg.Payload)
-	case "ironfist_reconnect":
-		// Return the complete action history of this room (ironfist_replay)
-		h.handleIronFistReconnect(c, msg.Payload)
 	case "ironfist_lobby_join":
 		// Join the PVP lobby online list and broadcast updates
 		h.handleIronFistLobbyJoin(c)

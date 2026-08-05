@@ -18,10 +18,11 @@ import (
 
 // IronFistService Iron Fist battle statistics and achievement service
 type IronFistService struct {
-	db        *sql.DB
-	now       func() time.Time
-	random    io.Reader
-	newGameID func() string
+	db            *sql.DB
+	now           func() time.Time
+	random        io.Reader
+	newGameID     func() string
+	outboxPublish func(context.Context, string) error
 }
 
 func NewIronFistService(db *sql.DB) *IronFistService {

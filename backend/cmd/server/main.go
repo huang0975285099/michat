@@ -146,6 +146,33 @@ func main() {
 
 	// Enable the PVP lobby online list function (lobby users can view each other’s avatars/balances/games)
 	hub.SetIronFistService(ironFistSvc)
+	ironFistSvc.SetIronFistOutboxPublisher(func(ctx context.Context, payload string) error {
+		return rdb.Publish(ctx, pkgredis.IronFistEventsChannel, payload).Err()
+	})
+
+	// Redis carries only disposable post-commit notifications. Each server fans
+	// events out to its local sockets; clients recover gaps from MySQL over HTTP.
+	go func() {
+		sub := rdb.Subscribe(context.Background(), pkgredis.IronFistEventsChannel)
+		defer sub.Close()
+		for message := range sub.Channel() {
+			hub.DeliverIronFistEvent(message.Payload)
+		}
+	}()
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if _, err := ironFistSvc.SweepDueAuthoritativeGames(ctx); err != nil {
+				log.Printf("[ironfist] sweep authoritative deadlines: %v", err)
+			}
+			if _, err := ironFistSvc.PublishIronFistOutbox(ctx, 50); err != nil {
+				log.Printf("[ironfist] publish outbox: %v", err)
+			}
+			cancel()
+		}
+	}()
 
 	identHandler := handler.NewIdentityHandler(identSvc, inviteSvc, friendSvc, hub)
 	userHandler := handler.NewUserHandler(identSvc)

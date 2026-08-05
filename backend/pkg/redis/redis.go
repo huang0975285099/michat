@@ -11,12 +11,13 @@ import (
 )
 
 const (
-	SessionTTL         = 30 * 24 * time.Hour //30 days
-	OnlineTTL          = 60 * time.Second    //Online heartbeat 60s
-	OfflineMsgTTL      = 7 * 24 * time.Hour  //Offline messages 7 days
-	ReauthChallengeTTL = 5 * time.Minute     //The challenge code is valid for 5 minutes
-	InviteCodeTTL      = 7 * 24 * time.Hour  //The invitation code is valid for 7 days
-	IronFistActionsTTL = 30 * time.Minute    //Tekken game action log retention window (covers 60s reconnection + extreme situations)
+	SessionTTL            = 30 * 24 * time.Hour //30 days
+	OnlineTTL             = 60 * time.Second    //Online heartbeat 60s
+	OfflineMsgTTL         = 7 * 24 * time.Hour  //Offline messages 7 days
+	ReauthChallengeTTL    = 5 * time.Minute     //The challenge code is valid for 5 minutes
+	InviteCodeTTL         = 7 * 24 * time.Hour  //The invitation code is valid for 7 days
+	IronFistActionsTTL    = 30 * time.Minute    //Tekken game action log retention window (covers 60s reconnection + extreme situations)
+	IronFistEventsChannel = "ironfist:events"
 )
 
 // NewInMemory starts an in-process memory Redis (miniredis) and returns the client connected to it.

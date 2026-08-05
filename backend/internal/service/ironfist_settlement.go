@@ -134,14 +134,13 @@ func (s *IronFistService) settleCompletedGameTx(ctx context.Context, tx *sql.Tx,
 }
 
 func (s *IronFistService) settleWageredPVPTx(ctx context.Context, tx *sql.Tx, game *lockedGame) error {
-	var status, tier, chatA, chatB string
+	var status, tier string
 	var stake int64
 	var userA, userB uint64
 	err := tx.QueryRowContext(ctx, `
-		SELECT status, tier, stake_amount, player_a_user_id, player_b_user_id,
-		       player_a_chat_id, player_b_chat_id
+		SELECT status, tier, stake_amount, player_a_user_id, player_b_user_id
 		FROM ironfist_pvp_rooms WHERE id = ? FOR UPDATE`, game.PVPRoomID.Int64).Scan(
-		&status, &tier, &stake, &userA, &userB, &chatA, &chatB,
+		&status, &tier, &stake, &userA, &userB,
 	)
 	if err != nil {
 		return err
@@ -168,11 +167,11 @@ func (s *IronFistService) settleWageredPVPTx(ctx context.Context, tx *sql.Tx, ga
 	roomRef := pvpRoomRef(uint64(game.PVPRoomID.Int64))
 	switch game.Result {
 	case ironfistengine.WinA:
-		if err := creditAuthorityWagerTx(ctx, tx, userA, settlement.WinnerAmount, true, "pvp_win", roomRef, "game:"+game.GameID+":pvp-win", "Authoritative PvP win vs "+chatB); err != nil {
+		if err := creditAuthorityWagerTx(ctx, tx, userA, settlement.WinnerAmount, true, "pvp_win", roomRef, "game:"+game.GameID+":pvp-win", "Authoritative PvP win ("+tier+", "+game.GameID+")"); err != nil {
 			return err
 		}
 	case ironfistengine.WinB:
-		if err := creditAuthorityWagerTx(ctx, tx, userB, settlement.WinnerAmount, true, "pvp_win", roomRef, "game:"+game.GameID+":pvp-win", "Authoritative PvP win vs "+chatA); err != nil {
+		if err := creditAuthorityWagerTx(ctx, tx, userB, settlement.WinnerAmount, true, "pvp_win", roomRef, "game:"+game.GameID+":pvp-win", "Authoritative PvP win ("+tier+", "+game.GameID+")"); err != nil {
 			return err
 		}
 	case ironfistengine.Draw, ironfistengine.DoubleLose:

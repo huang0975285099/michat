@@ -19,7 +19,8 @@ type authorityQuerier interface {
 const authorityGameColumns = `
 	game_id, mode, status, player_a_user_id, player_b_user_id, pvp_room_id,
 	rules_version, current_round, state_version, state_json, ai_seed,
-	action_deadline_a, action_deadline_b, disconnect_deadline_a, disconnect_deadline_b,
+	action_deadline_a, action_deadline_b, remaining_action_ms_a, remaining_action_ms_b,
+	disconnect_deadline_a, disconnect_deadline_b,
 	last_activity_at, expires_at, result, winner_user_id, finish_reason, finished_at, settled_at`
 
 func activePVEGameIDTx(ctx context.Context, tx *sql.Tx, userID uint64) (string, error) {
@@ -66,7 +67,8 @@ func scanAuthorityGame(row *sql.Row) (*lockedGame, error) {
 	err := row.Scan(
 		&game.GameID, &game.Mode, &game.Status, &game.PlayerAUserID, &playerB, &game.PVPRoomID,
 		&rulesVersion, &game.CurrentRound, &game.StateVersion, &stateJSON, &game.AISeed,
-		&game.ActionDeadlineA, &game.ActionDeadlineB, &game.DisconnectDeadlineA, &game.DisconnectDeadlineB,
+		&game.ActionDeadlineA, &game.ActionDeadlineB, &game.RemainingActionMSA, &game.RemainingActionMSB,
+		&game.DisconnectDeadlineA, &game.DisconnectDeadlineB,
 		&game.LastActivityAt, &game.ExpiresAt, &result, &game.WinnerUserID, &game.FinishReason, &game.FinishedAt, &game.SettledAt,
 	)
 	if err != nil {

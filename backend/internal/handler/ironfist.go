@@ -111,6 +111,7 @@ func (h *IronFistHandler) EnqueuePVP(c *gin.Context) {
 		}
 		h.hub.NotifyPVPMatched(res.Waiting, gin.H{
 			"room_id":  res.RoomID,
+			"game_id":  res.GameID,
 			"opponent": oppProfile,
 			"tier":     res.Tier,
 			"stake":    res.Stake,
