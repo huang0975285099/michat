@@ -1,5 +1,6 @@
 import {
   applyGravity,
+  createBoard,
   findLegalMoves,
   findMatches,
   isAdjacent,
@@ -10,6 +11,7 @@ import {
 const BASE_REMOVAL_SCORE = 10
 const SPECIAL_ACTIVATION_BONUS = 25
 const MAX_CASCADE_WAVES = 100
+const STABLE_FALLBACK_SEED = 0x5A17E
 
 function cloneBoard(board) {
   return board.map((row) => row.map((cell) => (cell == null ? null : { ...cell })))
@@ -37,8 +39,6 @@ function tryColorBombSwap(board, swap) {
   const fromIsBomb = fromCell.special === 'color-bomb'
   const toIsBomb = toCell.special === 'color-bomb'
   if (fromIsBomb === toIsBomb) return null
-  const counterpart = fromIsBomb ? toCell : fromCell
-  if (counterpart.special) return null
 
   const swapped = cloneBoard(board)
   ;[swapped[swap.from.row][swap.from.col], swapped[swap.to.row][swap.to.col]]
@@ -47,6 +47,26 @@ function tryColorBombSwap(board, swap) {
     board: swapped,
     triggered: [fromIsBomb ? swap.to : swap.from],
   }
+}
+
+function hasPlayableMove(board) {
+  if (findLegalMoves(board).length > 0) return true
+  for (let row = 0; row < board.length; row += 1) {
+    for (let col = 0; col < board[row].length; col += 1) {
+      const from = { row, col }
+      for (const to of [{ row, col: col + 1 }, { row: row + 1, col }]) {
+        if (tryColorBombSwap(board, { from, to })) return true
+      }
+    }
+  }
+  return false
+}
+
+function stableFallback(board) {
+  const generated = createBoard({ seed: STABLE_FALLBACK_SEED })
+  return board.map((row, rowIndex) => row.map((cell, colIndex) => (
+    cell == null ? null : { ...cell, id: generated[rowIndex][colIndex].id }
+  )))
 }
 
 function positionFromKey(value) {
@@ -248,6 +268,7 @@ export function resolveTurn({ board, swap, movesLeft, target, score, rng }) {
   let groups = matchedSwap?.matches || []
   let triggered = colorBombSwap?.triggered || []
   let multiplier = 1
+  let needsStableFallback = false
   const seenStates = new Set([boardState(currentBoard)])
 
   while (groups.length > 0 || triggered.length > 0) {
@@ -265,15 +286,22 @@ export function resolveTurn({ board, swap, movesLeft, target, score, rng }) {
     waves.push(resolved.wave)
     createdSpecials.push(...resolved.created)
     triggered = []
-    if (resolved.wave.removed.length === 0 && resolved.frostingLayersReduced === 0) break
+    if (resolved.wave.removed.length === 0 && resolved.frostingLayersReduced === 0) {
+      needsStableFallback = true
+      break
+    }
     const state = boardState(currentBoard)
-    if (seenStates.has(state) || waves.length >= MAX_CASCADE_WAVES) break
+    if (seenStates.has(state) || waves.length >= MAX_CASCADE_WAVES) {
+      needsStableFallback = true
+      break
+    }
     seenStates.add(state)
     groups = findMatches(currentBoard)
     multiplier += 1
   }
 
-  if (findLegalMoves(currentBoard).length === 0) currentBoard = reshuffle(currentBoard, rng)
+  if (needsStableFallback) currentBoard = stableFallback(currentBoard)
+  if (!hasPlayableMove(currentBoard)) currentBoard = reshuffle(currentBoard, rng)
   const complete = targetComplete(resultTarget)
   return {
     board: currentBoard,

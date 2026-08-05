@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { findLegalMoves } from './board.js'
+import { findLegalMoves, findMatches } from './board.js'
 import { CANDY_IDS } from './constants.js'
 import { resolveTurn } from './resolve.js'
 
@@ -69,7 +69,7 @@ function lastMoveFixture(target) {
   return { ...fixture, movesLeft: 1, target }
 }
 
-function deadBoardFixture() {
+function deadBoardFixture({ withColorBomb = false } = {}) {
   const board = Array.from({ length: 8 }, (_, row) => Array.from({ length: 8 }, (_, col) => ({
     id: CANDY_IDS[(row + col) % CANDY_IDS.length],
     special: null,
@@ -77,6 +77,7 @@ function deadBoardFixture() {
     frosting: 0,
   })))
   board[0][0].id = 'mint'
+  if (withColorBomb) board[7][7].special = 'color-bomb'
   let calls = 0
   let state = 17
   return {
@@ -177,6 +178,28 @@ test('a swapped color bomb clears every candy matching its normal counterpart', 
   assert.equal(result.target.candies.berry, 0)
 })
 
+test('a color bomb accepts a non-bomb special counterpart and activates it by ID', () => {
+  const board = boardFromSeed()
+  Object.assign(board[0][0], { id: 'lemon', special: 'color-bomb' })
+  Object.assign(board[0][1], { id: 'berry', special: 'striped-h' })
+  Object.assign(board[2][2], { id: 'berry' })
+  const result = resolveTurn({
+    board,
+    swap: { from: { row: 0, col: 0 }, to: { row: 0, col: 1 } },
+    movesLeft: 3,
+    target: { candies: { berry: 2 } },
+    score: 0,
+    rng: sequence(),
+  })
+
+  assert.equal(result.movesLeft, 2)
+  assert.deepEqual(result.waves[0].activatedSpecials.map(({ special }) => special), [
+    'color-bomb',
+    'striped-h',
+  ])
+  assert.equal(result.target.candies.berry, 0)
+})
+
 test('removing candy and obstacles decrements their targets without mutating inputs', () => {
   const fixture = wrappedFixture()
   const originalBoard = clone(fixture.board)
@@ -228,6 +251,15 @@ test('a dead stable board is reshuffled into one with a legal move', () => {
   assert.ok(findLegalMoves(result.board).length > 0)
 })
 
+test('a stable board whose only move is a color-bomb swap is not reshuffled', () => {
+  const fixture = deadBoardFixture({ withColorBomb: true })
+  const result = resolveTurn(fixture.input)
+
+  assert.equal(fixture.calls(), 3)
+  assert.equal(result.board[7][7].special, 'color-bomb')
+  assert.equal(findLegalMoves(result.board).length, 0)
+})
+
 test('a wave that cannot remove candy or damage frosting terminates resolution', () => {
   const board = boardFromSeed()
   Object.assign(board[0][0], { id: 'berry', frosting: 1 })
@@ -247,6 +279,8 @@ test('a wave that cannot remove candy or damage frosting terminates resolution',
   assert.equal(result.waves.length, 1)
   assert.deepEqual(result.waves[0].removed, [])
   assert.equal(result.target.frosting, 3)
+  assert.equal(result.board[0][0].frosting, 1)
+  assert.deepEqual(findMatches(result.board), [])
 })
 
 test('a repeated cascade state from degenerate refill randomness is bounded', () => {
@@ -256,4 +290,6 @@ test('a repeated cascade state from degenerate refill randomness is bounded', ()
 
   assert.equal(result.movesLeft, 4)
   assert.ok(result.waves.length <= 100)
+  assert.deepEqual(findMatches(result.board), [])
+  assert.ok(findLegalMoves(result.board).length > 0)
 })
