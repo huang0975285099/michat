@@ -220,7 +220,7 @@ func main() {
 		open.POST("/identity/reauth", identHandler.Reauth)
 		open.GET("/invite/validate", inviteHandler.Validate)
 		open.GET("/version", versionHandler.Get)
-		// $FIST ecological transparency statistics (for international station introduction page, purely aggregated data, no authentication required)
+		// Legacy aggregate statistics; not part of the current China points product.
 		open.GET("/fist/stats", fistStatsHandler.GetStats)
 
 		// Authentication is required (current limit based on user)
@@ -243,7 +243,7 @@ func main() {
 		auth.POST("/device/token", deviceHandler.SaveToken)
 		auth.DELETE("/device/token", deviceHandler.DeleteTokens)
 
-		// $FIST Token
+		// Legacy points-account compatibility endpoints; authoritative games settle internally.
 		auth.GET("/fist/account", fistHandler.GetAccount)
 		auth.POST("/fist/pve-reward", fistHandler.ClaimPvEReward)
 		auth.GET("/fist/transactions", fistHandler.GetTransactions)

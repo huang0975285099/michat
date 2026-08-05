@@ -11,7 +11,6 @@
 
 <script setup>
 import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { createBattleRenderer3D } from '../game/babylon/BattleRenderer3D.js'
 
 const props = defineProps({
   result: { type: Object, default: null },
@@ -32,6 +31,8 @@ let pendingResult = null
 
 onMounted(async () => {
   await nextTick()
+  const { createBattleRenderer3D } = await import('../game/babylon/BattleRenderer3D.js')
+  if (!canvasRef.value) return
   ctrl = createBattleRenderer3D(canvasRef.value, {
     playerCharged: props.playerCharged,
     opponentCharged: props.opponentCharged,

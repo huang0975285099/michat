@@ -1,7 +1,6 @@
 <template>
     <q-page class="ironfist-page">
         <!-- ── Lobby and subviews (menu has been split into independent components) ──────────── -->
-        <!-- The @open-fist portal for the international version of $FIST is temporarily disabled. -->
         <IronFistLobby
             v-if="view === 'lobby'"
             @home="goHome"
@@ -13,9 +12,6 @@
             @open-pvp="view = 'pvp'"
             @invite="startInvite"
         />
-        <!-- The international $FIST introduction page is temporarily disabled.
-        <IronFistFist v-else-if="view === 'fist'" @back="view = 'lobby'" />
-        -->
         <IronFistLedger v-else-if="view === 'ledger'" @back="view = 'lobby'" />
         <IronFistRecords v-else-if="view === 'records'" @back="view = 'lobby'" />
         <IronFistAchievements
@@ -332,7 +328,7 @@
                         <div v-if="resultSub" class="result-sub">
                             {{ resultSub }}
                         </div>
-                        <!-- PvE Victory $FIST Reward -->
+                        <!-- PvE victory points reward -->
                         <div v-if="pveReward" class="pve-reward-badge">
                             <span class="pve-reward-amount">+500 {{ currency }}</span>
                             <span class="pve-reward-progress">

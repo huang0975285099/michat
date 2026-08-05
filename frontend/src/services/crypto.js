@@ -596,7 +596,7 @@ export async function verifySecurityCode(code) {
     decryptedPrivateKeyCache = privateKey
 
     return true
-  } catch (e) {
+  } catch {
     return false
   }
 }

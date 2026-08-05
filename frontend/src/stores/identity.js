@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { loadKeyPair, generateAndStoreKeyPair, clearKeyPair, exportPrivateKey, hasSecurityCode, isUnlocked, unlock, lock, startAutoLock, loadLockConfig, saveLockConfig, setupSecurityCode, disableSecurityCode } from 'src/services/crypto'
-import { identityApi, friendApi, inviteApi } from 'src/services/api'
+import { identityApi, friendApi } from 'src/services/api'
 import { registerPushToken } from 'src/boot/chat-service'
 import { connect, clearPendingQueue } from 'src/services/websocket'
 import { useChatStore } from 'src/stores/chat'

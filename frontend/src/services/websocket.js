@@ -297,7 +297,7 @@ function sendAuth(token, resolve) {
         }
         // Other messages are handed over to the original processing
         origOnMessage?.(event)
-      } catch (e) {
+      } catch {
         origOnMessage?.(event)
       }
     }

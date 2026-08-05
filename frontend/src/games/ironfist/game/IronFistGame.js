@@ -1,4 +1,5 @@
-// Tekken - the core engine of the game (state machine + settlement arrangement, rendering independent)
+// IronFist local practice engine only.
+// Trusted PvE/PvP/friend games must use AuthoritativeIronFistGame and the server API.
 // The rendering layer/UI subscribes to event-driven animation through on(event, cb) and does not directly read the internal state.
 // See docs/ironfist.md Section 13/15 (Decoupling logic and rendering)
 
@@ -12,7 +13,7 @@ export class IronFistGame {
    * @param {object} opts
    * @param {'pve'|'pvp'} opts.mode
    * @param {object} [opts.net] PvP network layer (GameNet instance), requires on/send
-   * @param {string} [opts.roomId] PvP room ID (used for localStorage to persist actions of this round)
+   * @param {string} [opts.roomId] Legacy practice identifier; never used for trusted settlement.
    * @param {string} [opts.myChatId] PvP’s own chat_id (used to distinguish the actions of both parties during replay)
    */
   constructor({ mode = 'pve', net = null, roomId = null, myChatId = null } = {}) {
@@ -100,7 +101,7 @@ export class IronFistGame {
     this._emit('locked', { side: 'player', action })
 
     if (this.mode === 'pvp' && this.net) {
-      // Persist the actions of this round (used for refreshing, reconnecting and subsequent uploads, see docs Section 14 Plan B for details)
+    // Legacy local persistence is retained only for old practice/replay callers.
       if (this.roomId) {
         try {
           localStorage.setItem(LS_PENDING_KEY(this.roomId), JSON.stringify({
@@ -128,7 +129,7 @@ export class IronFistGame {
     }
   }
 
-  // PvP: After a move has been made locally, if the other party has not delivered the move within the grace period, it will be deemed to be offline.
+  // Legacy local replay behavior. This class is not used for authoritative online games.
   // Enter WAITING_RECONNECT to wait for reconnection (60s) instead of directly interrupting the game.
   // Once PVP starts, there must be a result. If there is no reconnection within 60 seconds → the opponent will be judged as a loser (your side wins).
   _startGrace() {
@@ -199,7 +200,7 @@ export class IronFistGame {
   }
 
   /**
-   * Receive ironfist_replay returned from the server (after initiating ironfist_reconnect yourself).
+   * Consume a legacy replay payload for local practice recovery.
    * Use replayGame to replay the current state and return to the interrupted round.
    */
   _onReplay(payload) {
@@ -351,7 +352,7 @@ export class IronFistGame {
   }
 
   /**
-   * Return to the game summary (for reporting results and achievement determination).
+   * Return the local practice summary. Trusted results are produced by the server.
    * Excludes result: result is provided by the gameover event callback parameter (in scenarios such as admitting defeat/timeout judgment, etc.
    * lastResult.gameResult is unreliable).
    */

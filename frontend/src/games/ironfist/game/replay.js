@@ -1,5 +1,5 @@
 // Tekken - Event Sourcing Replay Tool (Option B)
-// The server only temporarily stores the action stream (no game logic), and the client uses the pure function resolveRound to replay it.
+// Legacy local replay helper for practice only. It is not an authoritative state source.
 // Mathematically, a consistent state must be obtained. See Section 14 of docs/ironfist.md for details.
 
 import { resolveRound, initialState } from './resolve.js'
@@ -48,7 +48,7 @@ export function pairActionsByRound(actionLog, myChatId) {
 /**
  * Replay the current game state from the action history.
  *
- * Process: Call resolveRound round by round, and stop when encountering an incomplete round (indicating that the actions of both parties in the round are not complete,
+ * Process: replay local actions round by round and stop at an incomplete round.
  * This is the status of the current round when the connection is disconnected).
  *
  * @param {Array} actionLog action list returned by the server

@@ -188,7 +188,7 @@ func (h *IronFistHandler) EnqueuePVP(c *gin.Context) {
 		case errors.Is(err, service.ErrPVPInvalidTier):
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tier"})
 		case errors.Is(err, service.ErrPVPInsufficientFist):
-			c.JSON(http.StatusPaymentRequired, gin.H{"error": "insufficient $FIST balance"})
+			c.JSON(http.StatusPaymentRequired, gin.H{"error": "insufficient points balance"})
 		case errors.Is(err, service.ErrPVPAlreadyInMatch):
 			c.JSON(http.StatusConflict, gin.H{"error": "already in an active pvp match"})
 		default:

@@ -76,7 +76,7 @@ func (s *FistService) GetAccount(ctx context.Context, userID uint64) (*FistAccou
 	return view, nil
 }
 
-// ClaimPvEReward issues a PvE victory reward (500 $FIST), with a daily limit of 10 times.
+// ClaimPvEReward is the legacy client-claimed reward path and is no longer used.
 // The entire process is executed atomically within the transaction to prevent concurrent double counting.
 func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistAccountView, error) {
 	return nil, ErrLegacyPvEClaimDisabled
@@ -249,10 +249,10 @@ func (s *FistService) GetTransactions(ctx context.Context, userID uint64, before
 	return txs, rows.Err()
 }
 
-// EcosystemStats public read-only $FIST ecological transparency statistics (no authentication required, for display on the international station introduction page)
+// EcosystemStats is a legacy read-only aggregation retained for compatibility.
 type EcosystemStats struct {
 	CirculatingBalance int64           `json:"circulating_balance"` //The current sum of all user balances (internal accounting caliber)
-	TotalPlayers       int64           `json:"total_players"`       //Number of users who have opened $FIST accounts
+	TotalPlayers       int64           `json:"total_players"`       //Legacy account-count field
 	PveTotalIssued     int64           `json:"pve_total_issued"`    //Historical cumulative distribution of PvE rewards (including daily attendance rewards)
 	PveTotalWins       int64           `json:"pve_total_wins"`      //PvE historical accumulated effective number of wins
 	PveTodayIssued     int64           `json:"pve_today_issued"`
@@ -268,7 +268,7 @@ type PveDailyPoint struct {
 	Wins   int64  `json:"wins"`
 }
 
-// GetEcosystemStats queries the global $FIST ecological data: current circulation/number of players + PvE distribution history and recent trends.
+// GetEcosystemStats queries legacy aggregate data; it is not an authority for points settlement.
 // All are aggregated read-only queries and do not contain any identifiable information about individual users.
 func (s *FistService) GetEcosystemStats(ctx context.Context) (*EcosystemStats, error) {
 	st := &EcosystemStats{}

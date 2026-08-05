@@ -1,4 +1,4 @@
-// Iron Fist - Pure settlement logic (no side effects, easy for single testing)
+// Iron Fist practice-only resolver. Online trusted games never resolve in JavaScript.
 // Order of riding area: Basic → Charge → Remaining Health Enhancement → Critical Hit (not implemented) → Defense Damage Reduction → Remaining Health Shield
 // See Section 15 of docs/ironfist.md for details (including corrected applyCharge guard)
 
@@ -68,7 +68,7 @@ export function resolveRound(playerAction, opponentAction, s) {
 
   // === Charge mark update (including N round expiration time) ===
   // The mark can be retained for up to CHARGE_HOLD_LIMIT available turns: carrying but not "attacking" consumes +1 timer per turn, and will expire when the upper limit is reached.
-  // See docs/ironfist.md section 5 (174↔176 contradictions have been unified to "keep at most 2 turns").
+  // Charge aging follows the current rules specification: at most two unused turns.
   let newPlayerCharged = playerCharged
   if (playerAction === 'attack' && playerCharged) {
     newPlayerCharged = false                         //consumption mark

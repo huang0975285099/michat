@@ -1,3 +1,4 @@
+<!-- LEGACY_DISABLED: historical international token page; not imported by the current route. -->
 <template>
     <div class="q-pa-md fist-view">
         <!-- top bar -->

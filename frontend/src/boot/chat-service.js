@@ -28,7 +28,7 @@ async function checkPendingNavigation(router) {
     if (senderChatId) {
       router.push('/chat/' + senderChatId)
     }
-  } catch (e) {
+  } catch {
     // ignore
   }
 }

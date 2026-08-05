@@ -231,16 +231,6 @@ async function dbAddMessage(msg) {
   })
 }
 
-async function dbPutMessage(msg) {
-  const db = await openMessagesDB()
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite')
-    const req = tx.objectStore(STORE_NAME).put(msg)
-    req.onsuccess = () => resolve()
-    req.onerror = (e) => reject(e.target.error)
-  })
-}
-
 async function dbDeleteMessage(msgId) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {

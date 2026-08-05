@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 import { Notify } from 'quasar'
 import { send, on, off, wsConnected } from 'src/services/websocket'
 import { callApi } from 'src/services/api'

@@ -337,7 +337,7 @@ function startMatchPoll(epoch) {
       }
       // If it is still queued or idle, continue polling.
       startMatchPoll(epoch);
-    } catch (e) {
+    } catch {
       // Polling failure is not fatal and continues to the next round
       startMatchPoll(epoch);
     }

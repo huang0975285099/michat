@@ -12,7 +12,7 @@
             <div style="font-size: 22px" class="q-ml-sm">🥊</div>
             <div class="text-h6 q-ml-xs">iron fist3D</div>
             <q-space />
-            <!-- The international version $FIST introduction entrance is temporarily suspended, and only the Chinese version points mode is retained.
+            <!-- International token mode is disabled; only the Chinese points mode is available.
             <div
                 v-if="region === 'intl'"
                 class="text-caption text-grey-5 cursor-pointer rules-link"
@@ -62,7 +62,7 @@
                     <span class="mode-tag mode-tag--earn">PVE</span>
                 </div>
                 <div class="mode-desc">Reward for every win 500 {{ currency }}，Maximum per day 10 field</div>
-                <!-- Daily progress bar: additional reward of 1000 $FIST for 10 games -->
+            <!-- Daily progress bar: additional 1000-point reward for 10 wins -->
                 <div class="pve-progress">
                     <div class="pve-progress-bar">
                         <div
@@ -201,7 +201,7 @@
                     <button class="region-btn region-btn--intl" @click="selectRegion('intl')">
                         <span class="region-flag">🌐</span>
                         <span class="region-name">International version</span>
-                        <span class="region-hint">Use “$FIST” Battles and rewards</span>
+                        <span class="region-hint">Use points battles and rewards</span>
                     </button>
                 </q-card-section>
             </q-card>

@@ -31,7 +31,7 @@ export const TX_TYPE_LABEL = {
   tournament_entry: 'Tournament Registration',
   tournament_prize: 'Tournament rewards',
   referral_reward: 'Invitation rewards',
-  staking_reward: 'Pledge dividends',
+  staking_reward: 'Legacy staking reward',
   nft_mint: 'NFT casting',
   withdraw: 'Withdraw cash',
   deposit: 'Recharge',

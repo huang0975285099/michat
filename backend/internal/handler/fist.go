@@ -32,7 +32,7 @@ func (h *FistHandler) GetAccount(c *gin.Context) {
 }
 
 // POST /api/fist/pve-reward
-// Called after the player wins a PvE round, 500 $FIST will be issued, up to 10 times per day
+// Legacy client-claimed PvE reward endpoint; disabled by the authoritative engine.
 // Returns: updated account status (same as GetAccount)
 func (h *FistHandler) ClaimPvEReward(c *gin.Context) {
 	c.JSON(http.StatusUpgradeRequired, gin.H{"error": "upgrade_required"})
