@@ -1,5 +1,5 @@
 import {
-  applyGravity,
+  applyGravityWithPlan,
   createBoard,
   findLegalMoves,
   findMatches,
@@ -236,11 +236,19 @@ function resolveWave({ board, groups, triggered, swap, originalBoard, target, mu
   for (const position of removed) board[position.row][position.col] = null
   const scoreDelta = multiplier * ((removed.length * BASE_REMOVAL_SCORE)
     + (activatedSpecials.length * SPECIAL_ACTIVATION_BONUS))
+  const gravity = applyGravityWithPlan(board, swap.rng)
   return {
-    board: applyGravity(board, swap.rng),
+    board: gravity.board,
     created,
     frostingLayersReduced,
-    wave: { removed, activatedSpecials, scoreDelta },
+    wave: {
+      removed,
+      activatedSpecials,
+      scoreDelta,
+      movements: gravity.movements,
+      refills: gravity.refills,
+      board: cloneBoard(gravity.board),
+    },
   }
 }
 

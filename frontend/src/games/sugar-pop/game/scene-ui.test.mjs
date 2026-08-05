@@ -1,9 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { calculateBoardLayout, adjacentPositionFromSwipe } from '../ui/BoardView.js'
+import BoardView, { calculateBoardLayout, adjacentPositionFromSwipe, remapSurvivorDisplays } from '../ui/BoardView.js'
 import { calculateHudLayout } from '../ui/HudView.js'
 import { canSelectLevel } from '../scenes/MapScene.js'
-import { isPlayableSwap } from '../scenes/LevelScene.js'
+import LevelScene, { isPlayableSwap } from '../scenes/LevelScene.js'
+import { createBoard, findLegalMoves } from './board.js'
+
+function deferred() {
+  let resolve
+  const promise = new Promise((complete) => { resolve = complete })
+  return { promise, resolve }
+}
 
 test('mobile layout keeps the complete board between the HUD and booster row', () => {
   const layout = calculateBoardLayout(390, 844)
@@ -39,6 +46,176 @@ test('swipe selects one orthogonally adjacent cell and rejects short drags', () 
   assert.deepEqual(adjacentPositionFromSwipe(from, -4, -35, 20), { row: 2, col: 3 })
   assert.equal(adjacentPositionFromSwipe(from, 8, 5, 20), null)
   assert.equal(adjacentPositionFromSwipe({ row: 0, col: 0 }, -30, 0, 20), null)
+})
+
+test('pointer-up dispatches short gestures as clicks and long gestures as swaps', () => {
+  const dispatched = []
+  const view = {
+    enabled: true,
+    gesture: { from: { row: 3, col: 3 }, x: 100, y: 100, pointerId: 7 },
+    onSelect: (position) => dispatched.push({ kind: 'select', position }),
+    onSwap: (from, to) => dispatched.push({ kind: 'swap', from, to }),
+  }
+
+  BoardView.prototype.handlePointerUp.call(view, { id: 7, x: 106, y: 104 })
+  view.gesture = { from: { row: 3, col: 3 }, x: 100, y: 100, pointerId: 7 }
+  BoardView.prototype.handlePointerUp.call(view, { id: 7, x: 132, y: 102 })
+
+  assert.deepEqual(dispatched, [
+    { kind: 'select', position: { row: 3, col: 3 } },
+    { kind: 'swap', from: { row: 3, col: 3 }, to: { row: 3, col: 4 } },
+  ])
+})
+
+test('rejected swap tween rebounds without remapping either cell', async () => {
+  const from = { row: 2, col: 2 }
+  const to = { row: 2, col: 3 }
+  const first = { x: 25, y: 25 }
+  const second = { x: 35, y: 25 }
+  let tween
+  const view = {
+    cells: new Map([['2,2', first], ['2,3', second]]),
+    layout: { x: 0, y: 0, cellSize: 10 },
+    cellCenter: BoardView.prototype.cellCenter,
+    scene: { tweens: { add: (config) => { tween = config; config.onComplete() } } },
+  }
+
+  await BoardView.prototype.animateRejectedSwap.call(view, from, to)
+
+  assert.equal(tween.yoyo, true)
+  assert.equal(tween.x(first), 35)
+  assert.equal(tween.x(second), 25)
+  assert.equal(view.cells.get('2,2'), first)
+  assert.equal(view.cells.get('2,3'), second)
+})
+
+test('survivor display mapping follows gravity destinations between waves', () => {
+  const falling = { name: 'falling' }
+  const stationary = { name: 'stationary' }
+  const cells = new Map([['0,1', falling], ['7,7', stationary]])
+
+  const remapped = remapSurvivorDisplays(cells, [
+    { from: { row: 0, col: 1 }, to: { row: 1, col: 1 } },
+    { from: { row: 7, col: 7 }, to: { row: 7, col: 7 } },
+  ])
+
+  assert.equal(remapped.has('0,1'), false)
+  assert.equal(remapped.get('1,1'), falling)
+  assert.equal(remapped.get('7,7'), stationary)
+})
+
+test('wave animation preserves survivor displays and creates only actual refills', async () => {
+  const makeDisplay = (signature) => ({
+    cellSignature: signature,
+    boardPosition: null,
+    setPosition(x, y) { this.x = x; this.y = y; return this },
+    setAlpha(alpha) { this.alpha = alpha; return this },
+    disableInteractive() {},
+  })
+  const survivor = makeDisplay('berry:null:false:0')
+  const created = []
+  const board = Array.from({ length: 8 }, () => Array(8).fill(null))
+  board[1][1] = { id: 'berry', special: null, jelly: false, frosting: 0 }
+  board[0][1] = { id: 'mint', special: null, jelly: false, frosting: 0 }
+  const view = {
+    cells: new Map([['0,1', survivor]]),
+    enabled: false,
+    board: null,
+    layout: { x: 0, y: 0, cellSize: 10 },
+    layer: { add() {} },
+    scene: { tweens: { add: ({ onComplete }) => onComplete() } },
+    cellCenter: BoardView.prototype.cellCenter,
+    createCell: (cell, position) => {
+      const display = makeDisplay(`${cell.id}:${cell.special}:${cell.jelly}:${cell.frosting}`)
+      display.boardPosition = { ...position }
+      created.push(display)
+      return display
+    },
+    replaceDisplay() { throw new Error('unchanged survivor must not be recreated') },
+  }
+
+  await BoardView.prototype.animateWaveMovement.call(view, {
+    board,
+    movements: [{ from: { row: 0, col: 1 }, to: { row: 1, col: 1 } }],
+    refills: [{ from: { row: -1, col: 1 }, to: { row: 0, col: 1 } }],
+  })
+
+  assert.equal(view.cells.get('1,1'), survivor)
+  assert.equal(view.cells.get('0,1'), created[0])
+  assert.equal(created.length, 1)
+  assert.deepEqual(survivor.boardPosition, { row: 1, col: 1 })
+})
+
+test('accepted turn keeps input locked through swap and resolution promises', async () => {
+  const board = createBoard({ seed: 7 })
+  const move = findLegalMoves(board)[0]
+  const swapGate = deferred()
+  const resolutionGate = deferred()
+  const enabled = []
+  let resolutionStarted = false
+  const scene = {
+    resolving: false,
+    selected: null,
+    pendingResize: null,
+    state: { board, movesLeft: 20, target: { candies: { berry: 99 } }, score: 0, status: 'playing' },
+    rng: (() => { let value = 0; return () => (value = (value + 0.173) % 1) })(),
+    boardView: {
+      setSelected() {},
+      setInputEnabled: (value) => enabled.push(value),
+      animateSwap: () => swapGate.promise,
+      animateResolution: () => { resolutionStarted = true; return resolutionGate.promise },
+    },
+    updateHud() {},
+    layoutViews() {},
+  }
+
+  const pending = LevelScene.prototype.attemptSwap.call(scene, move.from, move.to)
+  assert.equal(scene.resolving, true)
+  assert.deepEqual(enabled, [false])
+
+  swapGate.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(resolutionStarted, true)
+  assert.deepEqual(enabled, [false])
+
+  resolutionGate.resolve()
+  await pending
+  assert.equal(scene.resolving, false)
+  assert.deepEqual(enabled, [false, true])
+})
+
+test('rejected turn keeps input locked until rebound completes', async () => {
+  const board = createBoard({ seed: 7 })
+  let rejectedMove
+  for (let row = 0; row < 8 && !rejectedMove; row += 1) {
+    for (let col = 0; col < 7; col += 1) {
+      const from = { row, col }
+      const to = { row, col: col + 1 }
+      if (!isPlayableSwap(board, from, to)) { rejectedMove = { from, to }; break }
+    }
+  }
+  const reboundGate = deferred()
+  const enabled = []
+  const scene = {
+    resolving: false,
+    selected: null,
+    pendingResize: null,
+    state: { board, movesLeft: 20, target: { candies: { berry: 99 } }, score: 0, status: 'playing' },
+    boardView: {
+      setSelected() {},
+      setInputEnabled: (value) => enabled.push(value),
+      animateRejectedSwap: () => reboundGate.promise,
+    },
+    layoutViews() {},
+  }
+
+  const pending = LevelScene.prototype.attemptSwap.call(scene, rejectedMove.from, rejectedMove.to)
+  assert.equal(scene.resolving, true)
+  assert.deepEqual(enabled, [false])
+  reboundGate.resolve()
+  await pending
+  assert.equal(scene.resolving, false)
+  assert.deepEqual(enabled, [false, true])
 })
 
 test('map selection permits unlocked levels and rejects locked levels', () => {

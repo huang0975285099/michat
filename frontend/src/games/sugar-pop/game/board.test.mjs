@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   applyGravity,
+  applyGravityWithPlan,
   createBoard,
   findLegalMoves,
   findMatches,
@@ -92,6 +93,29 @@ test('applyGravity drops cells while preserving their properties and refills emp
   assert.equal(result[0][0].id, 'berry')
   assert.equal(result[1][0].id, 'berry')
   assert.equal(board[5][0], null)
+})
+
+test('gravity plan maps each survivor and refill to its real destination coordinate', () => {
+  const board = Array.from({ length: 8 }, () => Array(8).fill(null))
+  board[2][0] = { id: 'mint', special: 'wrapped', jelly: true, frosting: 0 }
+  board[6][0] = { id: 'berry', special: null, jelly: false, frosting: 0 }
+
+  const result = applyGravityWithPlan(board, () => 0)
+
+  assert.deepEqual(result.movements.filter(({ from }) => from.col === 0), [
+    { from: { row: 6, col: 0 }, to: { row: 7, col: 0 } },
+    { from: { row: 2, col: 0 }, to: { row: 6, col: 0 } },
+  ])
+  assert.deepEqual(result.refills.filter(({ to }) => to.col === 0), [
+    { from: { row: -1, col: 0 }, to: { row: 5, col: 0 } },
+    { from: { row: -2, col: 0 }, to: { row: 4, col: 0 } },
+    { from: { row: -3, col: 0 }, to: { row: 3, col: 0 } },
+    { from: { row: -4, col: 0 }, to: { row: 2, col: 0 } },
+    { from: { row: -5, col: 0 }, to: { row: 1, col: 0 } },
+    { from: { row: -6, col: 0 }, to: { row: 0, col: 0 } },
+  ])
+  assert.equal(result.board[6][0].special, 'wrapped')
+  assert.equal(result.board[5][0].id, 'berry')
 })
 
 test('reshuffle preserves non-null cell properties and returns a playable board', () => {

@@ -139,18 +139,34 @@ export function findLegalMoves(board) {
   return moves
 }
 
-export function applyGravity(board, rng) {
+export function applyGravityWithPlan(board, rng) {
   const result = Array.from({ length: BOARD_SIZE }, () => Array(BOARD_SIZE).fill(null))
+  const movements = []
+  const refills = []
   for (let col = 0; col < BOARD_SIZE; col += 1) {
-    const falling = []
+    let destinationRow = BOARD_SIZE - 1
     for (let row = BOARD_SIZE - 1; row >= 0; row -= 1) {
-      if (board[row]?.[col]) falling.push(cloneCell(board[row][col]))
+      if (!board[row]?.[col]) continue
+      result[destinationRow][col] = cloneCell(board[row][col])
+      movements.push({
+        from: { row, col },
+        to: { row: destinationRow, col },
+      })
+      destinationRow -= 1
     }
-    for (let row = BOARD_SIZE - 1; row >= 0; row -= 1) {
-      result[row][col] = falling.shift() || cell(randomCandy(rng))
+    for (let row = destinationRow; row >= 0; row -= 1) {
+      result[row][col] = cell(randomCandy(rng))
+      refills.push({
+        from: { row: row - destinationRow - 1, col },
+        to: { row, col },
+      })
     }
   }
-  return result
+  return { board: result, movements, refills }
+}
+
+export function applyGravity(board, rng) {
+  return applyGravityWithPlan(board, rng).board
 }
 
 export function reshuffle(board, rng) {

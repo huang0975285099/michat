@@ -10,6 +10,19 @@ function coordinateKey({ row, col }) {
   return `${row},${col}`
 }
 
+function cellSignature(cell) {
+  return cell == null ? null : `${cell.id}:${cell.special}:${cell.jelly}:${cell.frosting}`
+}
+
+export function remapSurvivorDisplays(cells, movements) {
+  const remapped = new Map()
+  for (const { from, to } of movements) {
+    const display = cells.get(coordinateKey(from))
+    if (display) remapped.set(coordinateKey(to), display)
+  }
+  return remapped
+}
+
 function onBoard({ row, col }) {
   return row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE
 }
@@ -119,12 +132,14 @@ export default class BoardView {
       children.push(frosting)
     }
 
-    const display = this.scene.add.container(centerX, centerY, children)
+    let display
+    display = this.scene.add.container(centerX, centerY, children)
     display.boardPosition = { ...position }
+    display.cellSignature = cellSignature(cell)
     display.setSize(cellSize * 0.9, cellSize * 0.9)
     display.on('pointerdown', (pointer) => {
       if (!this.enabled) return
-      this.gesture = { from: { ...position }, x: pointer.x, y: pointer.y, pointerId: pointer.id }
+      this.gesture = { from: { ...display.boardPosition }, x: pointer.x, y: pointer.y, pointerId: pointer.id }
     })
     return display
   }
@@ -203,59 +218,110 @@ export default class BoardView {
     })
   }
 
-  async animateResolution(waves, settledBoard) {
-    for (const wave of waves) {
-      const removed = wave.removed.map((position) => this.cells.get(coordinateKey(position))).filter(Boolean)
-      if (removed.length === 0) continue
+  replaceDisplay(position, cell) {
+    const positionKey = coordinateKey(position)
+    this.cells.get(positionKey)?.destroy()
+    const display = this.createCell(cell, position)
+    this.layer.add(display)
+    this.cells.set(positionKey, display)
+    if (!this.enabled) display.disableInteractive()
+    return display
+  }
+
+  reconcileBoard(board) {
+    for (let row = 0; row < BOARD_SIZE; row += 1) {
+      for (let col = 0; col < BOARD_SIZE; col += 1) {
+        const position = { row, col }
+        const positionKey = coordinateKey(position)
+        const cell = board[row]?.[col]
+        const display = this.cells.get(positionKey)
+        if (!cell) {
+          display?.destroy()
+          this.cells.delete(positionKey)
+        } else if (!display || display.cellSignature !== cellSignature(cell)) {
+          this.replaceDisplay(position, cell)
+        }
+      }
+    }
+    this.board = board
+  }
+
+  async animateWaveMovement(wave) {
+    const movements = wave.movements || []
+    const refills = wave.refills || []
+    const nextCells = remapSurvivorDisplays(this.cells, movements)
+    const destinations = new Map()
+    const moving = []
+
+    for (const { from, to } of movements) {
+      const display = this.cells.get(coordinateKey(from))
+      if (!display) continue
+      destinations.set(display, to)
+      if (from.row !== to.row || from.col !== to.col) moving.push(display)
+    }
+    for (const refill of refills) {
+      const cell = wave.board[refill.to.row]?.[refill.to.col]
+      if (!cell) continue
+      const display = this.createCell(cell, refill.to)
+      const source = this.cellCenter(refill.from)
+      display.setPosition(source.x, source.y).setAlpha(0)
+      this.layer.add(display)
+      nextCells.set(coordinateKey(refill.to), display)
+      destinations.set(display, refill.to)
+      moving.push(display)
+    }
+
+    if (moving.length > 0) {
       await new Promise((resolve) => {
         this.scene.tweens.add({
-          targets: removed,
-          alpha: 0,
-          scale: 0.18,
-          duration: 170,
-          ease: 'Back.In',
+          targets: moving,
+          x: (display) => this.cellCenter(destinations.get(display)).x,
+          y: (display) => this.cellCenter(destinations.get(display)).y,
+          alpha: 1,
+          duration: 190,
+          ease: 'Bounce.Out',
           onComplete: resolve,
         })
       })
+    }
+
+    this.cells = nextCells
+    for (const [display, position] of destinations) {
+      const target = this.cellCenter(position)
+      display.setPosition(target.x, target.y).setAlpha(1)
+      display.boardPosition = { ...position }
+    }
+    this.board = wave.board
+    for (const { to } of movements) {
+      const display = this.cells.get(coordinateKey(to))
+      const cell = wave.board[to.row]?.[to.col]
+      if (cell && display?.cellSignature !== cellSignature(cell)) this.replaceDisplay(to, cell)
+    }
+  }
+
+  async animateResolution(waves, settledBoard) {
+    for (const wave of waves) {
+      const removed = wave.removed.map((position) => this.cells.get(coordinateKey(position))).filter(Boolean)
+      if (removed.length > 0) {
+        await new Promise((resolve) => {
+          this.scene.tweens.add({
+            targets: removed,
+            alpha: 0,
+            scale: 0.18,
+            duration: 170,
+            ease: 'Back.In',
+            onComplete: resolve,
+          })
+        })
+      }
       for (const position of wave.removed) {
-        const key = coordinateKey(position)
-        this.cells.get(key)?.destroy()
-        this.cells.delete(key)
+        const positionKey = coordinateKey(position)
+        this.cells.get(positionKey)?.destroy()
+        this.cells.delete(positionKey)
       }
-      const falling = [...this.cells.values()]
-      if (falling.length > 0) {
-        await new Promise((resolve) => {
-          this.scene.tweens.add({
-            targets: falling,
-            y: `+=${Math.max(5, this.layout.cellSize * 0.16)}`,
-            duration: 85,
-            yoyo: true,
-            ease: 'Sine.InOut',
-            onComplete: resolve,
-          })
-        })
-      }
+      await this.animateWaveMovement(wave)
     }
-    if (settledBoard) {
-      this.render(settledBoard)
-      const refill = [...this.cells.values()]
-      for (const display of refill) {
-        display.y -= this.layout.cellSize * 0.8
-        display.alpha = 0
-      }
-      if (refill.length > 0) {
-        await new Promise((resolve) => {
-          this.scene.tweens.add({
-            targets: refill,
-            y: `+=${this.layout.cellSize * 0.8}`,
-            alpha: 1,
-            duration: 190,
-            ease: 'Bounce.Out',
-            onComplete: resolve,
-          })
-        })
-      }
-    }
+    if (settledBoard) this.reconcileBoard(settledBoard)
   }
 
   destroy() {

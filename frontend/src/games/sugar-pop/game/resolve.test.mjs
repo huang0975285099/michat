@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { findLegalMoves, findMatches } from './board.js'
+import { createBoard, findLegalMoves, findMatches } from './board.js'
 import { CANDY_IDS } from './constants.js'
 import { resolveTurn } from './resolve.js'
 
@@ -134,6 +134,36 @@ test('later cascades receive a higher score multiplier', () => {
 
   assert.ok(result.waves.length >= 2)
   assert.ok(result.waves[1].scoreDelta > result.waves[0].scoreDelta)
+})
+
+test('each cascade wave exposes survivor moves and only its actual refills', () => {
+  const result = resolveTurn({
+    board: createBoard({ seed: 1 }),
+    swap: { from: { row: 1, col: 0 }, to: { row: 1, col: 1 } },
+    movesLeft: 10,
+    target: { candies: { berry: 99 } },
+    score: 0,
+    rng: sequence([0.34, 0.34, 0.34, 0.1, 0.2, 0.4]),
+  })
+
+  assert.ok(result.waves.length >= 2)
+  assert.deepEqual(result.waves[0].movements.filter(({ from, to }) => (
+    from.row === 0 && to.row === 1 && [1, 2, 3].includes(from.col)
+  )), [
+    { from: { row: 0, col: 1 }, to: { row: 1, col: 1 } },
+    { from: { row: 0, col: 2 }, to: { row: 1, col: 2 } },
+    { from: { row: 0, col: 3 }, to: { row: 1, col: 3 } },
+  ])
+  assert.deepEqual(result.waves[0].refills.filter(({ to }) => to.row === 0 && [1, 2, 3].includes(to.col)), [
+    { from: { row: -1, col: 1 }, to: { row: 0, col: 1 } },
+    { from: { row: -1, col: 2 }, to: { row: 0, col: 2 } },
+    { from: { row: -1, col: 3 }, to: { row: 0, col: 3 } },
+  ])
+  assert.deepEqual(result.waves[1].removed, [
+    { row: 0, col: 1 }, { row: 0, col: 2 }, { row: 0, col: 3 },
+  ])
+  assert.equal(result.waves[0].board[0][1].id, result.waves[0].board[0][2].id)
+  assert.equal(result.waves[0].board[0][2].id, result.waves[0].board[0][3].id)
 })
 
 test('an activated special only appears once in a wave activation queue', () => {
