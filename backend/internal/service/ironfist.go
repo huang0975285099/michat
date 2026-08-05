@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 	"unicode/utf8"
 
@@ -15,11 +17,22 @@ import (
 
 // IronFistService Iron Fist battle statistics and achievement service
 type IronFistService struct {
-	db *sql.DB
+	db        *sql.DB
+	now       func() time.Time
+	random    io.Reader
+	newGameID func() string
 }
 
 func NewIronFistService(db *sql.DB) *IronFistService {
-	return &IronFistService{db: db}
+	return &IronFistService{
+		db:     db,
+		now:    time.Now,
+		random: cryptorand.Reader,
+		newGameID: func() string {
+			id, _ := generateAuthorityUUID(cryptorand.Reader)
+			return id
+		},
+	}
 }
 
 // StatsView returns an overview of statistics to the front end
