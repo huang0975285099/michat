@@ -1534,7 +1534,9 @@ func (h *Hub) handleCallRelay(from *Client, msgType string, payload json.RawMess
 // Only game_invite validates friendship; subsequent in-game messages are relayed directly.
 func (h *Hub) handleGameRelay(from *Client, msgType string, payload json.RawMessage) {
 	var header struct {
-		To string `json:"to"`
+		To     string `json:"to"`
+		Game   string `json:"game"`
+		RoomID string `json:"room_id"`
 	}
 	if err := json.Unmarshal(payload, &header); err != nil || !chatIDRe.MatchString(header.To) {
 		log.Printf("[ws] invalid %s from %s", msgType, from.ChatID)
@@ -1548,6 +1550,23 @@ func (h *Hub) handleGameRelay(from *Client, msgType string, payload json.RawMess
 			log.Printf("[ws] game_invite: %s not friends with %s", from.ChatID, header.To)
 			return
 		}
+		if header.Game == "ironfist" {
+			if header.RoomID == "" || h.ironFistSvc == nil {
+				return
+			}
+			record, _ := json.Marshal(ironFistInviteRecord{
+				InviterUserID: from.UserID, InviterChatID: from.ChatID,
+				InviteeChatID: header.To, RoomID: header.RoomID,
+			})
+			if err := h.redis.Set(context.Background(), pkgredis.IronFistInviteKey(header.RoomID), record, pkgredis.IronFistInviteTTL).Err(); err != nil {
+				log.Printf("[ws] persist IronFist invite: %v", err)
+				return
+			}
+		}
+	}
+	if msgType == "game_accept" && header.Game == "ironfist" {
+		h.handleIronFistInviteAccept(from, header.To, header.RoomID)
+		return
 	}
 
 	// Inject "from" field so the recipient knows who sent it
@@ -1578,6 +1597,59 @@ func (h *Hub) handleGameRelay(from *Client, msgType string, payload json.RawMess
 		if json.Unmarshal(payload, &room) == nil && room.RoomID != "" {
 			ctx := context.Background()
 			h.redis.Del(ctx, pkgredis.IronFistActionsKey(room.RoomID))
+		}
+	}
+}
+
+type ironFistInviteRecord struct {
+	InviterUserID uint64 `json:"inviter_user_id"`
+	InviterChatID string `json:"inviter_chat_id"`
+	InviteeChatID string `json:"invitee_chat_id"`
+	RoomID        string `json:"room_id"`
+}
+
+func (h *Hub) handleIronFistInviteAccept(from *Client, toChatID, roomID string) {
+	if h.ironFistSvc == nil || h.friendSvc == nil || roomID == "" {
+		return
+	}
+	const consume = `local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v`
+	raw, err := h.redis.Eval(context.Background(), consume, []string{pkgredis.IronFistInviteKey(roomID)}).Text()
+	if err != nil {
+		return
+	}
+	var invite ironFistInviteRecord
+	if json.Unmarshal([]byte(raw), &invite) != nil || invite.RoomID != roomID ||
+		invite.InviteeChatID != from.ChatID || invite.InviterChatID != toChatID {
+		return
+	}
+	friends, err := h.friendSvc.AreFriends(context.Background(), from.UserID, invite.InviterChatID)
+	if err != nil || !friends {
+		return
+	}
+	view, err := h.ironFistSvc.CreateCasualAuthoritativeGame(context.Background(), invite.InviterUserID, from.UserID)
+	if err != nil {
+		log.Printf("[ws] create casual authoritative IronFist game: %v", err)
+		return
+	}
+	h.sendGameReady(invite.InviterChatID, map[string]any{
+		"game": "ironfist", "room_id": roomID, "game_id": view.GameID,
+		"opponent": from.ChatID, "seat": "a",
+	})
+	h.sendGameReady(from.ChatID, map[string]any{
+		"game": "ironfist", "room_id": roomID, "game_id": view.GameID,
+		"opponent": invite.InviterChatID, "seat": "b",
+	})
+}
+
+func (h *Hub) sendGameReady(chatID string, payload map[string]any) {
+	message, _ := json.Marshal(Message{Type: "game_ready", Payload: mustMarshal(payload)})
+	h.mu.RLock()
+	client := h.clients[chatID]
+	h.mu.RUnlock()
+	if client != nil {
+		select {
+		case client.send <- message:
+		default:
 		}
 	}
 }

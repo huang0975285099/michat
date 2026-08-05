@@ -18,6 +18,7 @@ const (
 	InviteCodeTTL         = 7 * 24 * time.Hour  //The invitation code is valid for 7 days
 	IronFistActionsTTL    = 30 * time.Minute    //Tekken game action log retention window (covers 60s reconnection + extreme situations)
 	IronFistEventsChannel = "ironfist:events"
+	IronFistInviteTTL     = 30 * time.Second
 )
 
 // NewInMemory starts an in-process memory Redis (miniredis) and returns the client connected to it.
@@ -55,3 +56,4 @@ func IronFistActionsKey(roomID string) string { return "ironfist:actions:" + roo
 func IronFistActionOnceKey(roomID, chatID string, round int) string {
 	return fmt.Sprintf("ironfist:action-once:%s:%s:%d", roomID, chatID, round)
 }
+func IronFistInviteKey(roomID string) string { return "ironfist:invite:" + roomID }
