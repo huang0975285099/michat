@@ -246,6 +246,11 @@ func main() {
 		auth.GET("/games/ironfist/stats", ironFistHandler.GetStats)
 		auth.POST("/games/ironfist/stats", ironFistHandler.ReportMatch)
 		auth.GET("/games/ironfist/matches", ironFistHandler.ListMatches)
+		auth.POST("/games/ironfist/pve/sessions", ironFistHandler.StartPVESession)
+		auth.GET("/games/ironfist/sessions/active", ironFistHandler.GetActivePVESession)
+		auth.GET("/games/ironfist/games/:id", ironFistHandler.GetAuthoritativeGame)
+		auth.POST("/games/ironfist/games/:id/actions", ironFistHandler.SubmitAuthoritativeAction)
+		auth.POST("/games/ironfist/games/:id/resign", ironFistHandler.ResignAuthoritativeGame)
 
 		// PVP matchmaking queue (join/cancel)
 		auth.POST("/games/ironfist/pvp/queue", ironFistHandler.EnqueuePVP)

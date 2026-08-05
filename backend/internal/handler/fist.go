@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 
@@ -36,24 +35,7 @@ func (h *FistHandler) GetAccount(c *gin.Context) {
 // Called after the player wins a PvE round, 500 $FIST will be issued, up to 10 times per day
 // Returns: updated account status (same as GetAccount)
 func (h *FistHandler) ClaimPvEReward(c *gin.Context) {
-	userID := c.GetUint64(middleware.CtxUserID)
-	view, err := h.svc.ClaimPvEReward(c.Request.Context(), userID)
-	if err != nil {
-		if errors.Is(err, service.ErrPvEDailyLimitReached) {
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error":     "daily PvE win limit reached",
-				"today_max": service.PvEDailyMaxWins,
-			})
-			return
-		}
-		if errors.Is(err, service.ErrNoEligiblePvEWin) {
-			c.JSON(http.StatusConflict, gin.H{"error": "no unclaimed PvE win"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "claim failed"})
-		return
-	}
-	c.JSON(http.StatusOK, view)
+	c.JSON(http.StatusUpgradeRequired, gin.H{"error": "upgrade_required"})
 }
 
 // GET /api/fist/transactions?before_id=xxx&limit=20

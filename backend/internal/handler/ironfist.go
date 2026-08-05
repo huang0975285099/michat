@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -37,18 +39,110 @@ func (h *IronFistHandler) GetStats(c *gin.Context) {
 // Report game results (win/lose/draw/doubleLose), update statistics and determine achievement unlocks
 // Return to updated statistics + newly unlocked achievements this time
 func (h *IronFistHandler) ReportMatch(c *gin.Context) {
-	userID := c.GetUint64(middleware.CtxUserID)
-	var req service.ReportMatchRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+	c.JSON(http.StatusUpgradeRequired, gin.H{"error": "upgrade_required"})
+}
+
+func (h *IronFistHandler) StartPVESession(c *gin.Context) {
+	var body struct {
+		Replace bool `json:"replace"`
+	}
+	if err := decodeStrictAuthorityJSON(c.Request.Body, &body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
 		return
 	}
-	view, err := h.svc.ReportMatch(c.Request.Context(), userID, &req)
+	view, err := h.svc.StartRewardedPVE(c.Request.Context(), c.GetUint64(middleware.CtxUserID), body.Replace)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAuthorityError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, view)
+}
+
+func (h *IronFistHandler) GetActivePVESession(c *gin.Context) {
+	view, err := h.svc.GetActiveRewardedPVE(c.Request.Context(), c.GetUint64(middleware.CtxUserID))
+	if err != nil {
+		writeAuthorityError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, view)
+}
+
+func (h *IronFistHandler) GetAuthoritativeGame(c *gin.Context) {
+	view, err := h.svc.GetAuthoritativeGame(c.Request.Context(), c.GetUint64(middleware.CtxUserID), c.Param("id"))
+	if err != nil {
+		writeAuthorityError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, view)
+}
+
+func (h *IronFistHandler) SubmitAuthoritativeAction(c *gin.Context) {
+	var command service.ActionCommand
+	if err := decodeStrictAuthorityJSON(c.Request.Body, &command); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+		return
+	}
+	view, err := h.svc.SubmitAuthoritativeAction(c.Request.Context(), c.GetUint64(middleware.CtxUserID), c.Param("id"), command)
+	if err != nil {
+		writeAuthorityError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, view)
+}
+
+func (h *IronFistHandler) ResignAuthoritativeGame(c *gin.Context) {
+	view, err := h.svc.ResignAuthoritativeGame(c.Request.Context(), c.GetUint64(middleware.CtxUserID), c.Param("id"))
+	if err != nil {
+		writeAuthorityError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, view)
+}
+
+func decodeStrictAuthorityJSON(reader io.Reader, destination any) error {
+	decoder := json.NewDecoder(reader)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("trailing JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func authorityHTTPStatus(err error) int {
+	var authorityErr *service.AuthorityError
+	if !errors.As(err, &authorityErr) {
+		return http.StatusInternalServerError
+	}
+	switch authorityErr.Code {
+	case "invalid_action", "invalid_request_id", "invalid_participants":
+		return http.StatusBadRequest
+	case "forbidden":
+		return http.StatusForbidden
+	case "not_found":
+		return http.StatusNotFound
+	case "action_locked", "stale_state", "game_finished":
+		return http.StatusConflict
+	case "session_expired":
+		return http.StatusGone
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func writeAuthorityError(c *gin.Context, err error) {
+	var authorityErr *service.AuthorityError
+	if errors.As(err, &authorityErr) {
+		c.JSON(authorityHTTPStatus(err), gin.H{"error": authorityErr.Code})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 }
 
 // GET /api/games/ironfist/matches?before_id=xxx&limit=20
