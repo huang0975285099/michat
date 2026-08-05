@@ -25,6 +25,7 @@ dist/config.prod.yaml
 
 # IDE / AI
 .claude/
+.codex/
 .worktrees/
 .idea/
 .vscode/
