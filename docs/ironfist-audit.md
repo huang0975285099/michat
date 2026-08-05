@@ -111,7 +111,7 @@ go test ./migrations -run TestAuthorityMigrationCreatesConstraints -count=1 -v  
 
 ### 生产部署检查记录（2026-08-05）
 
-- [x] Compose 配置路径已修正为 `./backend/config.prod.yaml`。
+- [x] 已核对 Compose 与 `build.sh` 的发布路径：远程部署目录使用 `./config.prod.yaml`，由脚本从 `backend/config.prod.yaml` 生成并上传。
 - [x] Compose 已强制要求通过环境注入 `JWT_SECRET`、`MYSQL_DSN`、`TURN_SECRET`；不得依赖提交文件中的明文凭据。
 - [x] 启动流程包含 `migrations.AutoMigrate`，Redis Pub/Sub 使用 `ironfist:events`，各实例可将事件投递到本地 WebSocket Hub。
 - [ ] 在生产主机执行 `docker compose config --quiet`、双后端实例广播测试和真实迁移回滚演练。

@@ -22,8 +22,8 @@ services:
       APP_UPDATE_URL: "https://yb.yzs88.com"  # 更新/下载地址
       APP_VERSION_NOTES: ""         # 更新说明（可留空）
     volumes:
-      # Production config is kept outside the image and lives with backend deployment assets.
-      - ./backend/config.prod.yaml:/app/config.yaml:ro
+      # build.sh uploads this protected file to the deployment directory root.
+      - ./config.prod.yaml:/app/config.yaml:ro
     networks:
       - default
       - e2eechat-net

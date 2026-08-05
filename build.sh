@@ -252,6 +252,7 @@ upload() {
     )
     [[ -f "$OUTPUT_DIR/e2eechat-backend.tar.gz" ]] && files+=("$OUTPUT_DIR/e2eechat-backend.tar.gz")
     [[ -f "$OUTPUT_DIR/e2eechat-frontend.tar.gz" ]] && files+=("$OUTPUT_DIR/e2eechat-frontend.tar.gz")
+    [[ -f ".env" ]] && files+=(".env")
 
     scp -C -r "${files[@]}" "${REMOTE_USER}@${REMOTE_IP}:${REMOTE_DIR}/"
     ssh "${REMOTE_USER}@${REMOTE_IP}" "chmod +x '${REMOTE_DIR}/load.sh'"
