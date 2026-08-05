@@ -49,22 +49,24 @@ func authorityError(code string, err error) error {
 }
 
 type GameView struct {
-	GameID         string                  `json:"game_id"`
-	Mode           string                  `json:"mode"`
-	Status         string                  `json:"status"`
-	Seat           ironfistengine.Seat     `json:"seat"`
-	CurrentRound   int                     `json:"current_round"`
-	StateVersion   uint64                  `json:"state_version"`
-	State          ironfistengine.State    `json:"state"`
-	MyAction       *ironfistengine.Action  `json:"my_action,omitempty"`
-	MyLocked       bool                    `json:"my_locked"`
-	OpponentLocked bool                    `json:"opponent_locked"`
-	OpponentAction *ironfistengine.Action  `json:"opponent_action,omitempty"`
-	LastRound      *AuthoritativeRoundView `json:"last_round,omitempty"`
-	Outcome        ironfistengine.Outcome  `json:"outcome,omitempty"`
-	ActionDeadline *time.Time              `json:"action_deadline,omitempty"`
-	ExpiresAt      *time.Time              `json:"expires_at,omitempty"`
-	ServerTime     time.Time               `json:"server_time"`
+	GameID                    string                  `json:"game_id"`
+	Mode                      string                  `json:"mode"`
+	Status                    string                  `json:"status"`
+	Seat                      ironfistengine.Seat     `json:"seat"`
+	CurrentRound              int                     `json:"current_round"`
+	StateVersion              uint64                  `json:"state_version"`
+	State                     ironfistengine.State    `json:"state"`
+	MyAction                  *ironfistengine.Action  `json:"my_action,omitempty"`
+	MyLocked                  bool                    `json:"my_locked"`
+	OpponentLocked            bool                    `json:"opponent_locked"`
+	OpponentAction            *ironfistengine.Action  `json:"opponent_action,omitempty"`
+	MyReconnectDeadline       *time.Time              `json:"my_reconnect_deadline,omitempty"`
+	OpponentReconnectDeadline *time.Time              `json:"opponent_reconnect_deadline,omitempty"`
+	LastRound                 *AuthoritativeRoundView `json:"last_round,omitempty"`
+	Outcome                   ironfistengine.Outcome  `json:"outcome,omitempty"`
+	ActionDeadline            *time.Time              `json:"action_deadline,omitempty"`
+	ExpiresAt                 *time.Time              `json:"expires_at,omitempty"`
+	ServerTime                time.Time               `json:"server_time"`
 }
 
 type AuthoritativeRoundView struct {
@@ -425,6 +427,9 @@ func (s *IronFistService) ResignAuthoritativeGame(ctx context.Context, userID ui
 			return nil, err
 		}
 	}
+	if err := s.enqueueIronFistOutboxTx(ctx, tx, game, "ironfist_game_finished", seat, now); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -489,6 +494,18 @@ func gameViewForSeat(game *lockedGame, seat ironfistengine.Seat, now time.Time) 
 		value := deadline.Time.UTC()
 		view.ActionDeadline = &value
 	}
+	myReconnectDeadline, opponentReconnectDeadline := game.DisconnectDeadlineA, game.DisconnectDeadlineB
+	if seat == ironfistengine.SeatB {
+		myReconnectDeadline, opponentReconnectDeadline = opponentReconnectDeadline, myReconnectDeadline
+	}
+	if myReconnectDeadline.Valid {
+		value := myReconnectDeadline.Time.UTC()
+		view.MyReconnectDeadline = &value
+	}
+	if opponentReconnectDeadline.Valid {
+		value := opponentReconnectDeadline.Time.UTC()
+		view.OpponentReconnectDeadline = &value
+	}
 	if action, ok := game.PendingActions[mySeat]; ok {
 		value := action.Action
 		view.MyAction, view.MyLocked = &value, true
@@ -509,8 +526,6 @@ func gameViewForSeat(game *lockedGame, seat ironfistengine.Seat, now time.Time) 
 			DamageToMe: damageA, DamageToOpponent: damageB,
 			EnvironmentDamage: result.EnvironmentDamage, State: result.State, Outcome: result.Outcome,
 		}
-		value := actionB
-		view.OpponentAction = &value
 	}
 	return view
 }

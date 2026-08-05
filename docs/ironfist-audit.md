@@ -26,7 +26,7 @@
 - 旧结果上报和旧 PvE 领奖接口返回 `upgrade_required`。
 - 结算使用唯一 settlement reference，并在事务内更新余额、账本、战绩和房间。
 
-仍需补充真实数据库集成测试：并发重复动作、并发终局结算、截止时间 worker 与请求竞态、outbox 重试，以及账号删除中途失败回滚。
+迁移约束集成测试已在本机 MySQL 通过；仍需补充真实数据库集成测试：并发重复动作、并发终局结算、截止时间 worker 与请求竞态、outbox 重试，以及账号删除中途失败回滚。
 
 ## P1-1：停用的 `$FIST` 国际入口仍存在
 
@@ -72,13 +72,13 @@
 
 ## P2-2：Node 测试仍提示模块类型警告
 
-`npm run test:ironfist` 的通过结果伴随 `MODULE_TYPELESS_PACKAGE_JSON` 警告，涉及 `resolve.js` 和 `replay.js`。这不影响当前测试，但会增加启动开销并掩盖未来模块加载问题。
+该问题已通过在 `frontend/package.json` 声明 ESM 解决。
 
 建议：统一前端模块策略（为项目声明 ESM，或明确测试文件的模块边界），单独验证 Quasar 构建不受影响。
 
 ## P2-3：生产构建存在大 chunk 警告
 
-`npm run build` 成功，但 Vite 报告部分 chunk 超过 500KB。Babylon.js 是主要候选，应通过动态导入或路由级拆包优化；这不是当前对局正确性问题。
+Babylon.js 已改为动态导入，主包不再同步加载 3D 引擎；其独立 chunk 仍约 4MB，Vite 仍提示体积较大，但这不影响对局正确性。
 
 ## 已通过的验证
 
@@ -89,10 +89,17 @@ frontend: npm run lint                  PASS (14 warnings)
 frontend: npm run build                 PASS (chunk-size warning)
 ```
 
+已执行的 MySQL 集成验证：
+
+```text
+MYSQL_TEST_DSN=本机 MySQL
+go test ./migrations -run TestAuthorityMigrationCreatesConstraints -count=1 -v  PASS
+```
+
 ## 推荐后续顺序
 
 1. 移除/隔离 `$FIST` 页面、旧入口和用户可见文案。
 2. 清理旧引擎注释，补充 practice-only 模式路由集成测试。
 3. 增加真实 MySQL 事务、迁移和并发 smoke test。
 4. 清理 IronFist 相关 lint warning，再处理全项目 warning。
-5. 最后做 Babylon.js 拆包和 Node ESM 警告治理。
+5. Babylon.js 拆包和 Node ESM 警告治理已完成；后续仅需按性能数据决定是否继续细分 3D chunk。

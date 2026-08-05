@@ -1,10 +1,8 @@
 import { ironfistApi } from 'src/services/api'
 import { on, off } from 'src/services/websocket'
 import {
-  authorityOutcomeToLocal,
   createAuthoritativeClientCore,
-  toPageState,
-  toResolvedEvent,
+  createAuthoritativeTransitionCoordinator,
 } from './authoritative-client-core.mjs'
 
 const EVENT_TYPES = [
@@ -22,8 +20,7 @@ export class AuthoritativeIronFistGame {
     this.view = view
     this._listeners = {}
     this._disposed = false
-    this._lastResolvedRound = 0
-    this._lastAnnouncedRound = 0
+    this.transitions = createAuthoritativeTransitionCoordinator()
     this._boundEvent = payload => this._onServerEvent(payload)
     this.core = createAuthoritativeClientCore({
       view: view || {},
@@ -71,7 +68,9 @@ export class AuthoritativeIronFistGame {
 
   async retryAction() { return this.core.retry() }
 
-  confirmNextRound() {}
+  confirmNextRound() {
+    this._dispatchTransitions(this.transitions.confirmNextRound())
+  }
 
   async resign() {
     const view = unwrap(await ironfistApi.resignGame(this.gameId))
@@ -85,32 +84,37 @@ export class AuthoritativeIronFistGame {
     await this.core.onEvent(payload)
     // Notifications are intentionally disposable and partial; MySQL state is
     // fetched before rendering any authoritative transition.
-    await this.resume(this.gameId)
+    const view = await this.resume(this.gameId)
+    if (typeof payload?.connected !== 'boolean' || payload.seat === view.seat) return
+    if (!payload.connected) {
+      const deadline = Date.parse(view.opponent_reconnect_deadline || payload.reconnect_deadline)
+      const serverTime = Date.parse(view.server_time)
+      const timeoutMs = Number.isFinite(deadline) && Number.isFinite(serverTime)
+        ? Math.max(0, deadline - serverTime)
+        : 60_000
+      this._emit('phase', 'waiting_reconnect')
+      this._emit('opponent-disconnected', { timeoutMs })
+      return
+    }
+    this._emit('phase', 'deciding')
+    this._emit('round-resume', {
+      round: view.current_round,
+      startedAt: view.action_deadline ? Date.parse(view.action_deadline) - 30_000 : Date.parse(view.server_time),
+    })
   }
 
   _applyView(view) {
     if (this._disposed || !view) return
     this.view = view
-    const pageState = toPageState(view)
-    if (view.last_round?.round > this._lastResolvedRound) {
-      this._lastResolvedRound = view.last_round.round
-      this._emit('resolved', toResolvedEvent(view.last_round, view.seat))
-    }
-    if (view.status === 'completed' || view.status === 'abandoned' || view.status === 'cancelled') {
-      this._emit('phase', 'game_over')
-      this._emit('gameover', authorityOutcomeToLocal(view.outcome, view.seat) || (view.status === 'abandoned' ? 'lose' : 'draw'))
-      return
-    }
-    if (view.current_round > this._lastAnnouncedRound) {
-      this._lastAnnouncedRound = view.current_round
-      this._emit('phase', 'round_start')
-      this._emit('round-start', { round: view.current_round, state: pageState, startedAt: Date.parse(view.server_time) })
-      this._emit('phase', 'deciding')
-    }
+    this._dispatchTransitions(this.transitions.apply(view))
     if (view.my_locked && view.my_action) {
       this._emit('locked', { side: 'player', action: view.my_action })
       this._emit('phase', 'locked')
     }
+  }
+
+  _dispatchTransitions(events) {
+    for (const event of events) this._emit(event.type, event.payload)
   }
 
   destroy() {

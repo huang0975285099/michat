@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"time"
 
 	"e2eechat/internal/model"
@@ -81,126 +80,128 @@ func (s *FistService) GetAccount(ctx context.Context, userID uint64) (*FistAccou
 func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistAccountView, error) {
 	return nil, ErrLegacyPvEClaimDisabled
 
-	// Retained temporarily for migration archaeology; this code is unreachable
-	// and the HTTP route is retired by the authoritative API rollout.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
+	/*
+		// Retained temporarily for migration archaeology; this code is unreachable
+		// and the HTTP route is retired by the authoritative API rollout.
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback()
 
-	if err = s.ensureAccount(ctx, tx, userID); err != nil {
-		return nil, err
-	}
+		if err = s.ensureAccount(ctx, tx, userID); err != nil {
+			return nil, err
+		}
 
-	// The reward must be spent on a PvE victory that has been saved by ReportMatch and has not yet been claimed.
-	// FOR UPDATE + The same transaction mark guarantees that concurrent requests can only be consumed once.
-	var matchID uint64
-	err = tx.QueryRowContext(ctx, `
-		SELECT id FROM ironfist_matches
-		WHERE user_id = ? AND pve_reward_eligible = 1
-		  AND pve_reward_claimed_at IS NULL
-		ORDER BY id ASC LIMIT 1 FOR UPDATE
-	`, userID).Scan(&matchID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNoEligiblePvEWin
-	}
-	if err != nil {
-		return nil, err
-	}
-	if _, err = tx.ExecContext(ctx, `
-		UPDATE ironfist_matches SET pve_reward_claimed_at = CURRENT_TIMESTAMP(3)
-		WHERE id = ? AND pve_reward_claimed_at IS NULL
-	`, matchID); err != nil {
-		return nil, err
-	}
+		// The reward must be spent on a PvE victory that has been saved by ReportMatch and has not yet been claimed.
+		// FOR UPDATE + The same transaction mark guarantees that concurrent requests can only be consumed once.
+		var matchID uint64
+		err = tx.QueryRowContext(ctx, `
+			SELECT id FROM ironfist_matches
+			WHERE user_id = ? AND pve_reward_eligible = 1
+			  AND pve_reward_claimed_at IS NULL
+			ORDER BY id ASC LIMIT 1 FOR UPDATE
+		`, userID).Scan(&matchID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNoEligiblePvEWin
+		}
+		if err != nil {
+			return nil, err
+		}
+		if _, err = tx.ExecContext(ctx, `
+			UPDATE ironfist_matches SET pve_reward_claimed_at = CURRENT_TIMESTAMP(3)
+			WHERE id = ? AND pve_reward_claimed_at IS NULL
+		`, matchID); err != nil {
+			return nil, err
+		}
 
-	// Upsert daily progress row, IF condition ensures wins_count < 10 before incrementing
-	// RowsAffected:
-	// 1 = new row (first field)
-	// 2 = There is a row and the value changes (normal increment)
-	// 0 = There is a row but the value has not changed (wins_count has reached 10, cannot continue)
-	res, err := tx.ExecContext(ctx, `
-		INSERT INTO pve_daily_progress (user_id, date, wins_count, earned_today)
-		VALUES (?, UTC_DATE(), 1, ?)
-		ON DUPLICATE KEY UPDATE
-		  earned_today = IF(wins_count < ?, earned_today + ?, earned_today),
-		  wins_count   = IF(wins_count < ?, wins_count + 1, wins_count)
-	`, userID, PvERewardAmount, PvEDailyMaxWins, PvERewardAmount, PvEDailyMaxWins)
-	if err != nil {
-		return nil, err
-	}
-	if affected, _ := res.RowsAffected(); affected == 0 {
-		return nil, ErrPvEDailyLimitReached
-	}
+		// Upsert daily progress row, IF condition ensures wins_count < 10 before incrementing
+		// RowsAffected:
+		// 1 = new row (first field)
+		// 2 = There is a row and the value changes (normal increment)
+		// 0 = There is a row but the value has not changed (wins_count has reached 10, cannot continue)
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO pve_daily_progress (user_id, date, wins_count, earned_today)
+			VALUES (?, UTC_DATE(), 1, ?)
+			ON DUPLICATE KEY UPDATE
+			  earned_today = IF(wins_count < ?, earned_today + ?, earned_today),
+			  wins_count   = IF(wins_count < ?, wins_count + 1, wins_count)
+		`, userID, PvERewardAmount, PvEDailyMaxWins, PvERewardAmount, PvEDailyMaxWins)
+		if err != nil {
+			return nil, err
+		}
+		if affected, _ := res.RowsAffected(); affected == 0 {
+			return nil, ErrPvEDailyLimitReached
+		}
 
-	// Update account balance
-	if _, err = tx.ExecContext(ctx, `
-		UPDATE fist_accounts
-		SET balance = balance + ?, total_earned = total_earned + ?
-		WHERE user_id = ?
-	`, PvERewardAmount, PvERewardAmount, userID); err != nil {
-		return nil, err
-	}
-
-	// Read the updated complete status
-	view := &FistAccountView{TodayMax: PvEDailyMaxWins}
-	if err = tx.QueryRowContext(ctx, `
-		SELECT fa.balance, fa.total_earned,
-		       COALESCE(pdp.wins_count, 0),
-		       COALESCE(pdp.earned_today, 0)
-		FROM fist_accounts fa
-		LEFT JOIN pve_daily_progress pdp
-		       ON pdp.user_id = fa.user_id AND pdp.date = UTC_DATE()
-		WHERE fa.user_id = ?
-	`, userID).Scan(&view.Balance, &view.TotalEarned, &view.TodayWins, &view.TodayEarned); err != nil {
-		return nil, err
-	}
-
-	// Write transaction records (balance_after = updated balance)
-	remark := fmt.Sprintf("第%d场PvE胜局（今日）", view.TodayWins)
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO fist_transactions (user_id, amount, balance_after, type, ref_id, remark)
-		VALUES (?, ?, ?, 'pve_reward', ?, ?)
-	`, userID, PvERewardAmount, view.Balance, fmt.Sprintf("ironfist_match:%d", matchID), remark); err != nil {
-		return nil, err
-	}
-
-	// Additional rewards for reaching 10 games per day: This reward will be issued when wins_count reaches the upper limit (only once per day).
-	// Because claiming the prize again after 10 games will return ErrPvEDailyLimitReached at the upsert above,
-	// Therefore, TodayWins == PvEDailyMaxWins will only be established when the prize is successfully collected in the "10th game".
-	if view.TodayWins == PvEDailyMaxWins {
+		// Update account balance
 		if _, err = tx.ExecContext(ctx, `
 			UPDATE fist_accounts
 			SET balance = balance + ?, total_earned = total_earned + ?
 			WHERE user_id = ?
-		`, PvEDailyBonusAmount, PvEDailyBonusAmount, userID); err != nil {
+		`, PvERewardAmount, PvERewardAmount, userID); err != nil {
 			return nil, err
 		}
-		if _, err = tx.ExecContext(ctx, `
-			UPDATE pve_daily_progress
-			SET earned_today = earned_today + ?
-			WHERE user_id = ? AND date = UTC_DATE()
-		`, PvEDailyBonusAmount, userID); err != nil {
+
+		// Read the updated complete status
+		view := &FistAccountView{TodayMax: PvEDailyMaxWins}
+		if err = tx.QueryRowContext(ctx, `
+			SELECT fa.balance, fa.total_earned,
+			       COALESCE(pdp.wins_count, 0),
+			       COALESCE(pdp.earned_today, 0)
+			FROM fist_accounts fa
+			LEFT JOIN pve_daily_progress pdp
+			       ON pdp.user_id = fa.user_id AND pdp.date = UTC_DATE()
+			WHERE fa.user_id = ?
+		`, userID).Scan(&view.Balance, &view.TotalEarned, &view.TodayWins, &view.TodayEarned); err != nil {
 			return nil, err
 		}
-		view.Balance += PvEDailyBonusAmount
-		view.TotalEarned += uint64(PvEDailyBonusAmount)
-		view.TodayEarned += PvEDailyBonusAmount
-		view.BonusAwarded = true
-		view.BonusAmount = PvEDailyBonusAmount
+
+		// Write transaction records (balance_after = updated balance)
+		remark := fmt.Sprintf("第%d场PvE胜局（今日）", view.TodayWins)
 		if _, err = tx.ExecContext(ctx, `
 			INSERT INTO fist_transactions (user_id, amount, balance_after, type, ref_id, remark)
 			VALUES (?, ?, ?, 'pve_reward', ?, ?)
-		`, userID, PvEDailyBonusAmount, view.Balance, fmt.Sprintf("ironfist_match:%d", matchID), "每日满10场额外奖励"); err != nil {
+		`, userID, PvERewardAmount, view.Balance, fmt.Sprintf("ironfist_match:%d", matchID), remark); err != nil {
 			return nil, err
 		}
-	}
 
-	if err = tx.Commit(); err != nil {
-		return nil, err
-	}
-	return view, nil
+		// Additional rewards for reaching 10 games per day: This reward will be issued when wins_count reaches the upper limit (only once per day).
+		// Because claiming the prize again after 10 games will return ErrPvEDailyLimitReached at the upsert above,
+		// Therefore, TodayWins == PvEDailyMaxWins will only be established when the prize is successfully collected in the "10th game".
+		if view.TodayWins == PvEDailyMaxWins {
+			if _, err = tx.ExecContext(ctx, `
+				UPDATE fist_accounts
+				SET balance = balance + ?, total_earned = total_earned + ?
+				WHERE user_id = ?
+			`, PvEDailyBonusAmount, PvEDailyBonusAmount, userID); err != nil {
+				return nil, err
+			}
+			if _, err = tx.ExecContext(ctx, `
+				UPDATE pve_daily_progress
+				SET earned_today = earned_today + ?
+				WHERE user_id = ? AND date = UTC_DATE()
+			`, PvEDailyBonusAmount, userID); err != nil {
+				return nil, err
+			}
+			view.Balance += PvEDailyBonusAmount
+			view.TotalEarned += uint64(PvEDailyBonusAmount)
+			view.TodayEarned += PvEDailyBonusAmount
+			view.BonusAwarded = true
+			view.BonusAmount = PvEDailyBonusAmount
+			if _, err = tx.ExecContext(ctx, `
+				INSERT INTO fist_transactions (user_id, amount, balance_after, type, ref_id, remark)
+				VALUES (?, ?, ?, 'pve_reward', ?, ?)
+			`, userID, PvEDailyBonusAmount, view.Balance, fmt.Sprintf("ironfist_match:%d", matchID), "每日满10场额外奖励"); err != nil {
+				return nil, err
+			}
+		}
+
+		if err = tx.Commit(); err != nil {
+			return nil, err
+		}
+		return view, nil
+	*/
 }
 
 // GetTransactions queries the transaction details, cursor paging (before_id), latest first.

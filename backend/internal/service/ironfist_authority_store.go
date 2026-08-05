@@ -239,13 +239,9 @@ func persistResolvedRoundTx(ctx context.Context, tx *sql.Tx, game *lockedGame, r
 		game.FinishReason = sql.NullString{String: "rules_terminal", Valid: true}
 		game.FinishedAt = sqlNullTime(now)
 		finishReason, finishedAt = game.FinishReason.String, now
-		switch result.Outcome {
-		case ironfistengine.WinA:
-			winner = game.PlayerAUserID
-			game.WinnerUserID = sql.NullInt64{Int64: int64(game.PlayerAUserID), Valid: true}
-		case ironfistengine.WinB:
-			winner = game.PlayerBUserID
-			game.WinnerUserID = sql.NullInt64{Int64: int64(game.PlayerBUserID), Valid: true}
+		game.WinnerUserID = authorityWinnerUserID(game, result.Outcome)
+		if game.WinnerUserID.Valid {
+			winner = game.WinnerUserID.Int64
 		}
 	}
 
@@ -276,6 +272,20 @@ func persistResolvedRoundTx(ctx context.Context, tx *sql.Tx, game *lockedGame, r
 		}
 	}
 	return nil
+}
+
+func authorityWinnerUserID(game *lockedGame, outcome ironfistengine.Outcome) sql.NullInt64 {
+	var userID uint64
+	switch outcome {
+	case ironfistengine.WinA:
+		userID = game.PlayerAUserID
+	case ironfistengine.WinB:
+		userID = game.PlayerBUserID
+	}
+	if userID == 0 {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: int64(userID), Valid: true}
 }
 
 func loadActionResponseTx(ctx context.Context, tx *sql.Tx, gameID string, userID uint64, requestID string) (*GameView, bool, error) {

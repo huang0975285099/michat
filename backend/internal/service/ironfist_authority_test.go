@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -20,9 +21,17 @@ func TestGameViewHidesUnresolvedOpponentAction(t *testing.T) {
 	game := &lockedGame{
 		GameID: "game-1", Mode: "pvp", Status: "active",
 		PlayerAUserID: 7, PlayerBUserID: 8,
-		CurrentRound: 1, StateVersion: 1, State: ironfistengine.InitialState(),
+		CurrentRound: 2, StateVersion: 2, State: ironfistengine.InitialState(),
 		PendingActions: map[ironfistengine.Seat]lockedAction{
 			ironfistengine.SeatB: {Action: opponentAction, Source: "player"},
+		},
+		LastRound: &resolvedAuthorityRound{
+			Round: 1,
+			Result: ironfistengine.RoundResult{
+				ActionA: ironfistengine.Attack,
+				ActionB: ironfistengine.Defend,
+				State:   ironfistengine.InitialState(),
+			},
 		},
 	}
 
@@ -32,6 +41,30 @@ func TestGameViewHidesUnresolvedOpponentAction(t *testing.T) {
 	}
 	if view.MyAction != nil {
 		t.Fatalf("unexpected own action: %#v", view.MyAction)
+	}
+}
+
+func TestPresenceEventReportsDisconnectedSeatAndDeadline(t *testing.T) {
+	deadline := authorityFixedTime.Add(time.Minute)
+	game := &lockedGame{
+		GameID: "game-1", Mode: "pvp", Status: "active",
+		PlayerAUserID: 7, PlayerBUserID: 8,
+		DisconnectDeadlineB: sqlNullTime(deadline),
+	}
+
+	raw, err := authorityEventPayload("ironfist_presence_changed", game, ironfistengine.SeatB, authorityFixedTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["connected"] != false {
+		t.Fatalf("connected=%#v, want false", payload["connected"])
+	}
+	if payload["reconnect_deadline"] != deadline.UTC().Format(time.RFC3339) {
+		t.Fatalf("reconnect_deadline=%#v, want %q", payload["reconnect_deadline"], deadline.UTC().Format(time.RFC3339))
 	}
 }
 
@@ -94,6 +127,26 @@ func TestSubmitAuthoritativeActionSameRequestIsIdempotent(t *testing.T) {
 	}
 	if seat != ironfistengine.SeatA {
 		t.Fatalf("seat=%q, want a", seat)
+	}
+}
+
+func TestAuthorityWinnerUserIDLeavesAIWinnerNull(t *testing.T) {
+	game := &lockedGame{Mode: "pve", PlayerAUserID: 54}
+
+	winner := authorityWinnerUserID(game, ironfistengine.WinB)
+
+	if winner.Valid {
+		t.Fatalf("PvE AI winner must not reference users.id, got %+v", winner)
+	}
+}
+
+func TestAuthorityWinnerUserIDRecordsPVPSeatB(t *testing.T) {
+	game := &lockedGame{Mode: "pvp", PlayerAUserID: 54, PlayerBUserID: 91}
+
+	winner := authorityWinnerUserID(game, ironfistengine.WinB)
+
+	if !winner.Valid || winner.Int64 != 91 {
+		t.Fatalf("PvP seat B winner = %+v, want valid user 91", winner)
 	}
 }
 

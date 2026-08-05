@@ -158,6 +158,7 @@ import {
 } from "src/services/websocket.js";
 import { ironfistApi } from "src/services/api.js";
 import { PVP_TIERS } from "../game/ironfistMeta";
+import { matchedQueuePayload } from "../game/pvp-match-recovery.mjs";
 
 const emit = defineEmits(["back", "matched"]);
 
@@ -241,14 +242,9 @@ function leaveLobby() {
     (async () => {
       try {
         const { data } = await ironfistApi.getPVPQueueStatus();
-        if (data?.status === "matched" && data.room_id) {
-          emit("matched", {
-            roomId: data.room_id,
-            gameId: data.game_id,
-            opponent: data.opponent,
-            tier: data.tier,
-            stake: data.stake,
-          });
+        const payload = matchedQueuePayload(data);
+        if (payload) {
+          emit("matched", payload);
           return;
         }
       } catch {
@@ -325,14 +321,9 @@ function startMatchPoll(epoch) {
     try {
       const { data } = await ironfistApi.getPVPQueueStatus();
       if (epoch !== matchEpoch || matchState.value !== "searching") return;
-      if (data?.status === "matched" && data.room_id) {
-        emitMatched({
-          room_id: data.room_id,
-          game_id: data.game_id,
-          opponent: data.opponent,
-          tier: data.tier,
-          stake: data.stake,
-        });
+      const payload = matchedQueuePayload(data);
+      if (payload) {
+        emit("matched", payload);
         return;
       }
       // If it is still queued or idle, continue polling.
@@ -367,14 +358,10 @@ async function cancelMatch() {
   // The stake is locked for 15 minutes before being refunded in a draw by SweepTimeoutPVPMatched.
   try {
     const { data } = await ironfistApi.getPVPQueueStatus();
-    if (data?.status === "matched" && data.room_id) {
+    const payload = matchedQueuePayload(data);
+    if (payload) {
       // Actually matched: The matched room cannot be canceled. Go directly to the match page to avoid orphan rooms.
-      emitMatched({
-        room_id: data.room_id,
-        opponent: data.opponent,
-        tier: data.tier,
-        stake: data.stake,
-      });
+      emit("matched", payload);
       cancelling.value = false;
       return;
     }

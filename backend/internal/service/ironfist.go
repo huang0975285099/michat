@@ -1158,191 +1158,193 @@ func (s *IronFistService) SweepTimeoutPVPMatched(ctx context.Context) (int, erro
 func (s *IronFistService) SettlePVP(ctx context.Context, roomID, callerUserID uint64, callerResult string) (*PVPSettleResult, error) {
 	return nil, ErrLegacyPVPReportDisabled
 
-	// Retained temporarily for migration archaeology. Authoritative games call
-	// settleWageredPVPTx inside their terminal game transaction instead.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-
-	var (
-		status, tierStr, storedResult     string
-		stake                             int64
-		aUserID, bUserID                  uint64
-		aChatID, bChatID                  string
-		reportA, reportB                  sql.NullString
-		stWinnerAmt, stRefundA, stRefundB int64
-		stFeeBurn, stFeeTreasury          int64
-	)
-	err = tx.QueryRowContext(ctx, `
-		SELECT status, tier, stake_amount,
-		       player_a_user_id, player_b_user_id,
-		       player_a_chat_id, player_b_chat_id,
-		       COALESCE(result, ''), report_a, report_b,
-		       winner_amount, refund_a, refund_b, fee_burn, fee_treasury
-		FROM ironfist_pvp_rooms WHERE id = ? FOR UPDATE
-	`, roomID).Scan(&status, &tierStr, &stake, &aUserID, &bUserID, &aChatID, &bChatID,
-		&storedResult, &reportA, &reportB,
-		&stWinnerAmt, &stRefundA, &stRefundB, &stFeeBurn, &stFeeTreasury)
-	if err == sql.ErrNoRows {
-		return nil, ErrPVPRoomNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	if callerUserID != aUserID && callerUserID != bUserID {
-		return nil, ErrPVPNotParticipant
-	}
-	// Idempotent: Settled → Play back the saved final result and amount (for the first reporting party to poll to get consistent settlement information)
-	if status == "settled" {
-		return &PVPSettleResult{
-			Settled: true, RoomID: roomID, Result: storedResult,
-			WinnerAmount: stWinnerAmt, RefundA: stRefundA, RefundB: stRefundB,
-			FeeBurn: stFeeBurn, FeeTreasury: stFeeTreasury,
-		}, nil
-	}
-	if status != "matched" {
-		return nil, ErrPVPRoomNotMatched
-	}
-
-	// Caller perspective → Room perspective
-	callerIsA := callerUserID == aUserID
-	roomResult, err := mapPVPResult(callerResult, callerIsA)
-	if err != nil {
-		return nil, err
-	}
-
-	// The first time is valid and cannot be modified: as long as this party has already reported it (regardless of whether the results are the same), this report will be ignored.
-	// Being able to get here (status='matched' unsettled) means that the opponent has not yet reported - otherwise when the second reporting party triggers
-	// Both parties are valid and will be settled within the same transaction, and the previous status check has been returned.
-	// Therefore, our repeated reporting does not need to be rewritten, nor will it affect settlement. It will directly return pending (carrying the saved results).
-	if callerIsA && reportA.Valid {
-		return &PVPSettleResult{Pending: true, RoomID: roomID, Result: reportA.String}, nil
-	}
-	if !callerIsA && reportB.Valid {
-		return &PVPSettleResult{Pending: true, RoomID: roomID, Result: reportB.String}, nil
-	}
-
-	// Record our first report
-	if callerIsA {
-		if _, err = tx.ExecContext(ctx,
-			`UPDATE ironfist_pvp_rooms SET report_a = ? WHERE id = ?`, roomResult, roomID); err != nil {
+	/*
+		// Retained temporarily for migration archaeology. Authoritative games call
+		// settleWageredPVPTx inside their terminal game transaction instead.
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
 			return nil, err
 		}
-		reportA = sql.NullString{String: roomResult, Valid: true}
-	} else {
-		if _, err = tx.ExecContext(ctx,
-			`UPDATE ironfist_pvp_rooms SET report_b = ? WHERE id = ?`, roomResult, roomID); err != nil {
+		defer tx.Rollback()
+
+		var (
+			status, tierStr, storedResult     string
+			stake                             int64
+			aUserID, bUserID                  uint64
+			aChatID, bChatID                  string
+			reportA, reportB                  sql.NullString
+			stWinnerAmt, stRefundA, stRefundB int64
+			stFeeBurn, stFeeTreasury          int64
+		)
+		err = tx.QueryRowContext(ctx, `
+			SELECT status, tier, stake_amount,
+			       player_a_user_id, player_b_user_id,
+			       player_a_chat_id, player_b_chat_id,
+			       COALESCE(result, ''), report_a, report_b,
+			       winner_amount, refund_a, refund_b, fee_burn, fee_treasury
+			FROM ironfist_pvp_rooms WHERE id = ? FOR UPDATE
+		`, roomID).Scan(&status, &tierStr, &stake, &aUserID, &bUserID, &aChatID, &bChatID,
+			&storedResult, &reportA, &reportB,
+			&stWinnerAmt, &stRefundA, &stRefundB, &stFeeBurn, &stFeeTreasury)
+		if err == sql.ErrNoRows {
+			return nil, ErrPVPRoomNotFound
+		}
+		if err != nil {
 			return nil, err
 		}
-		reportB = sql.NullString{String: roomResult, Valid: true}
-	}
+		if callerUserID != aUserID && callerUserID != bUserID {
+			return nil, ErrPVPNotParticipant
+		}
+		// Idempotent: Settled → Play back the saved final result and amount (for the first reporting party to poll to get consistent settlement information)
+		if status == "settled" {
+			return &PVPSettleResult{
+				Settled: true, RoomID: roomID, Result: storedResult,
+				WinnerAmount: stWinnerAmt, RefundA: stRefundA, RefundB: stRefundB,
+				FeeBurn: stFeeBurn, FeeTreasury: stFeeTreasury,
+			}, nil
+		}
+		if status != "matched" {
+			return nil, ErrPVPRoomNotMatched
+		}
 
-	// Settlement will be made only after both parties have reported; otherwise, pending will be returned after submitting the report from one party.
-	if !reportA.Valid || !reportB.Valid {
+		// Caller perspective → Room perspective
+		callerIsA := callerUserID == aUserID
+		roomResult, err := mapPVPResult(callerResult, callerIsA)
+		if err != nil {
+			return nil, err
+		}
+
+		// The first time is valid and cannot be modified: as long as this party has already reported it (regardless of whether the results are the same), this report will be ignored.
+		// Being able to get here (status='matched' unsettled) means that the opponent has not yet reported - otherwise when the second reporting party triggers
+		// Both parties are valid and will be settled within the same transaction, and the previous status check has been returned.
+		// Therefore, our repeated reporting does not need to be rewritten, nor will it affect settlement. It will directly return pending (carrying the saved results).
+		if callerIsA && reportA.Valid {
+			return &PVPSettleResult{Pending: true, RoomID: roomID, Result: reportA.String}, nil
+		}
+		if !callerIsA && reportB.Valid {
+			return &PVPSettleResult{Pending: true, RoomID: roomID, Result: reportB.String}, nil
+		}
+
+		// Record our first report
+		if callerIsA {
+			if _, err = tx.ExecContext(ctx,
+				`UPDATE ironfist_pvp_rooms SET report_a = ? WHERE id = ?`, roomResult, roomID); err != nil {
+				return nil, err
+			}
+			reportA = sql.NullString{String: roomResult, Valid: true}
+		} else {
+			if _, err = tx.ExecContext(ctx,
+				`UPDATE ironfist_pvp_rooms SET report_b = ? WHERE id = ?`, roomResult, roomID); err != nil {
+				return nil, err
+			}
+			reportB = sql.NullString{String: roomResult, Valid: true}
+		}
+
+		// Settlement will be made only after both parties have reported; otherwise, pending will be returned after submitting the report from one party.
+		if !reportA.Valid || !reportB.Valid {
+			if err = tx.Commit(); err != nil {
+				return nil, err
+			}
+			return &PVPSettleResult{Pending: true, RoomID: roomID, Result: roomResult}, nil
+		}
+
+		// If the reports from both parties are consistent → settle according to the result; if they are inconsistent → a draw (to prevent cheating)
+		finalResult := roomResult
+		if reportA.String != reportB.String {
+			finalResult = "draw"
+		}
+
+		out := &PVPSettleResult{RoomID: roomID, Result: finalResult, Settled: true}
+		totalPool := stake * 2
+		var totalFee int64
+		if finalResult == "draw" || finalResult == "doubleLose" {
+			totalFee = totalPool * 25 / 1000 // 2.5%
+		} else {
+			totalFee = totalPool * 5 / 100 // 5%
+		}
+		out.FeeBurn = totalFee / 2
+		out.FeeTreasury = totalFee - out.FeeBurn //The remainder goes to the treasury
+
+		// Lock two account lines (to prevent conflicts with concurrent withdrawals, etc.)
+		if err = s.ensureFistAccountTx(ctx, tx, aUserID); err != nil {
+			return nil, err
+		}
+		if err = s.ensureFistAccountTx(ctx, tx, bUserID); err != nil {
+			return nil, err
+		}
+
+		// Directly include the chat IDs of both opponents in the remarks: A’s opponent is B, and B’s opponent is A.
+		switch finalResult {
+		case "win_a":
+			out.WinnerAmount = totalPool - totalFee
+			if _, err = tx.ExecContext(ctx,
+				`UPDATE fist_accounts SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id = ?`,
+				out.WinnerAmount, out.WinnerAmount, aUserID); err != nil {
+				return nil, err
+			}
+			if err = s.writeFistTx(ctx, tx, aUserID, out.WinnerAmount, "pvp_win", pvpRoomRef(roomID),
+				fmt.Sprintf("PVP 胜利奖励（%s场，对手：%s）", tierStr, bChatID)); err != nil {
+				return nil, err
+			}
+		case "win_b":
+			out.WinnerAmount = totalPool - totalFee
+			if _, err = tx.ExecContext(ctx,
+				`UPDATE fist_accounts SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id = ?`,
+				out.WinnerAmount, out.WinnerAmount, bUserID); err != nil {
+				return nil, err
+			}
+			if err = s.writeFistTx(ctx, tx, bUserID, out.WinnerAmount, "pvp_win", pvpRoomRef(roomID),
+				fmt.Sprintf("PVP 胜利奖励（%s场，对手：%s）", tierStr, aChatID)); err != nil {
+				return nil, err
+			}
+		case "draw", "doubleLose":
+			// Tie: Both parties will refund equally, each will refund floor((pool - fee)/2), and the remainder that is not divisible will be included in the handling fee.
+			// Compared with "remainder goes to B", the refund amount of the two players is exactly the same (to avoid the difference in perception between one party 97 and one party 98),
+			// The trade-off is that the draw rate may be 1 minimum unit more than the nominal 2.5% (incorporated into burn/treasury, still conserved).
+			refundEach := (totalPool - totalFee) / 2
+			out.RefundA = refundEach
+			out.RefundB = refundEach
+			actualFee := totalPool - refundEach*2 //= totalFee or totalFee+1
+			out.FeeBurn = actualFee / 2
+			out.FeeTreasury = actualFee - out.FeeBurn
+			if _, err = tx.ExecContext(ctx,
+				`UPDATE fist_accounts SET balance = balance + ? WHERE user_id = ?`,
+				out.RefundA, aUserID); err != nil {
+				return nil, err
+			}
+			if err = s.writeFistTx(ctx, tx, aUserID, out.RefundA, "pvp_refund", pvpRoomRef(roomID),
+				fmt.Sprintf("PVP 平局退回（%s场，对手：%s）", tierStr, bChatID)); err != nil {
+				return nil, err
+			}
+			if _, err = tx.ExecContext(ctx,
+				`UPDATE fist_accounts SET balance = balance + ? WHERE user_id = ?`,
+				out.RefundB, bUserID); err != nil {
+				return nil, err
+			}
+			if err = s.writeFistTx(ctx, tx, bUserID, out.RefundB, "pvp_refund", pvpRoomRef(roomID),
+				fmt.Sprintf("PVP 平局退回（%s场，对手：%s）", tierStr, aChatID)); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, ErrPVPInvalidResult
+		}
+
+		if _, err = tx.ExecContext(ctx, `
+			UPDATE ironfist_pvp_rooms
+			SET status = 'settled', result = ?,
+			    winner_amount = ?, refund_a = ?, refund_b = ?,
+			    fee_burn = ?, fee_treasury = ?,
+			    settled_at = CURRENT_TIMESTAMP(3)
+			WHERE id = ?
+		`, finalResult, out.WinnerAmount, out.RefundA, out.RefundB,
+			out.FeeBurn, out.FeeTreasury, roomID); err != nil {
+			return nil, err
+		}
 		if err = tx.Commit(); err != nil {
 			return nil, err
 		}
-		return &PVPSettleResult{Pending: true, RoomID: roomID, Result: roomResult}, nil
-	}
-
-	// If the reports from both parties are consistent → settle according to the result; if they are inconsistent → a draw (to prevent cheating)
-	finalResult := roomResult
-	if reportA.String != reportB.String {
-		finalResult = "draw"
-	}
-
-	out := &PVPSettleResult{RoomID: roomID, Result: finalResult, Settled: true}
-	totalPool := stake * 2
-	var totalFee int64
-	if finalResult == "draw" || finalResult == "doubleLose" {
-		totalFee = totalPool * 25 / 1000 // 2.5%
-	} else {
-		totalFee = totalPool * 5 / 100 // 5%
-	}
-	out.FeeBurn = totalFee / 2
-	out.FeeTreasury = totalFee - out.FeeBurn //The remainder goes to the treasury
-
-	// Lock two account lines (to prevent conflicts with concurrent withdrawals, etc.)
-	if err = s.ensureFistAccountTx(ctx, tx, aUserID); err != nil {
-		return nil, err
-	}
-	if err = s.ensureFistAccountTx(ctx, tx, bUserID); err != nil {
-		return nil, err
-	}
-
-	// Directly include the chat IDs of both opponents in the remarks: A’s opponent is B, and B’s opponent is A.
-	switch finalResult {
-	case "win_a":
-		out.WinnerAmount = totalPool - totalFee
-		if _, err = tx.ExecContext(ctx,
-			`UPDATE fist_accounts SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id = ?`,
-			out.WinnerAmount, out.WinnerAmount, aUserID); err != nil {
-			return nil, err
-		}
-		if err = s.writeFistTx(ctx, tx, aUserID, out.WinnerAmount, "pvp_win", pvpRoomRef(roomID),
-			fmt.Sprintf("PVP 胜利奖励（%s场，对手：%s）", tierStr, bChatID)); err != nil {
-			return nil, err
-		}
-	case "win_b":
-		out.WinnerAmount = totalPool - totalFee
-		if _, err = tx.ExecContext(ctx,
-			`UPDATE fist_accounts SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id = ?`,
-			out.WinnerAmount, out.WinnerAmount, bUserID); err != nil {
-			return nil, err
-		}
-		if err = s.writeFistTx(ctx, tx, bUserID, out.WinnerAmount, "pvp_win", pvpRoomRef(roomID),
-			fmt.Sprintf("PVP 胜利奖励（%s场，对手：%s）", tierStr, aChatID)); err != nil {
-			return nil, err
-		}
-	case "draw", "doubleLose":
-		// Tie: Both parties will refund equally, each will refund floor((pool - fee)/2), and the remainder that is not divisible will be included in the handling fee.
-		// Compared with "remainder goes to B", the refund amount of the two players is exactly the same (to avoid the difference in perception between one party 97 and one party 98),
-		// The trade-off is that the draw rate may be 1 minimum unit more than the nominal 2.5% (incorporated into burn/treasury, still conserved).
-		refundEach := (totalPool - totalFee) / 2
-		out.RefundA = refundEach
-		out.RefundB = refundEach
-		actualFee := totalPool - refundEach*2 //= totalFee or totalFee+1
-		out.FeeBurn = actualFee / 2
-		out.FeeTreasury = actualFee - out.FeeBurn
-		if _, err = tx.ExecContext(ctx,
-			`UPDATE fist_accounts SET balance = balance + ? WHERE user_id = ?`,
-			out.RefundA, aUserID); err != nil {
-			return nil, err
-		}
-		if err = s.writeFistTx(ctx, tx, aUserID, out.RefundA, "pvp_refund", pvpRoomRef(roomID),
-			fmt.Sprintf("PVP 平局退回（%s场，对手：%s）", tierStr, bChatID)); err != nil {
-			return nil, err
-		}
-		if _, err = tx.ExecContext(ctx,
-			`UPDATE fist_accounts SET balance = balance + ? WHERE user_id = ?`,
-			out.RefundB, bUserID); err != nil {
-			return nil, err
-		}
-		if err = s.writeFistTx(ctx, tx, bUserID, out.RefundB, "pvp_refund", pvpRoomRef(roomID),
-			fmt.Sprintf("PVP 平局退回（%s场，对手：%s）", tierStr, aChatID)); err != nil {
-			return nil, err
-		}
-	default:
-		return nil, ErrPVPInvalidResult
-	}
-
-	if _, err = tx.ExecContext(ctx, `
-		UPDATE ironfist_pvp_rooms
-		SET status = 'settled', result = ?,
-		    winner_amount = ?, refund_a = ?, refund_b = ?,
-		    fee_burn = ?, fee_treasury = ?,
-		    settled_at = CURRENT_TIMESTAMP(3)
-		WHERE id = ?
-	`, finalResult, out.WinnerAmount, out.RefundA, out.RefundB,
-		out.FeeBurn, out.FeeTreasury, roomID); err != nil {
-		return nil, err
-	}
-	if err = tx.Commit(); err != nil {
-		return nil, err
-	}
-	return out, nil
+		return out, nil
+	*/
 }
 
 // mapPVPResult maps the win/lose/draw/doubleLose reported by the caller to the room perspective result.

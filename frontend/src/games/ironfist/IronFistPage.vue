@@ -771,6 +771,7 @@ function setupEngineListeners() {
     });
     engine.on("resolved", (r) => {
         stopCountdown();
+        round.value = r.round;
         // If the other party directly settles after reconnecting (_myAction exists), the reconnection countdown needs to be stopped;
         // Even if you fall on the resolved branch after reconnection and recovery, you need to switch to playing.
         stopReconnectTicker();

@@ -52,6 +52,14 @@ func authorityEventPayload(eventType string, game *lockedGame, lockedSeat ironfi
 		}
 	case "ironfist_presence_changed":
 		payload["seat"] = lockedSeat
+		disconnectDeadline := game.DisconnectDeadlineA
+		if lockedSeat == ironfistengine.SeatB {
+			disconnectDeadline = game.DisconnectDeadlineB
+		}
+		payload["connected"] = !disconnectDeadline.Valid
+		if disconnectDeadline.Valid {
+			payload["reconnect_deadline"] = disconnectDeadline.Time.UTC()
+		}
 	}
 	return json.Marshal(payload)
 }
