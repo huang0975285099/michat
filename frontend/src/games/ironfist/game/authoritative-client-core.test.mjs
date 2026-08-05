@@ -2,11 +2,19 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  authorityOutcomeToLocal,
   createAuthoritativeClientCore,
   secondsRemaining,
   toPageState,
   toResolvedEvent,
 } from './authoritative-client-core.mjs'
+
+test('translates outcomes from the current player seat', () => {
+  assert.equal(authorityOutcomeToLocal('win_a', 'a'), 'win')
+  assert.equal(authorityOutcomeToLocal('win_a', 'b'), 'lose')
+  assert.equal(authorityOutcomeToLocal('win_b', 'a'), 'lose')
+  assert.equal(authorityOutcomeToLocal('win_b', 'b'), 'win')
+})
 
 test('discards old events and refetches on a version gap', async () => {
   const calls = []
@@ -52,10 +60,11 @@ test('translates a resolved round literally', () => {
   assert.deepEqual(toResolvedEvent({
     round: 3, my_action: 'attack', opponent_action: 'defend',
     damage_to_me: 0, damage_to_opponent: 5, environment_damage: 0,
-    state: { hp_a: 90, hp_b: 80 }, outcome: '',
+    state: { hp_a: 90, hp_b: 80, charged_a: false, charged_b: true }, outcome: '',
   }), {
     round: 3, playerAction: 'attack', opponentAction: 'defend',
     playerDmg: 0, opponentDmg: 5, envDmg: 0,
     playerHP: 90, opponentHP: 80, gameResult: null,
+    playerCharged: false, opponentCharged: true,
   })
 })

@@ -90,10 +90,14 @@ export function toResolvedEvent(round = {}, seat = 'a') {
     envDmg: round.environment_damage,
     playerHP: seatB ? state.hp_b : state.hp_a,
     opponentHP: seatB ? state.hp_a : state.hp_b,
-    gameResult: authorityOutcomeToLocal(round.outcome),
+    playerCharged: seatB ? state.charged_b : state.charged_a,
+    opponentCharged: seatB ? state.charged_a : state.charged_b,
+    gameResult: authorityOutcomeToLocal(round.outcome, seat),
   }
 }
 
-export function authorityOutcomeToLocal(outcome) {
-  return ({ win_a: 'win', win_b: 'lose', draw: 'draw', doubleLose: 'doubleLose' })[outcome] || null
+export function authorityOutcomeToLocal(outcome, seat = 'a') {
+  if (outcome === 'win_a') return seat === 'b' ? 'lose' : 'win'
+  if (outcome === 'win_b') return seat === 'b' ? 'win' : 'lose'
+  return ({ draw: 'draw', doubleLose: 'doubleLose' })[outcome] || null
 }

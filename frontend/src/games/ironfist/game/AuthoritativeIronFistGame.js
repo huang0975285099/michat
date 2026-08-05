@@ -71,6 +71,8 @@ export class AuthoritativeIronFistGame {
 
   async retryAction() { return this.core.retry() }
 
+  confirmNextRound() {}
+
   async resign() {
     const view = unwrap(await ironfistApi.resignGame(this.gameId))
     this.core.setView(view)
@@ -96,7 +98,7 @@ export class AuthoritativeIronFistGame {
     }
     if (view.status === 'completed' || view.status === 'abandoned' || view.status === 'cancelled') {
       this._emit('phase', 'game_over')
-      this._emit('gameover', authorityOutcomeToLocal(view.outcome) || (view.status === 'abandoned' ? 'lose' : 'draw'))
+      this._emit('gameover', authorityOutcomeToLocal(view.outcome, view.seat) || (view.status === 'abandoned' ? 'lose' : 'draw'))
       return
     }
     if (view.current_round > this._lastAnnouncedRound) {
@@ -116,4 +118,6 @@ export class AuthoritativeIronFistGame {
     for (const event of EVENT_TYPES) off(event, this._boundEvent)
     this._listeners = {}
   }
+
+  dispose() { this.destroy() }
 }

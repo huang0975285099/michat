@@ -9,6 +9,7 @@
             @open-records="view = 'records'"
             @open-achievements="view = 'achievements'"
             @start-pve="startPve"
+            @start-practice="startPractice"
             @open-pvp="view = 'pvp'"
             @invite="startInvite"
         />
@@ -370,8 +371,6 @@ import { Notify } from "quasar";
 import { useGameStore } from "src/stores/game";
 import { useIdentityStore } from "src/stores/identity";
 import { useFistStore } from "src/stores/fist";
-import { ironfistApi } from "src/services/api";
-import { ACHIEVEMENT_MAP } from "./game/ironfistMeta";
 import IronFistLobby from "./components/IronFistLobby.vue";
 import IronFistLedger from "./components/IronFistLedger.vue";
 import IronFistRecords from "./components/IronFistRecords.vue";
@@ -382,7 +381,8 @@ import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
 import { useRegion } from "./game/useRegion.js";
 import BattleArena from "./components/BattleArena3D.vue";
 import { IronFistGame } from "./game/IronFistGame.js";
-import { GameNet } from "./game/GameNet.js";
+import { AuthoritativeIronFistGame } from "./game/AuthoritativeIronFistGame.js";
+import { requireAuthoritativeGameID } from "./game/mode-routing.mjs";
 import {
     ACTION_META,
     ACTIONS,
@@ -628,10 +628,11 @@ function startInvite(friend) {
 
 // Real PVP matching successful (IronFistPvpLobby @matched trigger):
 // Switching query triggers startPvp to be re-executed, carrying room_id / opponent information.
-function onPVPMatched({ roomId, opponent, tier, stake }) {
+function onPVPMatched({ roomId, gameId, opponent, tier, stake }) {
     const query = {
         matched: "1",
         room_id: String(roomId),
+        game_id: gameId,
         opponent: opponent?.chat_id,
         opponent_name: opponent?.nickname || opponent?.chat_id || "opponent",
         tier,
@@ -642,139 +643,32 @@ function onPVPMatched({ roomId, opponent, tier, stake }) {
     // Router.replace with the same path will not be remounted, and will still be captured and started by query watcher.
 }
 
-// After the game, the results and game-by-game details will be reported. res is the gameover result (win/lose/draw/doubleLose)
-async function reportMatchResult(res) {
-    try {
-        const summary = engine?.getMatchSummary() ?? {
-            playerHP: pHP.value,
-            counterSuccesses: 0,
-            rounds: 0,
-        };
-        // Friend/human-machine: The fight has not actually started (0 rounds, the opponent left immediately after the start, resulting in a timeout decision) and no record will be recorded.
-        // Avoid meaningless results such as "0 rounds·victory". Real PVP (with room_id) must be reported as usual,
-        // The game will be settled by the back-end and submitted to arbitration (if both sides abandon the game, the game will be arbitrated as a draw and refunded).
-        if (!pvpRoomId.value && summary.rounds === 0) {
-            return null;
-        }
-        // Game-by-game details: compressed from moveHistory into a compact JSON array
-        const detail = moveHistory.value.map((m) => ({
-            r: m.round,
-            p: m.player,
-            o: m.opponent,
-            pd: m.pDmg,
-            od: m.oDmg,
-        }));
-        const { data } = await ironfistApi.reportMatch({
-            mode: mode.value,
-            result: res,
-            player_hp: summary.playerHP,
-            opponent_hp: oHP.value,
-            counter_successes: summary.counterSuccesses,
-            rounds: summary.rounds,
-            opponent_name: opponentName.value,
-            detail,
-            // Real PVP carries room_id, triggering backend pledge settlement (idempotent)
-            room_id: pvpRoomId.value ?? undefined,
-        });
-        // Newly unlocked achievement pop-up prompts
-        const newly = data.new_achievements ?? [];
-        newly.forEach((code) => {
-            const meta = ACHIEVEMENT_MAP[code];
-            Notify.create({
-                message: `🏆 Unlock achievements：${meta?.name ?? code}`,
-                caption: meta?.desc,
-                color: "amber-9",
-                textColor: "white",
-                position: "top",
-                timeout: 3000,
-            });
-        });
-        // Real PVP settlement results display. Under double-reporting arbitration, the party that reports first gets pending (no amount).
-        // Settlement is triggered and the amount is obtained only after reporting. In order to allow both parties to see the same final result, polling is completed when pending.
-        if (data.pvp_settle) {
-            const s = data.pvp_settle;
-            if (s.settled) {
-                showPvpSettle(s, res);
-            } else if (s.pending && pvpRoomId.value) {
-                pollPvpSettle(pvpRoomId.value, res, 0);
-            }
-        }
-        return data;
-    } catch {
-        // Reporting failure is silent and does not block the display of the results page.
-        return null;
-    }
-}
-
-// Render PVP settlement prompt and refresh balance. In the case of a tie, both parties have equal refunds, and refund_a is the refund amount of the party.
-function showPvpSettle(s, res) {
-    let txt;
-    if (res === "win") {
-        txt = `🏆 winner takes all +${s.winner_amount} ${currency.value}`;
-    } else if (res === "lose") {
-        txt = `💫 Lost this round，Pledge has been deducted`;
-    } else if (res === "draw") {
-        txt = `🤝 Returned in a draw ${s.refund_a || 0} ${currency.value}`;
-    } else {
-        // doubleLose: Both sides are exhausted and each returns.
-        txt = `🤝 Both sides are exhausted，return ${s.refund_a || 0} ${currency.value}`;
-    }
-    Notify.create({
-        message: txt,
-        color: "deep-orange",
-        textColor: "white",
-        position: "top",
-        timeout: 4000,
-    });
-    // Refresh $FIST balance (settlement has been dropped)
-    fistStore.fetchAccount?.().catch(() => {});
-}
-
-// The party that reports first polls the settlement result: the room is settled after the opponent reports, and the final amount can be obtained by idempotent request.
-// Up to 6 times (approximately 7 seconds). If the transaction is not settled yet, you will be prompted to check later (refunds are guaranteed by the backend timeout sweep).
-async function pollPvpSettle(roomId, res, attempt) {
-    if (attempt >= 6) {
-        Notify.create({
-            message: "Settling，Please check in the ledger later",
-            color: "deep-orange",
-            textColor: "white",
-            position: "top",
-            timeout: 3000,
-        });
-        fistStore.fetchAccount?.().catch(() => {});
-        return;
-    }
-    await new Promise((r) => setTimeout(r, 1200));
-    try {
-        // Idempotent and then request: mode=pvp + room_id, the statistics have been deduplicated and will not be counted repeatedly.
-        const { data } = await ironfistApi.reportMatch({
-            mode: "pvp",
-            result: res,
-            room_id: roomId,
-            opponent_name: opponentName.value,
-            detail: [],
-            player_hp: 0,
-            opponent_hp: 0,
-            counter_successes: 0,
-            rounds: 0,
-        });
-        if (data?.pvp_settle?.settled) {
-            showPvpSettle(data.pvp_settle, res);
-            return;
-        }
-    } catch {
-        // Ignore the single failure and continue to try again.
-    }
-    pollPvpSettle(roomId, res, attempt + 1);
-}
-
 // ──Start the battle───────────────────────────────────────────
-function startPve() {
+async function startPve() {
     mode.value = "pve";
     opponentName.value = "computer";
     opponentEmoji.value = "🤖";
     opponentChatId.value = "";
     resultType.value = ""; //Clear the result status of the previous round
+    pveReward.value = null;
+    engine = new AuthoritativeIronFistGame();
+    setupEngineListeners();
+    view.value = "reconnecting";
+    try {
+        await engine.startPVE(false);
+    } catch (error) {
+        teardown();
+        view.value = "lobby";
+        Notify.create({ type: "negative", message: error?.response?.data?.error || "Unable to start server-authoritative PvE" });
+    }
+}
+
+function startPractice() {
+    mode.value = "practice";
+    opponentName.value = "practice bot";
+    opponentEmoji.value = "🎯";
+    opponentChatId.value = "";
+    resultType.value = "";
     engine = new IronFistGame({ mode: "pve" });
     beginBattle();
 }
@@ -818,24 +712,16 @@ async function startPvp() {
     resultType.value = ""; //Clear the result status of the previous round
     await nextTick();
 
-    // roomId source: real PVP uses query.room_id; friend game uses query.room.
-    // Both are used as GameNet message filtering, IronFistGame localStorage pending key, and backend redis key.
-    const roomId = route.query.room_id || route.query.room;
-    const myChatId = identityStore.chatId;
-    const nextNet = new GameNet(route.query.opponent, roomId);
-    // requestReconnect cannot be sent when WS has not completed authentication, otherwise websocket.send will be discarded directly.
-    await nextNet.ready();
-    // The page may have been unloaded while waiting for a connection, or a new match may have replaced this launch; old tasks may no longer create engines.
-    if (pageDisposed || startEpoch !== pvpStartEpoch) {
-        nextNet.destroy();
+    let gameId;
+    try {
+        gameId = requireAuthoritativeGameID(mode.value, route.query.game_id);
+    } catch (error) {
+        Notify.create({ type: "negative", message: error.message });
+        view.value = "lobby";
         return;
     }
-    net = nextNet;
-    engine = new IronFistGame({ mode: "pvp", net, roomId, myChatId });
-
-    // Each time you enter a PvP room, the action stream is restored from the server first. You can’t just say “I already have pending
-    // Replay when "action": If the opponent moves first, our page has not been mounted or is refreshed before the move is made, the opponent's action will only
-    // In Redis, skipping replay will make both parties permanently equal. An empty action stream will start round 1 normally by loadReplay.
+    if (pageDisposed || startEpoch !== pvpStartEpoch) return;
+    engine = new AuthoritativeIronFistGame({ gameId });
     view.value = "reconnecting";
     pHP.value = INITIAL_HP;
     oHP.value = INITIAL_HP;
@@ -843,7 +729,13 @@ async function startPvp() {
     lastResult.value = null;
     moveHistory.value = [];
     setupEngineListeners();
-    engine.requestReconnect();
+    try {
+        await engine.resume(gameId);
+    } catch (error) {
+        teardown();
+        view.value = "lobby";
+        Notify.create({ type: "negative", message: error?.response?.data?.error || "Unable to restore authoritative match" });
+    }
 }
 
 function setupEngineListeners() {
@@ -919,17 +811,14 @@ function setupEngineListeners() {
             : ROUND_HOLD_MS;
         confirmTimer = setTimeout(() => engine?.confirmNextRound(), holdMs);
     });
-    engine.on("gameover", async (res) => {
+    engine.on("gameover", (res) => {
         resultType.value = res;
         teardownTimers();
         stopReconnectTicker();
         if (mode.value === "pvp" || mode.value === "friend") gameStore.reset();
-        // Record the record first, and then claim the one-time PvE reward tied to the victory. When the report fails, the reward interface will not be called.
-        // Avoid decoupling rewards from actual results; the results page will still be displayed normally.
-        const report = await reportMatchResult(res);
-        if (mode.value === "pve" && res === "win" && report) {
-            pveReward.value = await fistStore.claimPvEReward();
-        }
+        // Records, achievements, rewards and wager settlement are committed by
+        // the server in the same transaction as the authoritative outcome.
+        fistStore.fetchAccount?.().catch(() => {});
         // Do not switch views: keep the playing view as the result mask background, and the player can see the final state of the battle
     });
     // The opponent disconnects and enters 60s to reconnect and wait for masking
