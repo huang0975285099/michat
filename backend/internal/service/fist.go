@@ -20,8 +20,9 @@ const (
 )
 
 var (
-	ErrPvEDailyLimitReached = errors.New("daily PvE win limit reached")
-	ErrNoEligiblePvEWin     = errors.New("no unclaimed PvE win")
+	ErrPvEDailyLimitReached   = errors.New("daily PvE win limit reached")
+	ErrNoEligiblePvEWin       = errors.New("no unclaimed PvE win")
+	ErrLegacyPvEClaimDisabled = errors.New("legacy PvE claims are disabled; rewards settle automatically")
 )
 
 type FistService struct {
@@ -78,6 +79,10 @@ func (s *FistService) GetAccount(ctx context.Context, userID uint64) (*FistAccou
 // ClaimPvEReward issues a PvE victory reward (500 $FIST), with a daily limit of 10 times.
 // The entire process is executed atomically within the transaction to prevent concurrent double counting.
 func (s *FistService) ClaimPvEReward(ctx context.Context, userID uint64) (*FistAccountView, error) {
+	return nil, ErrLegacyPvEClaimDisabled
+
+	// Retained temporarily for migration archaeology; this code is unreachable
+	// and the HTTP route is retired by the authoritative API rollout.
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err

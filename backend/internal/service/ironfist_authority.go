@@ -338,6 +338,11 @@ func (s *IronFistService) SubmitAuthoritativeAction(ctx context.Context, userID 
 		if err := persistResolvedRoundTx(ctx, tx, game, resolution.Result, "actions", now); err != nil {
 			return nil, err
 		}
+		if resolution.Result.Outcome != ironfistengine.OutcomeNone {
+			if err := s.settleCompletedGameTx(ctx, tx, game); err != nil {
+				return nil, err
+			}
+		}
 	} else if len(game.PendingActions) == 2 {
 		result, err := ironfistengine.ResolveRound(game.PendingActions[ironfistengine.SeatA].Action, game.PendingActions[ironfistengine.SeatB].Action, game.State)
 		if err != nil {
@@ -345,6 +350,11 @@ func (s *IronFistService) SubmitAuthoritativeAction(ctx context.Context, userID 
 		}
 		if err := persistResolvedRoundTx(ctx, tx, game, result, "actions", now); err != nil {
 			return nil, err
+		}
+		if result.Outcome != ironfistengine.OutcomeNone {
+			if err := s.settleCompletedGameTx(ctx, tx, game); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -400,6 +410,9 @@ func (s *IronFistService) ResignAuthoritativeGame(ctx context.Context, userID ui
 		}
 		game.Status, game.Result = "completed", result
 		game.WinnerUserID, game.FinishReason, game.FinishedAt = sql.NullInt64{Int64: int64(winner), Valid: true}, sql.NullString{String: reason, Valid: true}, sqlNullTime(now)
+		if err := s.settleCompletedGameTx(ctx, tx, game); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
