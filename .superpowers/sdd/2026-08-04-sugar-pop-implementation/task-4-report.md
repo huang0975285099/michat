@@ -10,3 +10,16 @@ Verification:
 - `npm run build` — passed.
 - `git diff --check` — passed.
 - `npm run lint` — could not run because the resolved ESLint 9 expects `eslint.config.*`, while this repository does not provide one.
+
+## Review revision
+
+The Node-safe production config builder now owns the concrete Boot, Map, Level, Overlay, and Transition scene list. It obtains Phaser's `AUTO` and `Scale.RESIZE` values from browser-safe Phaser constant modules, while `createSugarPopGame` continues to pass that exact config to `new Phaser.Game(...)`. Placeholder scenes no longer import the browser-only Phaser package; Phaser's scene manager supports function scene definitions and injects scene systems at runtime.
+
+The smoke test now imports this production config builder directly and asserts the real Phaser constants and exact five scene class references in order, without creating a WebGL context.
+
+Revision verification:
+
+- `node --test src/games/sugar-pop/game/createSugarPopGame.test.mjs` — passed.
+- `npm run test:sugar-pop` — passed (31 tests).
+- `npm run lint` — passed with 7 existing warnings in unrelated files.
+- `npm run build` — passed.
