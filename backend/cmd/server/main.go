@@ -129,6 +129,12 @@ func main() {
 	fistSvc := service.NewFistService(db)
 	fistHandler := handler.NewFistHandler(fistSvc)
 	ironFistSvc := service.NewIronFistService(db)
+	if err := ironFistSvc.MigrateLegacyIronFist(context.Background()); err != nil {
+		log.Fatalf("migrate legacy IronFist state: %v", err)
+	}
+	if err := service.ClearLegacyIronFistRedis(context.Background(), rdb); err != nil {
+		log.Printf("[ironfist] legacy Redis cleanup will retry on restart: %v", err)
+	}
 	adminSvc := service.NewAdminService(db, rdb)
 
 	hub := ws.NewHub(rdb, friendSvc, identSvc, messageReadSvc)
