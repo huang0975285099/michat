@@ -439,7 +439,7 @@ const opponentChatId = ref("");
 
 const resultType = ref("");
 const errorMsg = ref(""); //Specific prompt copy when resultType==="error"
-const pveReward = ref(null); //When PvE is won, it is filled in by claimPvEReward, and the reward is displayed on the results page.
+const pveReward = ref(null);
 const pvpRoomId = ref(null); //Real PVP matching room number (only populated when mode=pvp & query.matched=1)
 
 // PvP reconnection related

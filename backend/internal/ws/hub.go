@@ -7,7 +7,6 @@ import (
 	"log"
 	"path"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -89,10 +88,8 @@ type Client struct {
 
 	// Message current limiting status: fixed window count. Only accessed within the connection's own readPump goroutine
 	// (dispatch is executed synchronously), so no locking is required.
-	msgLimiter         fixedWindow //Gatekeeper for all inbound messages
-	lobbyLimiter       fixedWindow //Lobby joining/leaving (will trigger O(N) broadcast, strictly limited individually)
-	ifActionLimiter    fixedWindow
-	ifReconnectLimiter fixedWindow
+	msgLimiter   fixedWindow //Gatekeeper for all inbound messages
+	lobbyLimiter fixedWindow //Lobby joining/leaving (will trigger O(N) broadcast, strictly limited individually)
 }
 
 // fixedWindow is a non-concurrency-safe fixed window current limiter for single goroutine use only.
@@ -128,10 +125,8 @@ func (c *Client) signalClose() {
 
 // The upper limit of messages allowed per second for a single connection (fixed window).
 const (
-	msgMaxPerSec         = 100 //Main gate for all inbound messages: block single connection and flush messages to CPU/Redis/DB
-	lobbyMaxPerSec       = 5   //Lobby joining/leaving: triggering a full lobby broadcast every time, strictly limited
-	ifActionMaxPerSec    = 30  //ironfist_action: real-time battle action, giving enough margin
-	ifReconnectMaxPerSec = 5   //ironfist_reconnect: low-frequency operation, do full LRANGE every time
+	msgMaxPerSec   = 100 //Main gate for all inbound messages: block single connection and flush messages to CPU/Redis/DB
+	lobbyMaxPerSec = 5   //Lobby joining/leaving: triggering a full lobby broadcast every time, strictly limited
 )
 
 // Hub manages all online connections
@@ -145,12 +140,6 @@ type Hub struct {
 	pushSvc        *service.PushService                 //Can be nil (disables pushing when not configured)
 	ironFistSvc    *service.IronFistService             //Can be nil (disabled for PVP lobbies)
 	pvpLobby       map[string]*service.LobbyUserProfile //chatID → Lobby User Profile (PVP Lobby Online List)
-
-	// PVP room participant short TTL cache: avoid ironfist_action hot path hitting DB once per action
-	// (Otherwise, the wild use of actions by authenticated users will amplify WS traffic into the same amount of DB queries). State staleness
-	// The upper limit is pvpPartCacheTTL, which is sufficient for unauthorized verification (the participant's chatID remains unchanged after matching).
-	pvpPartMu    sync.Mutex
-	pvpPartCache map[uint64]pvpPartCacheEntry
 
 	// File chunking is only allowed to be relayed in sessions that are registered and accepted by the recipient, preventing any user from bypassing
 	// file_offer's friend check floods online users with chunks of data.
@@ -171,16 +160,6 @@ type fileTransferSession struct {
 	timestamp      int64
 }
 
-// pvpPartCacheEntry cache item; part is nil, which means "the confirmed room does not exist", and is also cached to block
-// Flush the enumeration for room_id that does not exist.
-type pvpPartCacheEntry struct {
-	part    *service.PVPRoomParticipants
-	expires time.Time
-}
-
-// pvpPartCacheTTL Party cache validity period, which determines the maximum visible delay for room status changes (settlement/cancellation).
-const pvpPartCacheTTL = 5 * time.Second
-
 func NewHub(redis *rdb.Client, friendSvc *service.FriendService, identitySvc *service.IdentityService, messageReadSvc *service.MessageReadService) *Hub {
 	return &Hub{
 		clients:        make(map[string]*Client),
@@ -189,49 +168,8 @@ func NewHub(redis *rdb.Client, friendSvc *service.FriendService, identitySvc *se
 		identitySvc:    identitySvc,
 		messageReadSvc: messageReadSvc,
 		pvpLobby:       make(map[string]*service.LobbyUserProfile),
-		pvpPartCache:   make(map[uint64]pvpPartCacheEntry),
 		fileTransfers:  make(map[string]*fileTransferSession),
 	}
-}
-
-// getRoomParticipants Query PVP room participants with short TTL cache for WS unauthorized verification.
-// When the cache is hit, the DB is not hit; when the cache is missed, context query with timeout is used (to avoid slow/hanging DB blocking)
-// The connection's read loop), and incidentally cleans up expired items to prevent the map from growing unbounded.
-func (h *Hub) getRoomParticipants(roomID uint64) (*service.PVPRoomParticipants, error) {
-	now := time.Now()
-
-	h.pvpPartMu.Lock()
-	if e, ok := h.pvpPartCache[roomID]; ok && now.Before(e.expires) {
-		part := e.part
-		h.pvpPartMu.Unlock()
-		return part, nil
-	}
-	h.pvpPartMu.Unlock()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	part, err := h.ironFistSvc.GetPVPRoomParticipants(ctx, roomID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Do not cache matching: This is a transition state that will quickly flip to matched. If cached, it will cause matching.
-	// After completion, the legal actions of from within at most one TTL are discarded as "unmatched" (permanently lost,
-	// Reconnection cannot be restored), causing desync at the beginning. Other states (matched/settled/cancelled) and nil
-	// All are relatively stable, and the cache staleness is acceptable.
-	if part != nil && part.Status == "matching" {
-		return part, nil
-	}
-
-	h.pvpPartMu.Lock()
-	for id, e := range h.pvpPartCache {
-		if now.After(e.expires) {
-			delete(h.pvpPartCache, id)
-		}
-	}
-	h.pvpPartCache[roomID] = pvpPartCacheEntry{part: part, expires: now.Add(pvpPartCacheTTL)}
-	h.pvpPartMu.Unlock()
-	return part, nil
 }
 
 // SetPushService injects the push service (called after hub is created in main.go)
@@ -1657,185 +1595,6 @@ func (h *Hub) sendGameReady(chatID string, payload map[string]any) {
 func mustMarshal(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
-}
-
-// handleIronFistAction temporarily saves the Iron Fist action to Redis (for disconnection and reconnection) and relays it to the other party.
-// The server does not do any game logic, only append storage + forwarding. See docs/ironfist.md for details, Section 14 Plan B.
-func (h *Hub) handleIronFistAction(from *Client, payload json.RawMessage) {
-	var p struct {
-		To     string `json:"to"`
-		RoomID string `json:"room_id"`
-		Round  int    `json:"round"`
-		Action string `json:"action"`
-		TS     int64  `json:"ts"`
-	}
-	if err := json.Unmarshal(payload, &p); err != nil || !chatIDRe.MatchString(p.To) || p.RoomID == "" ||
-		p.Round < 1 || p.Round > 20 || !validIronFistAction(p.Action) {
-		log.Printf("[ws] invalid ironfist_action from %s", from.ChatID)
-		return
-	}
-
-	// Current limiting: at most ifActionMaxPerSec actions within a single connection fixed window (1s), blocking is legal
-	// Participants flush messages (superimposed on the amplification effect of downstream Redis RPUSH + relay). Silently discarded if exceeded.
-	if !from.ifActionLimiter.allow(time.Now(), ifActionMaxPerSec) {
-		log.Printf("[ws] ironfist_action rate limited from %s", from.ChatID)
-		return
-	}
-
-	// Room type distinction:
-	// - Staking PVP rooms: room_id is a numeric DB primary key and exists in ironfist_pvp_rooms. involving funds,
-	// Strict unauthorized verification is required (from must be a participant, room matched, p.To must be an opponent).
-	// - Friends Entertainment Bureau: room_id is a randomId string (not a number / not in the PVP table). No financial risk,
-	// Only relay does not perform game logic verification - randomId (36^8 space, non-enumerable) itself is the access credential.
-	// Only when it is definitely identified as a PVP room, strict verification is performed to avoid accidentally damaging the friend's room (its actions should not be discarded).
-	if roomID, perr := strconv.ParseUint(p.RoomID, 10, 64); perr == nil && h.ironFistSvc != nil {
-		if part, gerr := h.getRoomParticipants(roomID); gerr == nil && part != nil {
-			if part.Status != "matched" {
-				log.Printf("[ws] ironfist_action: room %d status=%s, expected matched", roomID, part.Status)
-				return
-			}
-			var opponentChatID string
-			switch from.ChatID {
-			case part.AChatID:
-				opponentChatID = part.BChatID
-			case part.BChatID:
-				opponentChatID = part.AChatID
-			default:
-				log.Printf("[ws] ironfist_action: %s not a participant of room %d", from.ChatID, roomID)
-				return
-			}
-			if opponentChatID == "" || p.To != opponentChatID {
-				log.Printf("[ws] ironfist_action: %s relay to %s rejected (opponent %s) room %d",
-					from.ChatID, p.To, opponentChatID, roomID)
-				return
-			}
-		}
-	}
-
-	// The storage item contains from, which facilitates the client to distinguish the actions of both parties during replay.
-	entry := map[string]interface{}{
-		"round":  p.Round,
-		"action": p.Action,
-		"from":   from.ChatID,
-		"ts":     p.TS,
-	}
-	entryJSON, _ := json.Marshal(entry)
-
-	ctx := context.Background()
-	key := pkgredis.IronFistActionsKey(p.RoomID)
-	onceKey := pkgredis.IronFistActionOnceKey(p.RoomID, from.ChatID, p.Round)
-	// The same player only takes the first action each turn. Lua puts placeholder, log writing and TTL into one atomic operation,
-	// Prevent unrecoverable action gaps caused by concurrent repeated submissions or "failure to occupy space first and then write log".
-	const storeOnce = `
-		if redis.call('SET', KEYS[1], '1', 'NX', 'PX', ARGV[2]) then
-			redis.call('RPUSH', KEYS[2], ARGV[1])
-			redis.call('PEXPIRE', KEYS[2], ARGV[2])
-			return 1
-		end
-		return 0`
-	stored, err := h.redis.Eval(ctx, storeOnce, []string{onceKey, key}, string(entryJSON), pkgredis.IronFistActionsTTL.Milliseconds()).Int()
-	if err != nil {
-		log.Printf("[ws] ironfist_action store failed: %v", err)
-		return
-	}
-	if stored == 0 {
-		log.Printf("[ws] duplicate ironfist_action ignored from %s room=%s round=%d", from.ChatID, p.RoomID, p.Round)
-		return
-	}
-
-	// Relay to the other party (inject the from field)
-	m := map[string]interface{}{
-		"to":      p.To,
-		"room_id": p.RoomID,
-		"round":   p.Round,
-		"action":  p.Action,
-		"ts":      p.TS,
-		"from":    from.ChatID,
-	}
-	fwd, _ := json.Marshal(Message{Type: "ironfist_action", Payload: mustMarshal(m)})
-
-	h.mu.RLock()
-	c, ok := h.clients[p.To]
-	h.mu.RUnlock()
-	if ok {
-		select {
-		case c.send <- fwd:
-		default:
-		}
-	}
-}
-
-func validIronFistAction(action string) bool {
-	switch action {
-	case "attack", "defend", "charge", "counter":
-		return true
-	default:
-		return false
-	}
-}
-
-// handleIronFistReconnect returns the complete action history for this room (ironfist_replay).
-// After receiving it, the client uses replayGame() to replay the current state, without the risk of state fork.
-func (h *Hub) handleIronFistReconnect(from *Client, payload json.RawMessage) {
-	var p struct {
-		RoomID string `json:"room_id"`
-	}
-	if err := json.Unmarshal(payload, &p); err != nil || p.RoomID == "" {
-		log.Printf("[ws] invalid ironfist_reconnect from %s", from.ChatID)
-		return
-	}
-
-	// Current limiting: Do a full LRANGE every time you reconnect, limiting the frequency of brushing for a single connection. Silently discarded if exceeded.
-	if !from.ifReconnectLimiter.allow(time.Now(), ifReconnectMaxPerSec) {
-		log.Printf("[ws] ironfist_reconnect rate limited from %s", from.ChatID)
-		return
-	}
-
-	// Override verification: only effective for pledged PVP rooms (numeric DB primary key and exists in ironfist_pvp_rooms)——
-	// Otherwise, any user can enumerate and increment room_id to pull the complete action history of other people's games. Requires from to be a participant,
-	// Room matched/settled. The friend entertainment room room_id is a non-enumerable randomId string, which is not in the PVP table.
-	// The randomId itself is the access credential, allowing replay directly (otherwise the friend's game cannot be reconnected after refreshing).
-	if roomID, perr := strconv.ParseUint(p.RoomID, 10, 64); perr == nil && h.ironFistSvc != nil {
-		if part, gerr := h.getRoomParticipants(roomID); gerr == nil && part != nil {
-			if part.Status != "matched" && part.Status != "settled" {
-				log.Printf("[ws] ironfist_reconnect: room %d status=%s, expected matched/settled",
-					roomID, part.Status)
-				return
-			}
-			if from.ChatID != part.AChatID && from.ChatID != part.BChatID {
-				log.Printf("[ws] ironfist_reconnect: %s not a participant of room %d", from.ChatID, roomID)
-				return
-			}
-		}
-	}
-
-	ctx := context.Background()
-	key := pkgredis.IronFistActionsKey(p.RoomID)
-	actions, err := h.redis.LRange(ctx, key, 0, -1).Result()
-	if err != nil {
-		log.Printf("[ws] ironfist_reconnect LRange failed: %v", err)
-		actions = []string{}
-	}
-
-	parsed := make([]interface{}, 0, len(actions))
-	for _, raw := range actions {
-		var obj interface{}
-		if json.Unmarshal([]byte(raw), &obj) == nil {
-			parsed = append(parsed, obj)
-		}
-	}
-
-	m := map[string]interface{}{
-		"room_id": p.RoomID,
-		"actions": parsed,
-	}
-	fwd, _ := json.Marshal(Message{Type: "ironfist_replay", Payload: mustMarshal(m)})
-
-	// Send directly back to the requesting party (without leaving the other party)
-	select {
-	case from.send <- fwd:
-	default:
-	}
 }
 
 // handleIronFistLobbyJoin Joins the PVP lobby online list.

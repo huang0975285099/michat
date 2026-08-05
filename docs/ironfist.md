@@ -1,5 +1,21 @@
 # 铁拳（Iron Fist）完整设计与技术文档
 
+## 现行安全架构（2026-08-04）
+
+所有可产生奖励、统计、成就或质押结算的对局均由服务端权威引擎执行。客户端只能通过以下接口创建/读取对局并提交单个动作：
+
+- `POST /api/games/ironfist/pve/sessions`
+- `GET /api/games/ironfist/sessions/active`
+- `GET /api/games/ironfist/games/:id`
+- `POST /api/games/ironfist/games/:id/actions`
+- `POST /api/games/ironfist/games/:id/resign`
+
+动作请求包含回合号、UUID 请求号和预期状态版本；服务端负责 AI 选择、回合重放、HP、胜负、超时、掉线判负以及同事务结算。WebSocket 仅发送可丢弃的状态通知，客户端发现版本缺口时从 MySQL 重新读取。旧的客户端结果上报、PvE 奖励领取、动作转发及 replay 通道均不参与现行流程。
+
+“Offline practice” 是唯一使用本地规则引擎的模式，明确不产生奖励、统计、成就或账本变化。
+
+部署时必须先应用 `021_ironfist_authority.sql`。服务启动使用 MySQL 锁 `ironfist-authority-rollout-v1` 完成一次性旧局退款，并以 `system_migration_markers` 持久记录；截止时间均使用 UTC。Redis 仅承载通知和临时在线状态，不是对局事实来源。
+
 > 本文由原游戏设计、PVP 技术设计、3D 资产说明和 `$FIST` 代币经济设计四份文档整合而成。
 
 ## 当前版本口径（重要）

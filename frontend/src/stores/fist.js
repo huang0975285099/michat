@@ -24,28 +24,6 @@ export const useFistStore = defineStore('fist', () => {
     }
   }
 
-  // Return { todayWins, todayMax, balance } for display on the results page, return null if the limit is reached or an error occurs.
-  async function claimPvEReward() {
-    try {
-      const { data } = await fistApi.claimPvEReward()
-      balance.value = data.balance
-      totalEarned.value = data.total_earned
-      todayWins.value = data.today_wins
-      todayMax.value = data.today_max
-      todayEarned.value = data.today_earned
-      return {
-        todayWins: data.today_wins,
-        todayMax: data.today_max,
-        balance: data.balance,
-        bonusAwarded: data.bonus_awarded,
-        bonusAmount: data.bonus_amount,
-      }
-    } catch (e) {
-      // 429 = The limit of 10 times has been reached today, silently ignore
-      return null
-    }
-  }
-
   // Paging loading flow, reset=true to load from scratch
   async function fetchTransactions(reset = false) {
     if (!reset && !txHasMore.value) return
@@ -63,6 +41,6 @@ export const useFistStore = defineStore('fist', () => {
   return {
     balance, totalEarned, todayWins, todayMax, todayEarned,
     transactions, txHasMore,
-    fetchAccount, claimPvEReward, fetchTransactions,
+    fetchAccount, fetchTransactions,
   }
 })
