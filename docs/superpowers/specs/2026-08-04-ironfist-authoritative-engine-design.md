@@ -270,11 +270,12 @@ Account deletion is a single database transaction. It first locks the user and a
 - Deletion during wagered PvP counts as immediate resignation. The opponent receives the normal authoritative win payout before erasure.
 - Active casual PvP and rewarded PvE are abandoned without rewards.
 - Delete outbox rows, active-session mappings, actions, rounds, authoritative games, shared match projections, wager rooms, and legacy PvP records involving the user.
+- Delete counterparty legacy ledger/history rows whose shared room references or free-text remarks identify the deleted user. New authoritative payout remarks contain only the tier and game ID, never an opponent chat ID or nickname.
 - Delete the user's match history, achievements, statistics, daily progress, ledger entries, and points account.
 - Delete device tokens, message receipts in both directions, message deliveries, friend requests, and friendships.
 - Delete the user row last.
 
-Any error rolls back settlement and deletion. After commit, the backend invalidates sessions, presence, rate-limit/cache keys, queued notifications, and game action keys in Redis. Redis cleanup failure does not resurrect access because the user no longer exists.
+Any database error rolls back settlement and deletion. After commit, the backend invalidates sessions, presence, rate-limit/cache keys, queued notifications, friend-invite keys, and game action keys in Redis. Account deletion also filters other users' queued Redis messages that identify the deleted chat ID. Redis cleanup uses bounded scans and retries; cleanup failure does not resurrect access because the user no longer exists.
 
 Shared match erasure may reduce historical aggregates and remove that match from the opponent's history. An opponent payout that was already created during resignation remains, but contains no deleted-user identity.
 
