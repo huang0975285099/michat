@@ -17,12 +17,16 @@ function isPlainObject(value) {
 
 function normalizeResults(results) {
   if (!isPlainObject(results)) return {}
-  return Object.fromEntries(Object.entries(results)
-    .filter(([levelId, result]) => Number.isInteger(Number(levelId)) && Number(levelId) >= 1 && Number(levelId) <= MAX_LEVEL && isPlainObject(result))
-    .map(([levelId, result]) => [levelId, {
-      stars: clampInteger(result.stars, 0, 3),
-      highScore: clampInteger(result.highScore, 0, MAX_SAFE_INTEGER),
-    }]))
+  return Object.entries(results).reduce((normalized, [levelId, result]) => {
+    const canonicalLevelId = Number(levelId)
+    if (!Number.isInteger(canonicalLevelId) || canonicalLevelId < 1 || canonicalLevelId > MAX_LEVEL || !isPlainObject(result)) return normalized
+    const previous = normalized[canonicalLevelId] || { stars: 0, highScore: 0 }
+    normalized[canonicalLevelId] = {
+      stars: Math.max(previous.stars, clampInteger(result.stars, 0, 3)),
+      highScore: Math.max(previous.highScore, clampInteger(result.highScore, 0, MAX_SAFE_INTEGER)),
+    }
+    return normalized
+  }, {})
 }
 
 function normalizeSave(value) {

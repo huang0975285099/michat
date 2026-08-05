@@ -44,6 +44,26 @@ test('load save clamps unsafe and out-of-range persisted values', () => {
   })
 })
 
+test('save migration canonicalizes duplicate numeric result keys without re-awarding boosters', () => {
+  const storage = {
+    getItem: () => JSON.stringify({
+      version: 1,
+      unlockedLevel: 1,
+      results: {
+        '1.0': { stars: 3, highScore: 900 },
+        '01': { stars: 2, highScore: 1200 },
+      },
+      boosters: { hammer: 1, shuffle: 1, extraMoves: 1 },
+    }),
+  }
+
+  const migrated = loadSave(storage)
+  const repeated = recordLevelResult(migrated, { levelId: 1, score: 1, stars: 1 })
+
+  assert.deepEqual(migrated.results, { 1: { stars: 3, highScore: 1200 } })
+  assert.deepEqual(repeated, migrated)
+})
+
 test('recording a lower repeat result preserves progress and does not duplicate boosters', () => {
   const initial = recordLevelResult(createDefaultSave(), { levelId: 1, score: 500, stars: 2 })
   const repeated = recordLevelResult(initial, { levelId: 1, score: 100, stars: 1 })
