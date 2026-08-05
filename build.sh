@@ -271,6 +271,11 @@ main() {
         exit 1
     fi
 
+    if [[ ! -f .env ]]; then
+        log_error "缺少 .env；请先配置部署密钥（JWT_SECRET、MYSQL_DSN、TURN_SECRET 等）"
+        exit 1
+    fi
+
     echo
     echo "=========================================="
     echo "  E2EE Chat - $MODE 发布"
