@@ -121,6 +121,7 @@ export function createLevelScene(SceneBase) {
       void this.useBooster('hammer', position)
       return
     }
+    if (this.state.board[position.row]?.[position.col]?.id == null) return
     if (!this.selected) {
       this.selected = { ...position }
       this.boardView.setSelected(this.selected)

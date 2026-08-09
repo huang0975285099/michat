@@ -403,6 +403,36 @@ test('a swipe in hammer mode applies the hammer to its starting cell instead of 
   assert.deepEqual(boosterCall, { kind: 'hammer', cell: move.from })
 })
 
+test('normal selection ignores frosting-only cells while hammer mode targets them', async () => {
+  const frosting = { row: 2, col: 3 }
+  const selections = []
+  let boosterCall
+  const scene = {
+    resolving: false,
+    overlayOpen: false,
+    hammerSelecting: false,
+    selected: null,
+    state: {
+      status: 'playing',
+      board: Array.from({ length: 8 }, () => Array.from({ length: 8 }, () => ({
+        id: 'berry', special: null, jelly: false, frosting: 0,
+      }))),
+    },
+    boardView: { setSelected: (position) => selections.push(position) },
+    useBooster: async (kind, cell) => { boosterCall = { kind, cell } },
+  }
+  scene.state.board[frosting.row][frosting.col] = { id: null, special: null, jelly: false, frosting: 2 }
+
+  LevelScene.prototype.selectCell.call(scene, frosting)
+  assert.equal(scene.selected, null)
+  assert.deepEqual(selections, [])
+
+  scene.hammerSelecting = true
+  LevelScene.prototype.selectCell.call(scene, frosting)
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.deepEqual(boosterCall, { kind: 'hammer', cell: frosting })
+})
+
 test('LevelScene persists a booster only after the pure action succeeds', async () => {
   const board = createBoard({ seed: 41 })
   board[0][0] = null
