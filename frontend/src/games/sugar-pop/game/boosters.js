@@ -83,13 +83,19 @@ export function useBooster(state, kind, cell, rng = Math.random) {
   }
 
   const selected = state.board?.[cell?.row]?.[cell?.col]
-  if (!selected) return unchanged(state, boosters)
+  if (!selected || (selected.id == null && selected.frosting <= 0)) return unchanged(state, boosters)
   const board = state.board.map((row) => row.map((entry) => entry && { ...entry }))
   const target = cloneTarget(state.target)
-  decrement(target.candies, selected.id)
-  if (selected.jelly) decrement(target, 'jelly')
+  if (selected.id != null) decrement(target.candies, selected.id)
+  if (selected.id != null && selected.jelly) decrement(target, 'jelly')
   if (selected.frosting > 0) decrement(target, 'frosting')
-  board[cell.row][cell.col] = null
+  board[cell.row][cell.col] = {
+    ...selected,
+    id: null,
+    special: null,
+    jelly: selected.id != null ? false : selected.jelly,
+    frosting: 0,
+  }
   const gravity = stableHammerGravity(board, rng, cell)
   if (!gravity) return unchanged(state, boosters)
   return {

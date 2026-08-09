@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import BoardView, { calculateBoardLayout, adjacentPositionFromSwipe, remapSurvivorDisplays } from '../ui/BoardView.js'
 import { calculateHudLayout } from '../ui/HudView.js'
 import { canSelectLevel } from '../scenes/MapScene.js'
-import LevelScene, { isPlayableSwap } from '../scenes/LevelScene.js'
+import LevelScene, { createLevelResult, isPlayableSwap } from '../scenes/LevelScene.js'
 import { createBoard, findLegalMoves } from './board.js'
 
 function deferred() {
@@ -105,6 +105,40 @@ test('survivor display mapping follows gravity destinations between waves', () =
   assert.equal(remapped.get('7,7'), stationary)
 })
 
+test('candy and obstacle visuals are created as separate coordinate layers', () => {
+  const displayObject = (texture = null) => ({
+    texture,
+    setStrokeStyle() { return this },
+    setVisible() { return this },
+    setDisplaySize() { return this },
+    setAlpha() { return this },
+    setSize() { return this },
+    on() { return this },
+  })
+  const scene = {
+    add: {
+      rectangle: () => displayObject(),
+      image: (_x, _y, texture) => displayObject(texture),
+      container: (_x, _y, children) => ({ ...displayObject(), children, boardPosition: null }),
+    },
+  }
+  const view = {
+    scene,
+    layout: { x: 0, y: 0, cellSize: 10 },
+    enabled: true,
+  }
+  const tile = { id: 'berry', special: null, jelly: true, frosting: 2 }
+
+  const candy = BoardView.prototype.createCell.call(view, tile, { row: 2, col: 3 })
+  const obstacle = BoardView.prototype.createObstacle.call(view, tile, { row: 2, col: 3 })
+
+  assert.deepEqual(candy.children.map(({ texture }) => texture).filter(Boolean), ['candy-berry'])
+  assert.deepEqual(obstacle.children.map(({ texture }) => texture).filter(Boolean), [
+    'obstacle-jelly',
+    'obstacle-frosting',
+  ])
+})
+
 test('wave animation preserves survivor displays and creates only actual refills', async () => {
   const makeDisplay = (signature) => ({
     cellSignature: signature,
@@ -113,7 +147,7 @@ test('wave animation preserves survivor displays and creates only actual refills
     setAlpha(alpha) { this.alpha = alpha; return this },
     disableInteractive() {},
   })
-  const survivor = makeDisplay('berry:null:false:0')
+  const survivor = makeDisplay('berry:null')
   const created = []
   const board = Array.from({ length: 8 }, () => Array(8).fill(null))
   board[1][1] = { id: 'berry', special: null, jelly: false, frosting: 0 }
@@ -133,6 +167,7 @@ test('wave animation preserves survivor displays and creates only actual refills
       return display
     },
     replaceDisplay() { throw new Error('unchanged survivor must not be recreated') },
+    reconcileObstacles() {},
   }
 
   await BoardView.prototype.animateWaveMovement.call(view, {
@@ -151,7 +186,7 @@ test('multi-wave resolution remaps survivors before the next clear without a ful
   const destroyed = []
   const created = []
   let fullRedraws = 0
-  const signature = (cell) => `${cell.id}:${cell.special}:${cell.jelly}:${cell.frosting}`
+  const signature = (cell) => `${cell.id}:${cell.special}`
   const cell = (id) => ({ id, special: null, jelly: false, frosting: 0 })
   const makeDisplay = (name, value, position) => ({
     name,
@@ -218,6 +253,7 @@ test('multi-wave resolution remaps survivors before the next clear without a ful
       return display
     },
     replaceDisplay() { throw new Error('settled board must not replace unchanged displays') },
+    reconcileObstacles() {},
     render() { fullRedraws += 1 },
   }
 
@@ -409,7 +445,26 @@ test('playable swap mirrors the engine color-bomb rule', () => {
 
   assert.equal(isPlayableSwap(board, { row: 2, col: 2 }, { row: 2, col: 3 }), true)
   board[2][3].special = 'striped-h'
-  assert.equal(isPlayableSwap(board, { row: 2, col: 2 }, { row: 2, col: 3 }), true)
-  board[2][3].special = 'color-bomb'
   assert.equal(isPlayableSwap(board, { row: 2, col: 2 }, { row: 2, col: 3 }), false)
+  board[2][3].special = 'color-bomb'
+  board[2][1] = { id: 'lemon', special: null, jelly: false, frosting: 0 }
+  board[2][0] = { id: 'lemon', special: null, jelly: false, frosting: 0 }
+  assert.equal(isPlayableSwap(board, { row: 2, col: 2 }, { row: 2, col: 3 }), false)
+})
+
+test('level result uses applied bonus-wave score instead of adding a flat move bonus', () => {
+  const result = createLevelResult({
+    score: 480,
+    movesLeft: 0,
+    bonusMoves: 3,
+    bonusScore: 180,
+  }, { id: 4, starScores: [300, 450, 700] })
+
+  assert.deepEqual(result, {
+    levelId: 4,
+    score: 480,
+    stars: 2,
+    movesLeft: 3,
+    bonusScore: 180,
+  })
 })

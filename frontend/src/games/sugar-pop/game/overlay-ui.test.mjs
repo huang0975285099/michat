@@ -33,9 +33,9 @@ test('HUD disables unavailable boosters and marks hammer selection mode', () => 
   ])
 })
 
-test('win result adds remaining-move bonus before calculating stars', () => {
+test('win result calculates stars from score already earned by bonus waves', () => {
   assert.deepEqual(createLevelResult(
-    { score: 190, movesLeft: 3 },
+    { score: 340, movesLeft: 0, bonusMoves: 3, bonusScore: 150 },
     { id: 2, starScores: [200, 300, 400] },
   ), {
     levelId: 2,

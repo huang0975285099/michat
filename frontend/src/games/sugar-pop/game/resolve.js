@@ -32,6 +32,15 @@ function boardState(board) {
   return JSON.stringify(board)
 }
 
+function isColorBombSpecialSwap(board, swap) {
+  const fromCell = board[swap?.from?.row]?.[swap?.from?.col]
+  const toCell = board[swap?.to?.row]?.[swap?.to?.col]
+  if (!isAdjacent(swap?.from, swap?.to) || !fromCell || !toCell) return false
+  const fromIsBomb = fromCell.special === 'color-bomb'
+  const toIsBomb = toCell.special === 'color-bomb'
+  return (fromIsBomb && toCell.special != null) || (toIsBomb && fromCell.special != null)
+}
+
 function tryColorBombSwap(board, swap) {
   const fromCell = board[swap?.from?.row]?.[swap?.from?.col]
   const toCell = board[swap?.to?.row]?.[swap?.to?.col]
@@ -39,10 +48,12 @@ function tryColorBombSwap(board, swap) {
   const fromIsBomb = fromCell.special === 'color-bomb'
   const toIsBomb = toCell.special === 'color-bomb'
   if (fromIsBomb === toIsBomb) return null
+  const counterpart = fromIsBomb ? toCell : fromCell
+  if (counterpart.special != null || counterpart.frosting > 0 || counterpart.id == null) return null
 
   const swapped = cloneBoard(board)
-  ;[swapped[swap.from.row][swap.from.col], swapped[swap.to.row][swap.to.col]]
-    = [swapped[swap.to.row][swap.to.col], swapped[swap.from.row][swap.from.col]]
+  Object.assign(swapped[swap.from.row][swap.from.col], { id: toCell.id, special: toCell.special })
+  Object.assign(swapped[swap.to.row][swap.to.col], { id: fromCell.id, special: fromCell.special })
   return {
     board: swapped,
     triggered: [fromIsBomb ? swap.to : swap.from],
@@ -65,7 +76,9 @@ function hasPlayableMove(board) {
 function stableFallback(board) {
   const generated = createBoard({ seed: STABLE_FALLBACK_SEED })
   return board.map((row, rowIndex) => row.map((cell, colIndex) => (
-    cell == null ? null : { ...cell, id: generated[rowIndex][colIndex].id }
+    cell == null || cell.frosting > 0
+      ? (cell == null ? null : { ...cell })
+      : { ...cell, id: generated[rowIndex][colIndex].id, special: null }
   )))
 }
 
@@ -228,12 +241,19 @@ function resolveWave({ board, groups, triggered, swap, originalBoard, target, mu
       if (frostingCell?.frosting > 0) {
         frostingCell.frosting -= 1
         frostingLayersReduced += 1
-        if (frostingCell.frosting === 0) decrementTarget(target, 'frosting')
+        if (frostingCell.frosting === 0) {
+          frostingCell.id = null
+          frostingCell.special = null
+          decrementTarget(target, 'frosting')
+        }
       }
     }
   }
 
-  for (const position of removed) board[position.row][position.col] = null
+  for (const position of removed) {
+    const tile = board[position.row][position.col]
+    board[position.row][position.col] = { ...tile, id: null, special: null }
+  }
   const scoreDelta = multiplier * ((removed.length * BASE_REMOVAL_SCORE)
     + (activatedSpecials.length * SPECIAL_ACTIVATION_BONUS))
   const gravity = applyGravityWithPlan(board, swap.rng)
@@ -255,9 +275,10 @@ function resolveWave({ board, groups, triggered, swap, originalBoard, target, mu
 export function resolveTurn({ board, swap, movesLeft, target, score, rng }) {
   const originalBoard = cloneBoard(board)
   const resultTarget = cloneTarget(target)
-  const colorBombSwap = tryColorBombSwap(board, swap)
-  const matchedSwap = colorBombSwap ? null : trySwap(board, swap?.from, swap?.to)
-  if (!colorBombSwap && !matchedSwap.accepted) {
+  const forbiddenSpecialSwap = isColorBombSpecialSwap(board, swap)
+  const colorBombSwap = forbiddenSpecialSwap ? null : tryColorBombSwap(board, swap)
+  const matchedSwap = colorBombSwap || forbiddenSpecialSwap ? null : trySwap(board, swap?.from, swap?.to)
+  if (forbiddenSpecialSwap || (!colorBombSwap && !matchedSwap.accepted)) {
     return {
       board: originalBoard,
       waves: [],
@@ -319,5 +340,65 @@ export function resolveTurn({ board, swap, movesLeft, target, score, rng }) {
     target: resultTarget,
     status: complete ? 'won' : (movesLeft - 1 <= 0 ? 'lost' : 'playing'),
     createdSpecials,
+  }
+}
+
+export function resolveBonusMoves({ board, movesLeft, score, rng }) {
+  const bonusMoves = Math.max(0, Math.trunc(movesLeft || 0))
+  const startingScore = Math.max(0, Math.trunc(score || 0))
+  let currentBoard = cloneBoard(board)
+  let currentScore = startingScore
+  const waves = []
+
+  for (let moveIndex = 0; moveIndex < bonusMoves; moveIndex += 1) {
+    const candidates = []
+    for (let row = 0; row < currentBoard.length; row += 1) {
+      for (let col = 0; col < currentBoard[row].length; col += 1) {
+        const candidate = currentBoard[row][col]
+        if (candidate?.id != null && candidate.frosting <= 0) candidates.push({ row, col })
+      }
+    }
+    if (candidates.length === 0) break
+
+    const selected = candidates[Math.min(candidates.length - 1, Math.floor(rng() * candidates.length))]
+    currentBoard[selected.row][selected.col].special = moveIndex % 2 === 0 ? 'striped-h' : 'striped-v'
+    let groups = []
+    let triggered = [selected]
+    let multiplier = 1
+    const swap = { from: selected, to: selected, rng }
+    const originalBoard = cloneBoard(currentBoard)
+    const target = { candies: {} }
+
+    while (groups.length > 0 || triggered.length > 0) {
+      const resolved = resolveWave({
+        board: currentBoard,
+        groups,
+        triggered,
+        swap,
+        originalBoard,
+        target,
+        multiplier,
+      })
+      currentBoard = resolved.board
+      currentScore += resolved.wave.scoreDelta
+      waves.push(resolved.wave)
+      triggered = []
+      groups = findMatches(currentBoard)
+      multiplier += 1
+      if (resolved.wave.removed.length === 0 || multiplier > MAX_CASCADE_WAVES) {
+        currentBoard = stableFallback(currentBoard)
+        break
+      }
+    }
+  }
+
+  if (!hasPlayableMove(currentBoard)) currentBoard = reshuffle(currentBoard, rng)
+  return {
+    board: currentBoard,
+    waves,
+    score: currentScore,
+    movesLeft: 0,
+    bonusMoves,
+    bonusScore: currentScore - startingScore,
   }
 }

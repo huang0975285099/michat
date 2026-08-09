@@ -11,7 +11,11 @@ function coordinateKey({ row, col }) {
 }
 
 function cellSignature(cell) {
-  return cell == null ? null : `${cell.id}:${cell.special}:${cell.jelly}:${cell.frosting}`
+  return cell?.id == null ? null : `${cell.id}:${cell.special}`
+}
+
+function obstacleSignature(cell) {
+  return cell == null ? null : `${cell.jelly}:${cell.frosting}`
 }
 
 export function remapSurvivorDisplays(cells, movements) {
@@ -67,6 +71,8 @@ export default class BoardView {
 
     this.background = scene.add.graphics()
     this.layer = scene.add.container(0, 0)
+    this.obstacleLayer = scene.add.container(0, 0)
+    this.obstacles = new Map()
     this.handlePointerUp = this.handlePointerUp.bind(this)
     scene.input.on('pointerup', this.handlePointerUp)
     this.drawBackground()
@@ -90,15 +96,24 @@ export default class BoardView {
   render(board) {
     this.board = board
     this.cells.clear()
+    this.obstacles.clear()
     this.layer.removeAll(true)
+    this.obstacleLayer.removeAll(true)
     for (let row = 0; row < BOARD_SIZE; row += 1) {
       for (let col = 0; col < BOARD_SIZE; col += 1) {
         const cell = board[row]?.[col]
         if (!cell) continue
         const position = { row, col }
-        const display = this.createCell(cell, position)
-        this.cells.set(coordinateKey(position), display)
-        this.layer.add(display)
+        if (cell.id != null) {
+          const display = this.createCell(cell, position)
+          this.cells.set(coordinateKey(position), display)
+          this.layer.add(display)
+        }
+        if (cell.jelly || cell.frosting > 0) {
+          const obstacle = this.createObstacle(cell, position)
+          this.obstacles.set(coordinateKey(position), obstacle)
+          this.obstacleLayer.add(obstacle)
+        }
       }
     }
     if (this.selected) this.setSelected(this.selected)
@@ -116,9 +131,6 @@ export default class BoardView {
     selection.name = 'selection'
     children.push(selection)
 
-    if (cell.jelly) {
-      children.push(this.scene.add.image(0, 0, 'obstacle-jelly').setDisplaySize(cellSize * 0.92, cellSize * 0.92))
-    }
     children.push(this.scene.add.image(0, 0, displayTexture(cell)).setDisplaySize(cellSize * 0.82, cellSize * 0.82))
     if (cell.special && cell.special !== 'color-bomb') {
       const overlayKey = cell.special === 'wrapped' ? 'special-wrapped' : 'special-striped'
@@ -126,16 +138,34 @@ export default class BoardView {
       if (cell.special === 'striped-v') overlay.setAngle(90)
       children.push(overlay)
     }
+    let display
+    display = this.scene.add.container(centerX, centerY, children)
+    display.boardPosition = { ...position }
+    display.cellSignature = cellSignature(cell)
+    display.setSize(cellSize * 0.9, cellSize * 0.9)
+    display.on('pointerdown', (pointer) => {
+      if (!this.enabled) return
+      this.gesture = { from: { ...display.boardPosition }, x: pointer.x, y: pointer.y, pointerId: pointer.id }
+    })
+    return display
+  }
+
+  createObstacle(cell, position) {
+    const { x, y, cellSize } = this.layout
+    const centerX = x + (position.col + 0.5) * cellSize
+    const centerY = y + (position.row + 0.5) * cellSize
+    const children = []
+    if (cell.jelly) {
+      children.push(this.scene.add.image(0, 0, 'obstacle-jelly').setDisplaySize(cellSize * 0.92, cellSize * 0.92))
+    }
     if (cell.frosting > 0) {
       const frosting = this.scene.add.image(0, 0, 'obstacle-frosting').setDisplaySize(cellSize * 0.9, cellSize * 0.9)
       frosting.setAlpha(cell.frosting > 1 ? 0.96 : 0.8)
       children.push(frosting)
     }
-
-    let display
-    display = this.scene.add.container(centerX, centerY, children)
+    const display = this.scene.add.container(centerX, centerY, children)
     display.boardPosition = { ...position }
-    display.cellSignature = cellSignature(cell)
+    display.cellSignature = obstacleSignature(cell)
     display.setSize(cellSize * 0.9, cellSize * 0.9)
     display.on('pointerdown', (pointer) => {
       if (!this.enabled) return
@@ -165,6 +195,10 @@ export default class BoardView {
     this.enabled = enabled
     if (!enabled) this.gesture = null
     for (const display of this.cells.values()) {
+      if (enabled) display.setInteractive({ useHandCursor: true })
+      else display.disableInteractive()
+    }
+    for (const display of this.obstacles.values()) {
       if (enabled) display.setInteractive({ useHandCursor: true })
       else display.disableInteractive()
     }
@@ -221,11 +255,46 @@ export default class BoardView {
   replaceDisplay(position, cell) {
     const positionKey = coordinateKey(position)
     this.cells.get(positionKey)?.destroy()
+    if (cell?.id == null) {
+      this.cells.delete(positionKey)
+      return null
+    }
     const display = this.createCell(cell, position)
     this.layer.add(display)
     this.cells.set(positionKey, display)
     if (!this.enabled) display.disableInteractive()
     return display
+  }
+
+  replaceObstacle(position, cell) {
+    const positionKey = coordinateKey(position)
+    this.obstacles.get(positionKey)?.destroy()
+    if (!cell || (!cell.jelly && cell.frosting <= 0)) {
+      this.obstacles.delete(positionKey)
+      return null
+    }
+    const display = this.createObstacle(cell, position)
+    this.obstacleLayer.add(display)
+    this.obstacles.set(positionKey, display)
+    if (!this.enabled) display.disableInteractive()
+    return display
+  }
+
+  reconcileObstacles(board) {
+    for (let row = 0; row < BOARD_SIZE; row += 1) {
+      for (let col = 0; col < BOARD_SIZE; col += 1) {
+        const position = { row, col }
+        const cell = board[row]?.[col]
+        const display = this.obstacles.get(coordinateKey(position))
+        if ((!cell || (!cell.jelly && cell.frosting <= 0)) && display) {
+          display.destroy()
+          this.obstacles.delete(coordinateKey(position))
+        } else if ((cell?.jelly || cell?.frosting > 0)
+          && (!display || display.cellSignature !== obstacleSignature(cell))) {
+          this.replaceObstacle(position, cell)
+        }
+      }
+    }
   }
 
   reconcileBoard(board) {
@@ -235,7 +304,7 @@ export default class BoardView {
         const positionKey = coordinateKey(position)
         const cell = board[row]?.[col]
         const display = this.cells.get(positionKey)
-        if (!cell) {
+        if (!cell || cell.id == null) {
           display?.destroy()
           this.cells.delete(positionKey)
         } else if (!display || display.cellSignature !== cellSignature(cell)) {
@@ -243,6 +312,7 @@ export default class BoardView {
         }
       }
     }
+    this.reconcileObstacles(board)
     this.board = board
   }
 
@@ -297,6 +367,7 @@ export default class BoardView {
       const cell = wave.board[to.row]?.[to.col]
       if (cell && display?.cellSignature !== cellSignature(cell)) this.replaceDisplay(to, cell)
     }
+    this.reconcileObstacles(wave.board)
   }
 
   async animateResolution(waves, settledBoard) {
@@ -331,7 +402,9 @@ export default class BoardView {
   destroy() {
     this.scene.input.off('pointerup', this.handlePointerUp)
     this.layer.destroy(true)
+    this.obstacleLayer.destroy(true)
     this.background.destroy()
     this.cells.clear()
+    this.obstacles.clear()
   }
 }

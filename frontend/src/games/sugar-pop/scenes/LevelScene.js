@@ -2,7 +2,7 @@ import Scene from 'phaser/src/scene/Scene.js'
 import { createBoard, isAdjacent, trySwap } from '../game/board.js'
 import { useBooster as applyBooster } from '../game/boosters.js'
 import { getLevel, LEVELS } from '../game/levels.js'
-import { resolveTurn } from '../game/resolve.js'
+import { resolveBonusMoves, resolveTurn } from '../game/resolve.js'
 import { boosterRewardDelta, loadSaveState, recordLevelResult, saveProgress } from '../game/save.js'
 import BoardView from '../ui/BoardView.js'
 import HudView from '../ui/HudView.js'
@@ -25,14 +25,20 @@ function cloneTarget(target) {
 function levelBoard(level) {
   const board = createBoard({ seed: level.seed, blocked: level.boardShape.blocked })
   for (const obstacle of level.obstacles.jelly) board[obstacle.row][obstacle.col].jelly = true
-  for (const obstacle of level.obstacles.frosting) board[obstacle.row][obstacle.col].frosting = obstacle.layers || 1
+  for (const obstacle of level.obstacles.frosting) {
+    Object.assign(board[obstacle.row][obstacle.col], {
+      id: null,
+      special: null,
+      frosting: obstacle.layers || 1,
+    })
+  }
   return board
 }
 
 export function createLevelResult(state, level) {
-  const movesLeft = Math.max(0, Math.trunc(state.movesLeft || 0))
-  const bonusScore = movesLeft * 50
-  const score = Math.max(0, Math.trunc(state.score || 0)) + bonusScore
+  const movesLeft = Math.max(0, Math.trunc(state.bonusMoves ?? state.movesLeft ?? 0))
+  const bonusScore = Math.max(0, Math.trunc(state.bonusScore || 0))
+  const score = Math.max(0, Math.trunc(state.score || 0))
   const stars = Math.max(1, Math.min(3, (level.starScores || []).filter((threshold) => score >= threshold).length))
   return { levelId: level.id, score, stars, movesLeft, bonusScore }
 }
@@ -41,8 +47,13 @@ export function isPlayableSwap(board, from, to) {
   if (!isAdjacent(from, to)) return false
   const first = board[from.row]?.[from.col]
   const second = board[to.row]?.[to.col]
-  if (!first || !second) return false
-  if ((first.special === 'color-bomb') !== (second.special === 'color-bomb')) return true
+  if (!first?.id || !second?.id || first.frosting > 0 || second.frosting > 0) return false
+  if ((first.special === 'color-bomb' && second.special != null)
+    || (second.special === 'color-bomb' && first.special != null)) return false
+  if ((first.special === 'color-bomb') !== (second.special === 'color-bomb')) {
+    const counterpart = first.special === 'color-bomb' ? second : first
+    return counterpart.special == null
+  }
   return trySwap(board, from, to).accepted
 }
 
@@ -215,6 +226,15 @@ export function createLevelScene(SceneBase) {
     this.finishingWin = true
     this.overlayOpen = true
     this.boardView.setInputEnabled(false)
+    this.updateHud()
+    const bonus = resolveBonusMoves({
+      board: this.state.board,
+      movesLeft: this.state.movesLeft,
+      score: this.state.score,
+      rng: this.rng,
+    })
+    await this.boardView.animateResolution(bonus.waves, bonus.board)
+    this.state = { ...this.state, ...bonus, status: 'won' }
     this.updateHud()
     const result = createLevelResult(this.state, this.level)
     const previousSave = this.save

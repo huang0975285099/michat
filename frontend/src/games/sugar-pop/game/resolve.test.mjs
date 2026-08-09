@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createBoard, findLegalMoves, findMatches } from './board.js'
 import { CANDY_IDS } from './constants.js'
-import { resolveTurn } from './resolve.js'
+import { resolveBonusMoves, resolveTurn } from './resolve.js'
 
 function clone(value) {
   return structuredClone(value)
@@ -208,10 +208,12 @@ test('a swapped color bomb clears every candy matching its normal counterpart', 
   assert.equal(result.target.candies.berry, 0)
 })
 
-test('a color bomb accepts a non-bomb special counterpart and activates it by ID', () => {
+test('a color bomb rejects a special counterpart without spending a move', () => {
   const board = boardFromSeed()
   Object.assign(board[0][0], { id: 'lemon', special: 'color-bomb' })
   Object.assign(board[0][1], { id: 'berry', special: 'striped-h' })
+  Object.assign(board[0][2], { id: 'lemon' })
+  Object.assign(board[0][3], { id: 'lemon' })
   Object.assign(board[2][2], { id: 'berry' })
   const result = resolveTurn({
     board,
@@ -222,12 +224,45 @@ test('a color bomb accepts a non-bomb special counterpart and activates it by ID
     rng: sequence(),
   })
 
-  assert.equal(result.movesLeft, 2)
-  assert.deepEqual(result.waves[0].activatedSpecials.map(({ special }) => special), [
-    'color-bomb',
-    'striped-h',
-  ])
-  assert.equal(result.target.candies.berry, 0)
+  assert.equal(result.movesLeft, 3)
+  assert.deepEqual(result.waves, [])
+  assert.equal(result.target.candies.berry, 2)
+  assert.deepEqual(result.board, board)
+})
+
+test('two color bombs are rejected even when their candy IDs would form a match', () => {
+  const board = boardFromSeed()
+  Object.assign(board[0][0], { id: 'lemon', special: 'color-bomb' })
+  Object.assign(board[0][1], { id: 'berry', special: 'color-bomb' })
+  Object.assign(board[0][2], { id: 'lemon' })
+  Object.assign(board[0][3], { id: 'lemon' })
+
+  const result = resolveTurn({
+    board,
+    swap: { from: { row: 0, col: 0 }, to: { row: 0, col: 1 } },
+    movesLeft: 3,
+    target: { candies: { berry: 2 } },
+    score: 0,
+    rng: sequence(),
+  })
+
+  assert.equal(result.movesLeft, 3)
+  assert.deepEqual(result.waves, [])
+  assert.deepEqual(result.board, board)
+})
+
+test('remaining moves produce deterministic elimination waves and score from removed candy', () => {
+  const board = boardFromSeed()
+  const first = resolveBonusMoves({ board, movesLeft: 2, score: 100, rng: sequence([0.1, 0.8]) })
+  const second = resolveBonusMoves({ board, movesLeft: 2, score: 100, rng: sequence([0.1, 0.8]) })
+
+  assert.equal(first.movesLeft, 0)
+  assert.equal(first.bonusMoves, 2)
+  assert.ok(first.waves.length >= 2)
+  assert.ok(first.waves.every((wave) => wave.removed.length > 0))
+  assert.equal(first.bonusScore, first.waves.reduce((total, wave) => total + wave.scoreDelta, 0))
+  assert.equal(first.score, 100 + first.bonusScore)
+  assert.deepEqual(first, second)
 })
 
 test('removing candy and obstacles decrements their targets without mutating inputs', () => {
@@ -290,7 +325,7 @@ test('a stable board whose only move is a color-bomb swap is not reshuffled', ()
   assert.equal(findLegalMoves(result.board).length, 0)
 })
 
-test('a wave that cannot remove candy or damage frosting terminates resolution', () => {
+test('frosting cells block swaps without spending a move', () => {
   const board = boardFromSeed()
   Object.assign(board[0][0], { id: 'berry', frosting: 1 })
   Object.assign(board[0][1], { id: 'berry', frosting: 1 })
@@ -305,9 +340,8 @@ test('a wave that cannot remove candy or damage frosting terminates resolution',
     rng: sequence(),
   })
 
-  assert.equal(result.movesLeft, 2)
-  assert.equal(result.waves.length, 1)
-  assert.deepEqual(result.waves[0].removed, [])
+  assert.equal(result.movesLeft, 3)
+  assert.equal(result.waves.length, 0)
   assert.equal(result.target.frosting, 3)
   assert.equal(result.board[0][0].frosting, 1)
   assert.deepEqual(findMatches(result.board), [])
