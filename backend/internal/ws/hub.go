@@ -134,7 +134,7 @@ type Hub struct {
 	mu             sync.RWMutex
 	clients        map[string]*Client // chatID → client
 	redis          *rdb.Client
-	friendSvc      *service.FriendService
+	friendSvc      friendChecker
 	identitySvc    *service.IdentityService
 	messageReadSvc *service.MessageReadService
 	pushSvc        *service.PushService                 //Can be nil (disables pushing when not configured)
@@ -145,6 +145,11 @@ type Hub struct {
 	// file_offer's friend check floods online users with chunks of data.
 	fileTransferMu sync.Mutex
 	fileTransfers  map[string]*fileTransferSession
+}
+
+type friendChecker interface {
+	GetFriendChatIDs(context.Context, uint64) ([]string, error)
+	AreFriends(context.Context, uint64, string) (bool, error)
 }
 
 type fileTransferSession struct {
@@ -577,7 +582,7 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 	case "call_offer":
 		h.handleCallOffer(c, msg.Payload)
 	case "call_answer", "call_ice", "call_hangup", "call_reject",
-		"call_restart_request", "call_restart_offer", "call_restart_answer":
+		"call_restart_request", "call_restart_offer", "call_restart_answer", "call_media_state":
 		h.handleCallRelay(c, msg.Type, msg.Payload)
 	case "game_invite", "game_accept", "game_reject", "game_ready",
 		"game_move", "game_bomb", "game_powerup", "game_death", "game_resign":
@@ -1362,10 +1367,11 @@ func (h *Hub) handleFileSimpleRelay(from *Client, msgType string, payload json.R
 // handleCallOffer forwards call invitation (including friend verification)
 func (h *Hub) handleCallOffer(from *Client, payload json.RawMessage) {
 	var p struct {
-		To     string          `json:"to"`
-		CallID string          `json:"call_id"`
-		SDP    json.RawMessage `json:"sdp"`
-		Media  string          `json:"media"` //audio | video (processed by audio by default)
+		To           string          `json:"to"`
+		CallID       string          `json:"call_id"`
+		SDP          json.RawMessage `json:"sdp"`
+		Media        string          `json:"media"` //audio | video (processed by audio by default)
+		VideoEnabled *bool           `json:"video_enabled,omitempty"`
 	}
 	if err := json.Unmarshal(payload, &p); err != nil ||
 		!chatIDRe.MatchString(p.To) || !transferIDRe.MatchString(p.CallID) || len(p.SDP) == 0 {
@@ -1384,14 +1390,18 @@ func (h *Hub) handleCallOffer(from *Client, payload json.RawMessage) {
 		media = "video"
 	}
 
+	inner := map[string]any{
+		"from":    from.ChatID,
+		"call_id": p.CallID,
+		"sdp":     p.SDP,
+		"media":   media,
+	}
+	if p.VideoEnabled != nil {
+		inner["video_enabled"] = *p.VideoEnabled
+	}
 	fwd, _ := json.Marshal(Message{
-		Type: "call_offer",
-		Payload: mustMarshal(map[string]any{
-			"from":    from.ChatID,
-			"call_id": p.CallID,
-			"sdp":     p.SDP,
-			"media":   media,
-		}),
+		Type:    "call_offer",
+		Payload: mustMarshal(inner),
 	})
 
 	h.mu.RLock()
@@ -1405,26 +1415,60 @@ func (h *Hub) handleCallOffer(from *Client, payload json.RawMessage) {
 	}
 }
 
-// handleCallRelay forwards call_answer / call_ice / call_hangup / call_reject
-func (h *Hub) handleCallRelay(from *Client, msgType string, payload json.RawMessage) {
-	var p struct {
-		To     string          `json:"to"`
-		CallID string          `json:"call_id"`
-		SDP    json.RawMessage `json:"sdp,omitempty"`
-		ICE    json.RawMessage `json:"ice,omitempty"`
-		Reason string          `json:"reason,omitempty"`
-	}
+type callRelayPayload struct {
+	To           string          `json:"to"`
+	CallID       string          `json:"call_id"`
+	SDP          json.RawMessage `json:"sdp,omitempty"`
+	ICE          json.RawMessage `json:"ice,omitempty"`
+	Reason       string          `json:"reason,omitempty"`
+	VideoEnabled *bool           `json:"video_enabled,omitempty"`
+}
+
+func parseCallRelayPayload(msgType string, payload json.RawMessage) (callRelayPayload, bool) {
+	var p callRelayPayload
 	if err := json.Unmarshal(payload, &p); err != nil ||
 		!chatIDRe.MatchString(p.To) || !transferIDRe.MatchString(p.CallID) {
-		log.Printf("[ws] invalid %s from %s", msgType, from.ChatID)
-		return
+		return callRelayPayload{}, false
 	}
 	if (msgType == "call_answer" || msgType == "call_restart_offer" || msgType == "call_restart_answer") && len(p.SDP) == 0 {
-		log.Printf("[ws] missing SDP in %s from %s", msgType, from.ChatID)
-		return
+		return callRelayPayload{}, false
 	}
 	if msgType == "call_ice" && len(p.ICE) == 0 {
-		log.Printf("[ws] missing ICE in call_ice from %s", from.ChatID)
+		return callRelayPayload{}, false
+	}
+	if msgType == "call_media_state" && p.VideoEnabled == nil {
+		return callRelayPayload{}, false
+	}
+	return p, true
+}
+
+func buildCallRelayPayload(from, msgType string, p callRelayPayload) map[string]any {
+	inner := map[string]any{"from": from, "call_id": p.CallID}
+	if len(p.SDP) > 0 {
+		inner["sdp"] = p.SDP
+	}
+	if len(p.ICE) > 0 {
+		inner["ice"] = p.ICE
+	}
+	if p.VideoEnabled != nil {
+		inner["video_enabled"] = *p.VideoEnabled
+	}
+	if msgType == "call_reject" {
+		switch p.Reason {
+		case "busy", "device_error", "rejected", "timeout", "glare":
+			inner["reason"] = p.Reason
+		default:
+			inner["reason"] = "rejected"
+		}
+	}
+	return inner
+}
+
+// handleCallRelay forwards call session signaling after validating friendship.
+func (h *Hub) handleCallRelay(from *Client, msgType string, payload json.RawMessage) {
+	p, ok := parseCallRelayPayload(msgType, payload)
+	if !ok {
+		log.Printf("[ws] invalid %s from %s", msgType, from.ChatID)
 		return
 	}
 
@@ -1436,25 +1480,9 @@ func (h *Hub) handleCallRelay(from *Client, msgType string, payload json.RawMess
 		return
 	}
 
-	inner := map[string]any{"from": from.ChatID, "call_id": p.CallID}
-	if len(p.SDP) > 0 {
-		inner["sdp"] = p.SDP
-	}
-	if len(p.ICE) > 0 {
-		inner["ice"] = p.ICE
-	}
-	if msgType == "call_reject" {
-		switch p.Reason {
-		case "busy", "device_error", "rejected", "timeout", "glare":
-			inner["reason"] = p.Reason
-		default:
-			inner["reason"] = "rejected"
-		}
-	}
-
 	fwd, _ := json.Marshal(Message{
 		Type:    msgType,
-		Payload: mustMarshal(inner),
+		Payload: mustMarshal(buildCallRelayPayload(from.ChatID, msgType, p)),
 	})
 
 	h.mu.RLock()

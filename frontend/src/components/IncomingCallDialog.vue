@@ -14,7 +14,12 @@
                     <div class="text-caption text-grey-6">reject</div>
                 </div>
                 <div class="column items-center q-gutter-xs">
-                    <q-btn round color="positive" icon="call" size="lg" @click="callStore.answerCall()" />
+                    <q-btn
+                        round color="positive" icon="call" size="lg"
+                        :loading="callStore.answering"
+                        :disable="callStore.answering"
+                        @click="callStore.answerCall()"
+                    />
                     <div class="text-caption text-grey-6">Answer</div>
                 </div>
             </q-card-actions>

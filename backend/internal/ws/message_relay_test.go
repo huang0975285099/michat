@@ -9,7 +9,7 @@ func TestOfflineStorableIncludesDeliveryAck(t *testing.T) {
 			t.Fatalf("%s should survive reconnect", messageType)
 		}
 	}
-	for _, messageType := range []string{"status", "file_chunk", "call_offer"} {
+	for _, messageType := range []string{"status", "file_chunk", "call_offer", "call_media_state"} {
 		msg := []byte(`{"type":"` + messageType + `"}`)
 		if offlineStorable(msg) {
 			t.Fatalf("transient %s should not survive reconnect", messageType)

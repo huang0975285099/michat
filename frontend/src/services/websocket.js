@@ -22,9 +22,10 @@ let serverClock = null //{ epochMs, monotonicMs }, calibrated by the server duri
 // Inbound early arrival buffer: During cold start, the backend will flush offline messages immediately after successful authentication, while the chat listener will wait
 // Registered only after MainLayout is mounted (onMounted → startListening). If the message arrives first and the listener has not been registered yet,
 // Direct discarding will result in permanent loss of offline messages (the backend has deleted the queue from Redis). Therefore, for these types of projects that require supplementary investment
-// The type is temporarily stored first and will be played back when the corresponding on(type) is registered. Only buffers will be placed in the offline queue/types that require re-investment.
+// The type is temporarily stored first and will be played back when the corresponding on(type) is registered. In addition to offline message types,
+// call_offer is buffered only across this cold-start listener gap; session-bound call signaling remains transient.
 // Avoid buffering high-frequency transient events such as status and game actions.
-const BUFFERED_TYPES = new Set(['message', 'read_receipt', 'read_ack', 'ack', 'recall', 'file_done'])
+const BUFFERED_TYPES = new Set(['message', 'read_receipt', 'read_ack', 'ack', 'recall', 'file_done', 'call_offer'])
 const EARLY_BUFFER_MAX = 500
 const earlyBuffer = [] //[{ type, payload }] A message that arrives without a listener
 

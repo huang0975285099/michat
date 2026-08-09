@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { Notify } from 'quasar'
 import { send, on, off, wsConnected } from 'src/services/websocket'
 import { callApi } from 'src/services/api'
+import { acquireCallMedia } from './call-media.mjs'
 
 function deviceErrorMessage(e, video) {
   const noun = video ? 'camera/Microphone' : 'Microphone'
@@ -27,13 +28,6 @@ const CONNECT_TIMEOUT_MS = 20000
 const MAX_BUFFERED_ICE = 256
 const CALL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-function mediaConstraints(video, facing) {
-  return {
-    audio: true,
-    video: video ? { ...VIDEO_CONSTRAINTS, facingMode: facing } : false,
-  }
-}
-
 export const useCallStore = defineStore('call', () => {
   const state = ref('idle')   // idle | calling | ringing | active
   const media = ref('audio')  //audio | video (type of this call)
@@ -41,7 +35,10 @@ export const useCallStore = defineStore('call', () => {
   const peerNickname = ref('')
   const remoteStream = ref(null)
   const localStream = ref(null)
-  const cameraOn = ref(true)
+  const localVideoOn = ref(false)
+  const remoteVideoOn = ref(null)
+  const cameraStarting = ref(false)
+  const answering = ref(false)
   const connectionStatus = ref('idle') // idle | connecting | connected | reconnecting
   const reconnectSeconds = ref(0)
 
@@ -57,6 +54,8 @@ export const useCallStore = defineStore('call', () => {
   let restartInFlight = false
   let awaitingRestartAnswer = false
   let lastRestartAttempt = 0
+  let answerAttemptGeneration = 0
+  let cameraAttemptGeneration = 0
   let facingMode = 'user' //Current camera orientation: user=front environment=rear
 
   const isVideo = () => media.value === 'video'
@@ -71,7 +70,8 @@ export const useCallStore = defineStore('call', () => {
           credential: data.password,
         }))
       }
-    } catch {
+    } catch (e) {
+      console.warn('[call] getTurnConfig failed, P2P may fail across NAT:', e)
       return { iceServers: [] }
     }
   }
@@ -114,9 +114,16 @@ export const useCallStore = defineStore('call', () => {
     for (const track of stream.getTracks()) {
       track.onended = () => {
         if (!isCurrentSession(callId, targetPeerId)) return
-        const device = track.kind === 'video' ? 'camera' : 'Microphone'
-        Notify.create({ type: 'negative', message: `${device}Disconnected，The call has ended`, timeout: 3000 })
-        hangup()
+        if (track.kind === 'video') {
+          if (!localStream.value?.getVideoTracks().includes(track)) return
+          localStream.value.removeTrack(track)
+          localVideoOn.value = false
+          sendMediaState()
+          Notify.create({ type: 'warning', message: 'Camera disconnected; continuing with voice', timeout: 3000 })
+        } else {
+          Notify.create({ type: 'negative', message: 'MicrophoneDisconnected，The call has ended', timeout: 3000 })
+          hangup()
+        }
       }
     }
   }
@@ -183,7 +190,11 @@ export const useCallStore = defineStore('call', () => {
 
     connection.ontrack = (event) => {
       if (pc !== connection || !isCurrentSession(callId, targetPeerId)) return
-      remoteStream.value = event.streams[0]
+      remoteStream.value = event.streams[0] || new MediaStream([event.track])
+      if (event.track?.kind === 'video' && event.track.readyState !== 'ended' &&
+          remoteVideoOn.value === null) {
+        remoteVideoOn.value = true
+      }
     }
 
     connection.onicecandidate = (event) => {
@@ -224,24 +235,45 @@ export const useCallStore = defineStore('call', () => {
     state.value = 'calling'
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia(mediaConstraints(isVideo(), facingMode))
+      const { stream, videoError } = await acquireCallMedia(navigator.mediaDevices, {
+        video: isVideo(),
+        facingMode,
+        videoConstraints: VIDEO_CONSTRAINTS,
+      })
       // The user may have hung up during the permission pop-up window, and the late getUserMedia cannot be used to revive the old call.
       if (!isCurrentSession(callId, chatId) || state.value !== 'calling') {
         stream.getTracks().forEach(t => t.stop())
         return
       }
       localStream.value = stream
+      localVideoOn.value = stream.getVideoTracks().some(track => track.readyState !== 'ended')
+      if (videoError) {
+        Notify.create({ type: 'warning', message: 'Camera unavailable; continuing with voice', timeout: 3000 })
+      }
       bindTrackEndHandlers(stream, callId, chatId)
       const iceConfig = await getTurnConfig()
       if (!isCurrentSession(callId, chatId) || state.value !== 'calling') return
       const connection = createPC(iceConfig, callId, chatId)
       connectionStatus.value = 'connecting'
-      localStream.value.getTracks().forEach(track => pc.addTrack(track, localStream.value))
+      localStream.value.getAudioTracks().forEach(track => connection.addTrack(track, localStream.value))
+      if (isVideo()) {
+        const videoTrack = localStream.value.getVideoTracks()[0]
+        connection.addTransceiver(videoTrack || 'video', {
+          direction: 'sendrecv',
+          streams: [localStream.value],
+        })
+      }
       const offer = await connection.createOffer()
       await connection.setLocalDescription(offer)
       if (pc !== connection || !isCurrentSession(callId, chatId) || state.value !== 'calling') return
       // The signaling carries the media type, and the called end decides whether to turn on the camera based on this.
-      if (!send('call_offer', { to: chatId, call_id: callId, sdp: offer, media: media.value })) {
+      if (!send('call_offer', {
+        to: chatId,
+        call_id: callId,
+        sdp: offer,
+        media: media.value,
+        video_enabled: isVideo() ? localVideoOn.value : undefined,
+      })) {
         throw new Error('Signaling connection disconnected')
       }
       callingTimer = setTimeout(() => {
@@ -253,15 +285,14 @@ export const useCallStore = defineStore('call', () => {
     } catch (e) {
       console.error('[call] startCall:', e)
       if (currentCallId === callId) {
-        const video = isVideo()
         cleanup()
-        const message = e.message === 'Signaling connection disconnected' ? e.message : deviceErrorMessage(e, video)
+        const message = e.message === 'Signaling connection disconnected' ? e.message : deviceErrorMessage(e, false)
         Notify.create({ type: 'negative', message })
       }
     }
   }
 
-  function handleIncomingOffer(fromId, callId, sdp, callMedia) {
+  function handleIncomingOffer(fromId, callId, sdp, callMedia, videoEnabled) {
     if (!CALL_ID_PATTERN.test(callId || '') || !fromId || !sdp) return
     if (state.value !== 'idle') {
       // When the same two parties call each other at the same time, if the call_id is kept smaller with certainty, both parties will reach the same conclusion.
@@ -275,6 +306,7 @@ export const useCallStore = defineStore('call', () => {
     currentCallId = callId
     isInitiator = false
     media.value = callMedia === 'video' ? 'video' : 'audio'
+    remoteVideoOn.value = isVideo() && typeof videoEnabled === 'boolean' ? videoEnabled : null
     peerId.value = fromId
     peerNickname.value = fromId
     pendingOffer = sdp
@@ -288,29 +320,46 @@ export const useCallStore = defineStore('call', () => {
   }
 
   async function answerCall() {
-    if (state.value !== 'ringing' || !pendingOffer) return
+    if (state.value !== 'ringing' || !pendingOffer || answering.value) return
+    const answerAttempt = ++answerAttemptGeneration
+    answering.value = true
     const callId = currentCallId
     const fromId = peerId.value
     const offer = pendingOffer
     try {
-      const stream = await navigator.mediaDevices.getUserMedia(mediaConstraints(isVideo(), facingMode))
+      const { stream, videoError } = await acquireCallMedia(navigator.mediaDevices, {
+        video: isVideo(),
+        facingMode,
+        videoConstraints: VIDEO_CONSTRAINTS,
+      })
       if (!isCurrentSession(callId, fromId) || state.value !== 'ringing') {
         stream.getTracks().forEach(t => t.stop())
         return
       }
       localStream.value = stream
+      localVideoOn.value = stream.getVideoTracks().some(track => track.readyState !== 'ended')
+      if (videoError) {
+        Notify.create({ type: 'warning', message: 'Camera unavailable; continuing with voice', timeout: 3000 })
+      }
       bindTrackEndHandlers(stream, callId, fromId)
       const iceConfig = await getTurnConfig()
       if (!isCurrentSession(callId, fromId) || state.value !== 'ringing') return
       const connection = createPC(iceConfig, callId, fromId)
       connectionStatus.value = 'connecting'
-      localStream.value.getTracks().forEach(track => pc.addTrack(track, localStream.value))
       await connection.setRemoteDescription(offer)
       await flushIceCandidates()
+      localStream.value.getAudioTracks().forEach(track => connection.addTrack(track, localStream.value))
+      const videoTrack = localStream.value.getVideoTracks()[0]
+      if (videoTrack) connection.addTrack(videoTrack, localStream.value)
       const answer = await connection.createAnswer()
       await connection.setLocalDescription(answer)
       if (pc !== connection || !isCurrentSession(callId, fromId) || state.value !== 'ringing') return
-      if (!send('call_answer', { to: fromId, call_id: callId, sdp: answer })) {
+      if (!send('call_answer', {
+        to: fromId,
+        call_id: callId,
+        sdp: answer,
+        video_enabled: isVideo() ? localVideoOn.value : undefined,
+      })) {
         throw new Error('Signaling connection disconnected')
       }
       state.value = 'active'
@@ -320,12 +369,13 @@ export const useCallStore = defineStore('call', () => {
     } catch (e) {
       console.error('[call] answerCall:', e)
       if (currentCallId === callId) {
-        const video = isVideo()
         send('call_reject', { to: fromId, call_id: callId, reason: 'device_error' })
         cleanup()
-        const message = e.message === 'Signaling connection disconnected' ? e.message : deviceErrorMessage(e, video)
+        const message = e.message === 'Signaling connection disconnected' ? e.message : deviceErrorMessage(e, false)
         Notify.create({ type: 'negative', message })
       }
+    } finally {
+      if (answerAttemptGeneration === answerAttempt) answering.value = false
     }
   }
 
@@ -347,45 +397,138 @@ export const useCallStore = defineStore('call', () => {
     }
   }
 
-  // Turn on/off the local camera (only pauses the picture, does not end the call)
-  function setCameraEnabled(val) {
-    cameraOn.value = val
-    if (localStream.value) {
-      localStream.value.getVideoTracks().forEach(t => { t.enabled = val })
+  // Turn on/off the local camera without renegotiating the existing video transceiver.
+  async function setCameraEnabled(enabled) {
+    if (!isVideo() || !localStream.value || !pc) return
+
+    const existingTrack = localStream.value.getVideoTracks()
+      .find(track => track.readyState !== 'ended')
+    if (!enabled) {
+      cameraAttemptGeneration++
+      cameraStarting.value = false
+      if (existingTrack) existingTrack.enabled = false
+      localVideoOn.value = false
+      sendMediaState()
+      return
+    }
+    if (existingTrack) {
+      existingTrack.enabled = true
+      localVideoOn.value = true
+      sendMediaState()
+      return
+    }
+    if (cameraStarting.value) return
+
+    const attempt = ++cameraAttemptGeneration
+    const connection = pc
+    const callId = currentCallId
+    const targetPeerId = peerId.value
+    let cameraStream = null
+    cameraStarting.value = true
+    try {
+      cameraStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { ...VIDEO_CONSTRAINTS, facingMode },
+      })
+      const newTrack = cameraStream.getVideoTracks()[0]
+      if (!newTrack) throw Object.assign(new Error('camera returned no video track'), { name: 'NotFoundError' })
+      if (attempt !== cameraAttemptGeneration || pc !== connection ||
+          !isCurrentSession(callId, targetPeerId) || !localStream.value) {
+        cameraStream.getTracks().forEach(track => track.stop())
+        return
+      }
+      const videoSender = connection.getTransceivers()
+        .find(transceiver => transceiver.receiver?.track?.kind === 'video')?.sender
+      if (!videoSender) throw new Error('video sender not found')
+      await videoSender.replaceTrack(newTrack)
+      if (attempt !== cameraAttemptGeneration || pc !== connection ||
+          !isCurrentSession(callId, targetPeerId) || !localStream.value) {
+        newTrack.stop()
+        return
+      }
+      cameraStream.getTracks()
+        .filter(track => track !== newTrack)
+        .forEach(track => track.stop())
+      localStream.value.addTrack(newTrack)
+      bindTrackEndHandlers({ getTracks: () => [newTrack] }, callId, targetPeerId)
+      localVideoOn.value = true
+      cameraStream = null
+      sendMediaState()
+    } catch (e) {
+      cameraStream?.getTracks().forEach(track => track.stop())
+      console.warn('[call] enable camera:', e)
+      if (attempt === cameraAttemptGeneration && isCurrentSession(callId, targetPeerId)) {
+        localVideoOn.value = false
+        Notify.create({ type: 'warning', message: 'Unable to start camera; continuing with voice', timeout: 3000 })
+      }
+    } finally {
+      if (attempt === cameraAttemptGeneration) cameraStarting.value = false
     }
   }
 
   // Switch front/rear camera (mobile browser)
   async function switchCamera() {
-    if (!isVideo() || !localStream.value || !pc) return
+    if (!isVideo() || !localStream.value || !pc || cameraStarting.value) return
+    if (connectionStatus.value === 'reconnecting') {
+      Notify.create({ type: 'warning', message: 'Reconnecting, please try again later', timeout: 2000 })
+      return
+    }
+    const attempt = ++cameraAttemptGeneration
+    const connection = pc
+    const callId = currentCallId
+    const targetPeerId = peerId.value
+    const stream = localStream.value
     const next = facingMode === 'user' ? 'environment' : 'user'
     let tmp = null
+    cameraStarting.value = true
     try {
       tmp = await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...VIDEO_CONSTRAINTS, facingMode: next } })
       const newTrack = tmp.getVideoTracks()[0]
-      if (!newTrack) return
-      newTrack.enabled = cameraOn.value
-      const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video')
+      if (!newTrack) throw Object.assign(new Error('camera returned no video track'), { name: 'NotFoundError' })
+      if (attempt !== cameraAttemptGeneration || pc !== connection || localStream.value !== stream ||
+          !isCurrentSession(callId, targetPeerId)) {
+        tmp.getTracks().forEach(track => track.stop())
+        return
+      }
+      newTrack.enabled = localVideoOn.value
+      const sender = connection.getTransceivers()
+        .find(transceiver => transceiver.receiver?.track?.kind === 'video')?.sender
       if (!sender) throw new Error('video sender not found')
       await sender.replaceTrack(newTrack)
+      if (attempt !== cameraAttemptGeneration || pc !== connection || localStream.value !== stream ||
+          !isCurrentSession(callId, targetPeerId)) {
+        newTrack.stop()
+        return
+      }
       // Synchronize local preview stream: remove old tracks and add new tracks
-      const oldTrack = localStream.value.getVideoTracks()[0]
+      const oldTrack = stream.getVideoTracks()[0]
       if (oldTrack) {
         oldTrack.onended = null
-        localStream.value.removeTrack(oldTrack)
+        stream.removeTrack(oldTrack)
         oldTrack.stop()
       }
-      localStream.value.addTrack(newTrack)
-      bindTrackEndHandlers(new MediaStream([newTrack]), currentCallId, peerId.value)
+      tmp.getTracks()
+        .filter(track => track !== newTrack)
+        .forEach(track => track.stop())
+      stream.addTrack(newTrack)
+      bindTrackEndHandlers({ getTracks: () => [newTrack] }, callId, targetPeerId)
       facingMode = next
+      tmp = null
     } catch (e) {
       tmp?.getTracks().forEach(t => t.stop())
       console.warn('[call] switchCamera:', e)
-      Notify.create({ type: 'warning', message: 'Failed to switch camera' })
+      if (attempt === cameraAttemptGeneration && isCurrentSession(callId, targetPeerId)) {
+        Notify.create({ type: 'warning', message: 'Failed to switch camera' })
+      }
+    } finally {
+      if (attempt === cameraAttemptGeneration) cameraStarting.value = false
     }
   }
 
   function cleanup() {
+    answerAttemptGeneration++
+    cameraAttemptGeneration++
+    answering.value = false
     if (callingTimer) {
       clearTimeout(callingTimer)
       callingTimer = null
@@ -413,7 +556,9 @@ export const useCallStore = defineStore('call', () => {
     awaitingRestartAnswer = false
     lastRestartAttempt = 0
     facingMode = 'user'
-    cameraOn.value = true
+    localVideoOn.value = false
+    remoteVideoOn.value = null
+    cameraStarting.value = false
     connectionStatus.value = 'idle'
     media.value = 'audio'
     state.value = 'idle'
@@ -424,7 +569,7 @@ export const useCallStore = defineStore('call', () => {
   // WS handlers
   function onCallOffer(payload) {
     if (!payload) return
-    handleIncomingOffer(payload.from, payload.call_id, payload.sdp, payload.media)
+    handleIncomingOffer(payload.from, payload.call_id, payload.sdp, payload.media, payload.video_enabled)
   }
 
   async function onCallAnswer(payload) {
@@ -432,10 +577,12 @@ export const useCallStore = defineStore('call', () => {
         !isCurrentSession(payload.call_id, payload.from) || !payload.sdp) return
     const connection = pc
     try {
+      remoteVideoOn.value = typeof payload.video_enabled === 'boolean' ? payload.video_enabled : null
       await connection.setRemoteDescription(payload.sdp)
       if (pc !== connection || !isCurrentSession(payload.call_id, payload.from)) return
       await flushIceCandidates()
       state.value = 'active'
+      sendMediaState()
       if (callingTimer) { clearTimeout(callingTimer); callingTimer = null }
       startConnectTimeout(payload.call_id, payload.from)
     } catch (e) {
@@ -447,12 +594,30 @@ export const useCallStore = defineStore('call', () => {
     }
   }
 
+  function sendMediaState() {
+    if (!isVideo() || !isCurrentSession(currentCallId)) return false
+    return send('call_media_state', {
+      to: peerId.value,
+      call_id: currentCallId,
+      video_enabled: localVideoOn.value,
+    })
+  }
+
+  function onCallMediaState(payload) {
+    if (typeof payload?.video_enabled !== 'boolean' ||
+        !isCurrentSession(payload.call_id, payload.from)) return
+    remoteVideoOn.value = payload.video_enabled
+  }
+
   async function onCallIce(payload) {
     if (!payload?.ice?.candidate || !isCurrentSession(payload.call_id, payload.from)) return
     if (pc?.remoteDescription) {
-      try { await pc.addIceCandidate(payload.ice) } catch {}
+      try { await pc.addIceCandidate(payload.ice) }
+      catch (e) { console.warn('[call] addIceCandidate:', e) }
     } else if (iceCandidateBuffer.length < MAX_BUFFERED_ICE) {
       iceCandidateBuffer.push(payload.ice)
+    } else {
+      console.warn('[call] ICE candidate buffer full, dropping candidate')
     }
   }
 
@@ -490,6 +655,7 @@ export const useCallStore = defineStore('call', () => {
       await flushIceCandidates()
     } catch (e) {
       console.warn('[call] apply ICE restart answer:', e)
+      awaitingRestartAnswer = false
     }
   }
 
@@ -529,7 +695,9 @@ export const useCallStore = defineStore('call', () => {
     on('call_restart_offer', onCallRestartOffer)
     on('call_restart_answer', onCallRestartAnswer)
     on('call_restart_request', onCallRestartRequest)
+    on('call_media_state', onCallMediaState)
     return () => {
+      if (state.value !== 'idle') hangup()
       off('call_offer', onCallOffer)
       off('call_answer', onCallAnswer)
       off('call_ice', onCallIce)
@@ -538,11 +706,13 @@ export const useCallStore = defineStore('call', () => {
       off('call_restart_offer', onCallRestartOffer)
       off('call_restart_answer', onCallRestartAnswer)
       off('call_restart_request', onCallRestartRequest)
+      off('call_media_state', onCallMediaState)
     }
   }
 
   return {
-    state, media, peerId, peerNickname, remoteStream, localStream, cameraOn,
+    state, media, peerId, peerNickname, remoteStream, localStream,
+    localVideoOn, remoteVideoOn, cameraStarting, answering,
     connectionStatus, reconnectSeconds,
     startCall, answerCall, rejectCall, hangup,
     setMuted, setCameraEnabled, switchCamera, startListening,

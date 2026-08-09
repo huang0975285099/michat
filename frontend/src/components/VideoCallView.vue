@@ -10,7 +10,13 @@
 
         <!-- Placeholder when calling/waiting for the other party’s screen -->
         <div v-if="showPlaceholder" class="placeholder column flex-center">
-            <q-spinner-dots color="white" size="40px" />
+            <q-icon
+                v-if="callStore.remoteVideoOn === false"
+                name="videocam_off"
+                color="white"
+                size="40px"
+            />
+            <q-spinner-dots v-else color="white" size="40px" />
             <div class="text-white q-mt-md">{{ statusText }}</div>
         </div>
 
@@ -23,13 +29,19 @@
         </div>
 
         <!-- Local screen (small window) -->
-        <video
-            ref="localEl"
-            class="local-video"
-            autoplay
-            playsinline
-            muted
-        />
+        <div class="local-preview">
+            <video
+                ref="localEl"
+                class="local-video"
+                autoplay
+                playsinline
+                muted
+            />
+            <div v-if="!callStore.localVideoOn" class="local-camera-off column flex-center">
+                <q-icon name="videocam_off" color="white" size="24px" />
+                <span>Voice only</span>
+            </div>
+        </div>
 
         <!-- bottom control bar -->
         <div class="controls">
@@ -44,15 +56,18 @@
             </q-btn>
             <q-btn
                 round size="lg"
-                :icon="callStore.cameraOn ? 'videocam' : 'videocam_off'"
-                :color="callStore.cameraOn ? 'white' : 'grey-8'"
-                :text-color="callStore.cameraOn ? 'black' : 'white'"
+                :icon="callStore.localVideoOn ? 'videocam' : 'videocam_off'"
+                :color="callStore.localVideoOn ? 'white' : 'grey-8'"
+                :text-color="callStore.localVideoOn ? 'black' : 'white'"
+                :loading="callStore.cameraStarting"
+                :disable="callStore.cameraStarting"
                 @click="toggleCamera"
             >
-                <q-tooltip>{{ callStore.cameraOn ? 'Turn off camera' : 'Turn on camera' }}</q-tooltip>
+                <q-tooltip>{{ callStore.localVideoOn ? 'Turn off camera' : 'Turn on camera' }}</q-tooltip>
             </q-btn>
             <q-btn
                 round size="lg" icon="flip_camera_ios" color="white" text-color="black"
+                :disable="!callStore.localVideoOn || callStore.cameraStarting"
                 @click="callStore.switchCamera()"
             >
                 <q-tooltip>Switch camera</q-tooltip>
@@ -70,6 +85,7 @@
 <script setup>
 import { ref, computed, watch, onUnmounted, nextTick } from "vue";
 import { useCallStore } from "src/stores/call";
+import { videoCallStatusText } from "./video-call-status.mjs";
 
 const callStore = useCallStore();
 const remoteEl = ref(null);
@@ -85,19 +101,19 @@ const visible = computed(
 );
 
 const peerName = computed(() => callStore.peerNickname || callStore.peerId);
-const showPlaceholder = computed(
-    () => callStore.state === "calling" ||
-        callStore.connectionStatus !== "connected" ||
-        !callStore.remoteStream
-);
-const statusText = computed(() => {
-    if (callStore.connectionStatus === "reconnecting") {
-        return `Network outage，Recovering（${callStore.reconnectSeconds}seconds）`;
-    }
-    if (callStore.state === "calling") return `Calling ${peerName.value}...`;
-    if (callStore.connectionStatus === "connecting") return "Establishing secure connection...";
-    return "Waiting for the other party screen...";
+const hasRemoteVideoTrack = computed(() => {
+    return callStore.remoteStream?.getVideoTracks()
+        .some(track => track.readyState !== "ended") === true;
 });
+const statusText = computed(() => videoCallStatusText({
+    state: callStore.state,
+    connectionStatus: callStore.connectionStatus,
+    reconnectSeconds: callStore.reconnectSeconds,
+    peerName: peerName.value,
+    remoteVideoOn: callStore.remoteVideoOn,
+    hasRemoteVideoTrack: hasRemoteVideoTrack.value,
+}));
+const showPlaceholder = computed(() => statusText.value !== "");
 
 watch(
     () => callStore.remoteStream,
@@ -147,8 +163,8 @@ function toggleMute() {
     callStore.setMuted(muted.value);
 }
 
-function toggleCamera() {
-    callStore.setCameraEnabled(!callStore.cameraOn);
+async function toggleCamera() {
+    await callStore.setCameraEnabled(!callStore.localVideoOn);
 }
 
 function formatDuration(secs) {
@@ -188,7 +204,7 @@ function formatDuration(secs) {
     background: linear-gradient(to bottom, rgba(0, 0, 0, 0.5), transparent);
     text-align: center;
 }
-.local-video {
+.local-preview {
     position: absolute;
     top: max(70px, calc(env(safe-area-inset-top) + 54px));
     right: 12px;
@@ -198,7 +214,21 @@ function formatDuration(secs) {
     border-radius: 8px;
     border: 1px solid rgba(255, 255, 255, 0.4);
     background: #222;
+    overflow: hidden;
+}
+.local-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
     transform: scaleX(-1); /* Local preview image, intuitive */
+}
+.local-camera-off {
+    position: absolute;
+    inset: 0;
+    gap: 4px;
+    background: rgba(0, 0, 0, 0.72);
+    color: white;
+    font-size: 12px;
 }
 .controls {
     position: absolute;
