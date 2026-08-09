@@ -21,10 +21,11 @@ export function calculateMapNodePositions(width, height) {
   })
 }
 
-export default class MapScene extends Scene {
-  constructor() {
-    super({ key: 'MapScene' })
-  }
+export function createMapScene(SceneBase) {
+  return class MapScene extends SceneBase {
+    constructor() {
+      super({ key: 'MapScene' })
+    }
 
   create() {
     this.save = loadSave(window.localStorage)
@@ -107,10 +108,13 @@ export default class MapScene extends Scene {
     this.renderMap()
   }
 
-  shutdown() {
-    this.scale.off('resize', this.handleResize)
-    this.input.off('gameobjectup', this.handleNodeUp)
-    this.mapRoot?.destroy(true)
-    this.mapRoot = null
+    shutdown() {
+      this.scale.off('resize', this.handleResize)
+      this.input.off('gameobjectup', this.handleNodeUp)
+      this.mapRoot?.destroy(true)
+      this.mapRoot = null
+    }
   }
 }
+
+export default createMapScene(Scene)

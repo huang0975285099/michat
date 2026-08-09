@@ -1,9 +1,10 @@
 import Scene from 'phaser/src/scene/Scene.js'
 
-export default class TransitionScene extends Scene {
-  constructor() {
-    super({ key: 'TransitionScene' })
-  }
+export function createTransitionScene(SceneBase) {
+  return class TransitionScene extends SceneBase {
+    constructor() {
+      super({ key: 'TransitionScene' })
+    }
 
   create() {
     this.handleResize = this.handleResize.bind(this)
@@ -58,12 +59,15 @@ export default class TransitionScene extends Scene {
     })
   }
 
-  shutdown() {
-    this.scale.off('resize', this.handleResize)
-    this.root?.destroy(true)
-    this.root = null
-    this.glow = null
-    this.title = null
-    this.counter = null
+    shutdown() {
+      this.scale.off('resize', this.handleResize)
+      this.root?.destroy(true)
+      this.root = null
+      this.glow = null
+      this.title = null
+      this.counter = null
+    }
   }
 }
+
+export default createTransitionScene(Scene)

@@ -46,10 +46,11 @@ export function isPlayableSwap(board, from, to) {
   return trySwap(board, from, to).accepted
 }
 
-export default class LevelScene extends Scene {
-  constructor() {
-    super({ key: 'LevelScene' })
-  }
+export function createLevelScene(SceneBase) {
+  return class LevelScene extends SceneBase {
+    constructor() {
+      super({ key: 'LevelScene' })
+    }
 
   create({ levelId = 1 } = {}) {
     this.cameras.main.setBackgroundColor('#ffeaf7')
@@ -299,14 +300,17 @@ export default class LevelScene extends Scene {
     else this.boardView?.setLayout(size.width, size.height)
   }
 
-  shutdown() {
-    this.scale.off('resize', this.handleResize)
-    this.events.off('level-finished', this.handleLevelFinished)
-    if (this.scene.isActive('OverlayScene')) this.scene.stop('OverlayScene')
-    if (this.scene.isActive('TransitionScene')) this.scene.stop('TransitionScene')
-    this.boardView?.destroy()
-    this.hudView?.destroy()
-    this.boardView = null
-    this.hudView = null
+    shutdown() {
+      this.scale.off('resize', this.handleResize)
+      this.events.off('level-finished', this.handleLevelFinished)
+      if (this.scene.isActive('OverlayScene')) this.scene.stop('OverlayScene')
+      if (this.scene.isActive('TransitionScene')) this.scene.stop('TransitionScene')
+      this.boardView?.destroy()
+      this.hudView?.destroy()
+      this.boardView = null
+      this.hudView = null
+    }
   }
 }
+
+export default createLevelScene(Scene)

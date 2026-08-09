@@ -1,7 +1,24 @@
-const svgData = (body) =>
-  `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">${body}</svg>`
-  )}`
+const BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+
+function encodeBase64(value) {
+  let encoded = ''
+  for (let index = 0; index < value.length; index += 3) {
+    const first = value.charCodeAt(index)
+    const second = value.charCodeAt(index + 1)
+    const third = value.charCodeAt(index + 2)
+    const triplet = (first << 16) | ((Number.isNaN(second) ? 0 : second) << 8) | (Number.isNaN(third) ? 0 : third)
+    encoded += BASE64[(triplet >> 18) & 63]
+    encoded += BASE64[(triplet >> 12) & 63]
+    encoded += Number.isNaN(second) ? '=' : BASE64[(triplet >> 6) & 63]
+    encoded += Number.isNaN(third) ? '=' : BASE64[triplet & 63]
+  }
+  return encoded
+}
+
+const svgData = (body) => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">${body}</svg>`
+  return `data:image/svg+xml;base64,${encodeBase64(svg)}`
+}
 
 export const candyTextures = {
   berry: svgData(`

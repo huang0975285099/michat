@@ -1,10 +1,11 @@
 import Scene from 'phaser/src/scene/Scene.js'
 import OverlayView from '../ui/OverlayView.js'
 
-export default class OverlayScene extends Scene {
-  constructor() {
-    super({ key: 'OverlayScene' })
-  }
+export function createOverlayScene(SceneBase) {
+  return class OverlayScene extends SceneBase {
+    constructor() {
+      super({ key: 'OverlayScene' })
+    }
 
   create() {
     this.handleResize = this.handleResize.bind(this)
@@ -40,8 +41,11 @@ export default class OverlayScene extends Scene {
     if (this.current) this.open(this.current)
   }
 
-  shutdown() {
-    this.scale.off('resize', this.handleResize)
-    this.close()
+    shutdown() {
+      this.scale.off('resize', this.handleResize)
+      this.close()
+    }
   }
 }
+
+export default createOverlayScene(Scene)

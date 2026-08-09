@@ -9,19 +9,35 @@ const TEXTURE_KEYS = {
   frosting: 'obstacle-frosting',
 }
 
-export default class BootScene extends Scene {
-  constructor() {
-    super({ key: 'BootScene' })
-  }
+function loadSvgImage(data) {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('Unable to rasterize Sugar Pop SVG texture'))
+    image.src = data
+  })
+}
 
-  preload() {
-    for (const [key, data] of Object.entries(candyTextures)) {
-      const textureKey = TEXTURE_KEYS[key] || `candy-${key}`
-      if (!this.textures.exists(textureKey)) this.load.image(textureKey, data)
+export function createBootScene(SceneBase) {
+  return class BootScene extends SceneBase {
+    constructor() {
+      super({ key: 'BootScene' })
+    }
+
+    async registerTextures() {
+      await Promise.all(Object.entries(candyTextures).map(async ([key, data]) => {
+        const textureKey = TEXTURE_KEYS[key] || `candy-${key}`
+        if (this.textures.exists(textureKey)) return
+        const image = await loadSvgImage(data)
+        this.textures.createCanvas(textureKey, 100, 100).draw(0, 0, image)
+      }))
+    }
+
+    async create() {
+      await this.registerTextures()
+      this.scene.start('MapScene')
     }
   }
-
-  create() {
-    this.scene.start('MapScene')
-  }
 }
+
+export default createBootScene(Scene)
