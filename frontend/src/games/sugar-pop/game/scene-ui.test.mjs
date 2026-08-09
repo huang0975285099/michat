@@ -37,6 +37,7 @@ test('HUD layout keeps targets, moves, and all three boosters in view on mobile'
   assert.ok(layout.moves.x < 390)
   assert.equal(layout.boosters.length, 3)
   assert.ok(layout.boosters.every(({ x, y }) => x >= 36 && x <= 354 && y <= 816))
+  assert.ok(layout.targets.x + layout.targets.width <= layout.pause.x - layout.pause.width / 2)
 })
 
 test('swipe selects one orthogonally adjacent cell and rejects short drags', () => {
@@ -238,32 +239,58 @@ test('multi-wave resolution remaps survivors before the next clear without a ful
   assert.equal(fullRedraws, 0)
 })
 
+test('a booster fallback wave redraws once instead of orphaning survivor displays', async () => {
+  const board = createBoard({ seed: 9 })
+  let redraws = 0
+  let movements = 0
+  const view = {
+    cells: new Map(),
+    scene: { tweens: { add() { throw new Error('redraw fallback must not tween stale displays') } } },
+    animateWaveMovement: async () => { movements += 1 },
+    reconcileBoard() {},
+    render(value) { redraws += 1; assert.equal(value, board) },
+  }
+
+  await BoardView.prototype.animateResolution.call(view, [{ removed: [], redraw: true, board }], board)
+
+  assert.equal(redraws, 1)
+  assert.equal(movements, 0)
+})
+
 test('accepted turn keeps input locked through swap and resolution promises', async () => {
   const board = createBoard({ seed: 7 })
   const move = findLegalMoves(board)[0]
   const swapGate = deferred()
   const resolutionGate = deferred()
   const enabled = []
+  const hudDisabled = []
   let resolutionStarted = false
   const scene = {
     resolving: false,
+    overlayOpen: false,
+    hammerSelecting: false,
+    extraMovesUsed: false,
     selected: null,
     pendingResize: null,
+    level: { id: 1 },
+    save: { boosters: { hammer: 1, shuffle: 1, extraMoves: 1 } },
     state: { board, movesLeft: 20, target: { candies: { berry: 99 } }, score: 0, status: 'playing' },
     rng: (() => { let value = 0; return () => (value = (value + 0.173) % 1) })(),
+    hudView: { update: ({ disabled }) => hudDisabled.push(disabled) },
     boardView: {
       setSelected() {},
       setInputEnabled: (value) => enabled.push(value),
       animateSwap: () => swapGate.promise,
       animateResolution: () => { resolutionStarted = true; return resolutionGate.promise },
     },
-    updateHud() {},
+    updateHud: LevelScene.prototype.updateHud,
     layoutViews() {},
   }
 
   const pending = LevelScene.prototype.attemptSwap.call(scene, move.from, move.to)
   assert.equal(scene.resolving, true)
   assert.deepEqual(enabled, [false])
+  assert.deepEqual(hudDisabled, [true])
 
   swapGate.resolve()
   await new Promise((resolve) => setTimeout(resolve, 0))
@@ -274,6 +301,7 @@ test('accepted turn keeps input locked through swap and resolution promises', as
   await pending
   assert.equal(scene.resolving, false)
   assert.deepEqual(enabled, [false, true])
+  assert.equal(hudDisabled.at(-1), false)
 })
 
 test('rejected turn keeps input locked until rebound completes', async () => {
@@ -298,6 +326,7 @@ test('rejected turn keeps input locked until rebound completes', async () => {
       setInputEnabled: (value) => enabled.push(value),
       animateRejectedSwap: () => reboundGate.promise,
     },
+    updateHud() {},
     layoutViews() {},
   }
 
@@ -308,6 +337,61 @@ test('rejected turn keeps input locked until rebound completes', async () => {
   await pending
   assert.equal(scene.resolving, false)
   assert.deepEqual(enabled, [false, true])
+})
+
+test('a swipe in hammer mode applies the hammer to its starting cell instead of swapping', async () => {
+  const board = createBoard({ seed: 7 })
+  const move = findLegalMoves(board)[0]
+  let boosterCall
+  const scene = {
+    resolving: false,
+    overlayOpen: false,
+    hammerSelecting: true,
+    selected: null,
+    pendingResize: null,
+    state: { board, movesLeft: 20, target: { candies: { berry: 99 } }, score: 0, status: 'playing' },
+    rng: () => 0.25,
+    boardView: {
+      setSelected() {},
+      setInputEnabled() {},
+      animateSwap: async () => {},
+      animateResolution: async () => {},
+    },
+    updateHud() {},
+    events: { emit() {} },
+    useBooster: async (kind, cell) => { boosterCall = { kind, cell }; return true },
+  }
+
+  await LevelScene.prototype.attemptSwap.call(scene, move.from, move.to)
+
+  assert.deepEqual(boosterCall, { kind: 'hammer', cell: move.from })
+})
+
+test('LevelScene persists a booster only after the pure action succeeds', async () => {
+  const board = createBoard({ seed: 41 })
+  board[0][0] = null
+  let stored
+  const scene = {
+    resolving: false,
+    selected: null,
+    hammerSelecting: true,
+    extraMovesUsed: false,
+    storage: { setItem: (_key, value) => { stored = value } },
+    save: { version: 1, unlockedLevel: 1, results: {}, boosters: { hammer: 1, shuffle: 0, extraMoves: 0 } },
+    state: { board, movesLeft: 5, target: { candies: { berry: 99 } }, score: 0, status: 'playing' },
+    rng: () => 0.2,
+    boardView: { setSelected() {}, setInputEnabled() {}, animateResolution: async () => {} },
+    updateHud() {},
+    events: { emit() {} },
+  }
+
+  const rejected = await LevelScene.prototype.useBooster.call(scene, 'hammer', { row: 0, col: 0 })
+  const accepted = await LevelScene.prototype.useBooster.call(scene, 'hammer', { row: 0, col: 1 })
+
+  assert.equal(rejected, false)
+  assert.equal(accepted, true)
+  assert.equal(scene.save.boosters.hammer, 0)
+  assert.equal(JSON.parse(stored).boosters.hammer, 0)
 })
 
 test('map selection permits unlocked levels and rejects locked levels', () => {

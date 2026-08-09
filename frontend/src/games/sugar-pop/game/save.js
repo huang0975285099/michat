@@ -52,12 +52,18 @@ export function createDefaultSave() {
 }
 
 export function loadSave(storage) {
+  return loadSaveState(storage).save
+}
+
+export function loadSaveState(storage) {
   try {
     const serialized = storage?.getItem?.(SAVE_KEY)
-    if (serialized == null) return createDefaultSave()
-    return normalizeSave(JSON.parse(serialized))
+    if (serialized == null) return { save: createDefaultSave(), recovered: false }
+    const parsed = JSON.parse(serialized)
+    if (!isPlainObject(parsed)) return { save: createDefaultSave(), recovered: true }
+    return { save: normalizeSave(parsed), recovered: false }
   } catch {
-    return createDefaultSave()
+    return { save: createDefaultSave(), recovered: true }
   }
 }
 
@@ -84,4 +90,10 @@ export function recordLevelResult(save, { levelId, score, stars }) {
     results: { ...normalized.results, [safeLevelId]: { stars: nextStars, highScore: nextScore } },
     boosters,
   }
+}
+
+export function boosterRewardDelta(previousSave, nextSave) {
+  const previous = normalizeSave(previousSave).boosters
+  const next = normalizeSave(nextSave).boosters
+  return Object.fromEntries(BOOSTER_NAMES.map((name) => [name, Math.max(0, next[name] - previous[name])]))
 }

@@ -301,6 +301,10 @@ export default class BoardView {
 
   async animateResolution(waves, settledBoard) {
     for (const wave of waves) {
+      if (wave.redraw) {
+        this.render(wave.board)
+        continue
+      }
       const removed = wave.removed.map((position) => this.cells.get(coordinateKey(position))).filter(Boolean)
       if (removed.length > 0) {
         await new Promise((resolve) => {

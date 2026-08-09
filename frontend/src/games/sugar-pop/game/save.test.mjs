@@ -4,13 +4,23 @@ import {
   SAVE_KEY,
   createDefaultSave,
   loadSave,
+  loadSaveState,
   recordLevelResult,
   saveProgress,
+  boosterRewardDelta,
 } from './save.js'
 
 test('invalid persisted JSON returns the default save', () => {
   const storage = { getItem: () => '{bad json' }
   assert.deepEqual(loadSave(storage), createDefaultSave())
+})
+
+test('invalid persisted JSON reports recovery while a missing save does not', () => {
+  const corrupt = loadSaveState({ getItem: () => '{bad json' })
+  const missing = loadSaveState({ getItem: () => null })
+
+  assert.deepEqual(corrupt, { save: createDefaultSave(), recovered: true })
+  assert.deepEqual(missing, { save: createDefaultSave(), recovered: false })
 })
 
 test('save progress round-trips the versioned normalized shape', () => {
@@ -79,4 +89,15 @@ test('increasing a recorded star total awards each newly earned booster once', (
 
   assert.deepEqual(once.boosters, { hammer: 1, shuffle: 0, extraMoves: 0 })
   assert.deepEqual(improved.boosters, { hammer: 1, shuffle: 1, extraMoves: 1 })
+})
+
+test('a higher star result unlocks the next level once and reports only new rewards', () => {
+  const initial = createDefaultSave()
+  const next = recordLevelResult(initial, { levelId: 1, score: 1500, stars: 3 })
+  const repeated = recordLevelResult(next, { levelId: 1, score: 1500, stars: 3 })
+
+  assert.equal(next.unlockedLevel, 2)
+  assert.equal(next.boosters.hammer, 1)
+  assert.deepEqual(boosterRewardDelta(initial, next), { hammer: 1, shuffle: 1, extraMoves: 1 })
+  assert.deepEqual(boosterRewardDelta(next, repeated), { hammer: 0, shuffle: 0, extraMoves: 0 })
 })

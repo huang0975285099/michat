@@ -1,8 +1,9 @@
 import Scene from 'phaser/src/scene/Scene.js'
 import { createBoard, isAdjacent, trySwap } from '../game/board.js'
-import { getLevel } from '../game/levels.js'
+import { useBooster as applyBooster } from '../game/boosters.js'
+import { getLevel, LEVELS } from '../game/levels.js'
 import { resolveTurn } from '../game/resolve.js'
-import { loadSave } from '../game/save.js'
+import { boosterRewardDelta, loadSaveState, recordLevelResult, saveProgress } from '../game/save.js'
 import BoardView from '../ui/BoardView.js'
 import HudView from '../ui/HudView.js'
 
@@ -28,6 +29,14 @@ function levelBoard(level) {
   return board
 }
 
+export function createLevelResult(state, level) {
+  const movesLeft = Math.max(0, Math.trunc(state.movesLeft || 0))
+  const bonusScore = movesLeft * 50
+  const score = Math.max(0, Math.trunc(state.score || 0)) + bonusScore
+  const stars = Math.max(1, Math.min(3, (level.starScores || []).filter((threshold) => score >= threshold).length))
+  return { levelId: level.id, score, stars, movesLeft, bonusScore }
+}
+
 export function isPlayableSwap(board, from, to) {
   if (!isAdjacent(from, to)) return false
   const first = board[from.row]?.[from.col]
@@ -44,9 +53,13 @@ export default class LevelScene extends Scene {
 
   create({ levelId = 1 } = {}) {
     this.cameras.main.setBackgroundColor('#ffeaf7')
+    this.storage = window.localStorage
     this.handleResize = this.handleResize.bind(this)
+    this.handleLevelFinished = this.handleLevelFinished.bind(this)
     this.scale.on('resize', this.handleResize)
+    this.events.on('level-finished', this.handleLevelFinished)
     this.events.once('shutdown', this.shutdown, this)
+    if (!this.scene.isActive('OverlayScene')) this.scene.launch('OverlayScene')
     this.startLevel(levelId)
   }
 
@@ -57,7 +70,8 @@ export default class LevelScene extends Scene {
       return
     }
     this.level = level
-    this.save = loadSave(window.localStorage)
+    const loaded = loadSaveState(this.storage)
+    this.save = loaded.save
     this.rng = seededRandom(level.seed ^ 0x5A17)
     this.state = {
       board: levelBoard(level),
@@ -67,6 +81,10 @@ export default class LevelScene extends Scene {
       status: 'playing',
     }
     this.resolving = false
+    this.overlayOpen = false
+    this.hammerSelecting = false
+    this.extraMovesUsed = false
+    this.finishingWin = false
     this.selected = null
     this.pendingResize = null
     this.boardView?.destroy()
@@ -75,14 +93,22 @@ export default class LevelScene extends Scene {
       onSelect: (position) => this.selectCell(position),
       onSwap: (from, to) => this.attemptSwap(from, to),
     })
-    this.hudView = new HudView(this)
+    this.hudView = new HudView(this, {
+      onBooster: (kind) => { void this.useBooster(kind) },
+      onPause: () => this.openOverlay('pause'),
+    })
     this.layoutViews()
     this.boardView.render(this.state.board)
     this.updateHud()
+    if (loaded.recovered) this.openOverlay('recover-save')
   }
 
   selectCell(position) {
-    if (this.resolving || this.state.status !== 'playing') return
+    if (this.resolving || this.overlayOpen || this.state.status !== 'playing') return
+    if (this.hammerSelecting) {
+      void this.useBooster('hammer', position)
+      return
+    }
     if (!this.selected) {
       this.selected = { ...position }
       this.boardView.setSelected(this.selected)
@@ -105,8 +131,14 @@ export default class LevelScene extends Scene {
   }
 
   async attemptSwap(from, to) {
-    if (this.resolving || this.state.status !== 'playing' || !isAdjacent(from, to)) return
+    if (this.resolving || this.overlayOpen || this.state.status !== 'playing') return
+    if (this.hammerSelecting) {
+      await this.useBooster('hammer', from)
+      return
+    }
+    if (!isAdjacent(from, to)) return
     this.resolving = true
+    this.updateHud()
     this.selected = null
     this.boardView.setSelected(null)
     this.boardView.setInputEnabled(false)
@@ -119,18 +151,140 @@ export default class LevelScene extends Scene {
       this.state = resolveTurn({ ...this.state, swap: { from, to }, rng: this.rng })
       await this.boardView.animateResolution(this.state.waves, this.state.board)
       this.updateHud()
+      if (this.state.status !== 'playing') this.events.emit('level-finished', { status: this.state.status })
     } finally {
       this.resolving = false
+      this.updateHud()
       if (this.pendingResize) {
         this.layoutViews(this.pendingResize.width, this.pendingResize.height)
         this.pendingResize = null
       }
-      if (this.state.status === 'playing') this.boardView.setInputEnabled(true)
+      if (this.state.status === 'playing' && !this.overlayOpen) this.boardView.setInputEnabled(true)
     }
   }
 
+  async useBooster(kind, cell) {
+    if (kind === 'hammer' && !cell) {
+      if (this.resolving || this.overlayOpen || this.state.status !== 'playing' || this.save.boosters.hammer <= 0) return false
+      this.hammerSelecting = !this.hammerSelecting
+      this.selected = null
+      this.boardView.setSelected(null)
+      this.updateHud()
+      return false
+    }
+    const recoveringLoss = kind === 'extraMoves' && this.state.status === 'lost'
+    if (this.resolving || (this.overlayOpen && !recoveringLoss)) return false
+    this.resolving = true
+    this.updateHud()
+    this.boardView.setInputEnabled(false)
+    try {
+      const result = applyBooster({
+        ...this.state,
+        boosters: this.save.boosters,
+        extraMovesUsed: this.extraMovesUsed,
+      }, kind, cell, this.rng)
+      if (!result.success) return false
+      const { success: _success, wave, boosters, extraMovesUsed, ...nextState } = result
+      this.state = nextState
+      this.extraMovesUsed = extraMovesUsed
+      this.hammerSelecting = false
+      this.save = saveProgress(this.storage, { ...this.save, boosters })
+      this.selected = null
+      this.boardView.setSelected(null)
+      if (wave) await this.boardView.animateResolution([wave], this.state.board)
+      else if (kind === 'shuffle') this.boardView.render(this.state.board)
+      this.updateHud()
+      if (this.state.status === 'won') this.events.emit('level-finished', { status: 'won' })
+      return true
+    } finally {
+      this.resolving = false
+      this.updateHud()
+      if (this.state.status === 'playing' && !this.overlayOpen) this.boardView.setInputEnabled(true)
+    }
+  }
+
+  async handleLevelFinished({ status }) {
+    if (status === 'lost') {
+      this.openOverlay('lose', {
+        canUseExtraMoves: this.save.boosters.extraMoves > 0 && !this.extraMovesUsed,
+      })
+      return
+    }
+    if (status !== 'won' || this.finishingWin) return
+    this.finishingWin = true
+    this.overlayOpen = true
+    this.boardView.setInputEnabled(false)
+    this.updateHud()
+    const result = createLevelResult(this.state, this.level)
+    const previousSave = this.save
+    this.save = recordLevelResult(this.save, result)
+    const rewards = boosterRewardDelta(previousSave, this.save)
+    this.save = saveProgress(this.storage, this.save)
+    this.state.score = result.score
+    this.updateHud()
+    if (!this.scene.isActive('TransitionScene')) this.scene.launch('TransitionScene')
+    await this.scene.get('TransitionScene').playBonusMoves(result)
+    this.scene.stop('TransitionScene')
+    this.openOverlay('win', {
+      ...result,
+      rewards,
+      hasNextLevel: this.level.id < LEVELS.length,
+    })
+  }
+
+  openOverlay(kind, payload = {}) {
+    if (this.resolving && kind === 'pause') return false
+    this.overlayOpen = true
+    this.boardView?.setInputEnabled(false)
+    this.updateHud()
+    this.scene.get('OverlayScene').open({
+      kind,
+      payload,
+      onAction: (action) => this.handleOverlayAction(action),
+    })
+    return true
+  }
+
+  closeOverlay({ stop = false } = {}) {
+    this.scene.get('OverlayScene')?.close?.()
+    if (stop) this.scene.stop('OverlayScene')
+    this.overlayOpen = false
+    this.updateHud()
+    if (!this.resolving && this.state.status === 'playing') this.boardView?.setInputEnabled(true)
+  }
+
+  async handleOverlayAction(action) {
+    if (action === 'resume') {
+      this.closeOverlay()
+      return false
+    }
+    if (action === 'recover') {
+      this.save = saveProgress(this.storage, this.save)
+      this.closeOverlay()
+      return false
+    }
+    if (action === 'extraMoves') {
+      const used = await this.useBooster('extraMoves')
+      if (used) this.closeOverlay()
+      return false
+    }
+    const levelId = this.level.id
+    this.closeOverlay({ stop: true })
+    if (action === 'retry') this.scene.restart({ levelId })
+    else if (action === 'next' && levelId < LEVELS.length) this.scene.restart({ levelId: levelId + 1 })
+    else this.scene.start('MapScene')
+    return false
+  }
+
   updateHud() {
-    this.hudView.update({ ...this.state, levelId: this.level.id, boosters: this.save.boosters })
+    this.hudView.update({
+      ...this.state,
+      levelId: this.level.id,
+      boosters: this.save.boosters,
+      extraMovesUsed: this.extraMovesUsed,
+      hammerSelecting: this.hammerSelecting,
+      disabled: this.resolving || this.overlayOpen || this.state.status !== 'playing',
+    })
   }
 
   layoutViews(width = this.scale.gameSize.width, height = this.scale.gameSize.height) {
@@ -147,6 +301,9 @@ export default class LevelScene extends Scene {
 
   shutdown() {
     this.scale.off('resize', this.handleResize)
+    this.events.off('level-finished', this.handleLevelFinished)
+    if (this.scene.isActive('OverlayScene')) this.scene.stop('OverlayScene')
+    if (this.scene.isActive('TransitionScene')) this.scene.stop('TransitionScene')
     this.boardView?.destroy()
     this.hudView?.destroy()
     this.boardView = null
