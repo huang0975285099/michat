@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createLevelResult } from '../scenes/LevelScene.js'
+import TransitionScene from '../scenes/TransitionScene.js'
 import { createOverlayModel } from '../ui/OverlayView.js'
 import { getHudControls } from '../ui/HudView.js'
 
@@ -52,4 +53,51 @@ test('a completed level earns at least one star below its first score threshold'
   )
 
   assert.equal(result.stars, 1)
+})
+
+test('an active bonus transition re-centers its Phaser objects after resize', () => {
+  const positions = {}
+  const scene = {
+    root: {},
+    glow: {
+      setPosition: (x, y) => { positions.glow = [x, y]; return scene.glow },
+      setDisplaySize: (width, height) => { positions.glowSize = [width, height]; return scene.glow },
+    },
+    title: {
+      setPosition: (x, y) => { positions.title = [x, y]; return scene.title },
+      setFontSize: (size) => { positions.titleFontSize = size; return scene.title },
+    },
+    counter: { setPosition: (x, y) => { positions.counter = [x, y]; return scene.counter } },
+  }
+
+  TransitionScene.prototype.handleResize?.call(scene, { width: 390, height: 844 })
+
+  assert.deepEqual(positions, {
+    glow: [195, 422],
+    glowSize: [390, 844],
+    title: [195, 388],
+    titleFontSize: 39,
+    counter: [195, 456],
+  })
+})
+
+test('transition scene unregisters its resize listener on shutdown', () => {
+  const events = []
+  const scene = {
+    scale: {
+      on: (name, handler, context) => events.push(['on', name, handler, context]),
+      off: (name, handler, context) => events.push(['off', name, handler, context]),
+    },
+    events: { once: (name, handler, context) => events.push(['once', name, handler, context]) },
+    handleResize() {},
+  }
+
+  TransitionScene.prototype.create?.call(scene)
+  TransitionScene.prototype.shutdown?.call(scene)
+
+  assert.deepEqual(events.map(([operation, name]) => [operation, name]), [
+    ['on', 'resize'],
+    ['once', 'shutdown'],
+    ['off', 'resize'],
+  ])
 })
