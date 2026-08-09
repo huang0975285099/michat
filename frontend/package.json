@@ -16,6 +16,7 @@
     "lint": "eslint --ext .js,.vue src/",
     "test:call": "node --test src/stores/call.test.mjs src/stores/call-media.test.mjs src/services/websocket-call-offer.test.mjs src/components/video-call-status.test.mjs",
     "test:ironfist": "node --test src/games/ironfist/game/*.test.mjs",
+    "test:sugar-pop": "node --test src/games/sugar-pop/game/*.test.mjs",
     "test:version": "node --test src/services/version-compare.test.mjs"
   },
   "dependencies": {
