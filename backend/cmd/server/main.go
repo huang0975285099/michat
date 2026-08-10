@@ -204,7 +204,8 @@ func main() {
 		return c.ClientIP()
 	})
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(middleware.PrivacyLogger(log.Writer()), middleware.PrivacyRecovery(log.Writer()))
 	// The backend is only exposed after nginx backend, trusting the private network proxy so that ClientIP() can get the real client IP in XFF.
 	if err := r.SetTrustedProxies([]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/32"}); err != nil {
 		log.Fatalf("set trusted proxies: %v", err)
