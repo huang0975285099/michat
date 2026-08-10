@@ -445,6 +445,16 @@ export async function decryptMessage(payload) {
   const record = await loadKeyPair()
   if (!record) throw new Error('no private key')
 
+  return decryptMessageWithPrivateKey(payload, record.privateKey)
+}
+
+/**
+ * Decrypt an E2EE text payload with an explicitly supplied private key.
+ * The regular application path uses decryptMessage; this form keeps the
+ * cryptographic primitive independently testable without IndexedDB.
+ */
+export async function decryptMessageWithPrivateKey(payload, privateKey) {
+
   // 1. Import the sender’s temporary public key
   const ephPubKey = await crypto.subtle.importKey(
     'spki',
@@ -457,7 +467,7 @@ export async function decryptMessage(payload) {
   // 2. ECDH derives shared key
   const sharedKey = await crypto.subtle.deriveKey(
     { name: 'ECDH', public: ephPubKey },
-    record.privateKey,
+    privateKey,
     { name: 'AES-GCM', length: 256 },
     false,
     ['decrypt']

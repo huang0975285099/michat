@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { encryptMessage, decryptMessage, encryptFile, decryptFile, bufToB64, b64ToBuf } from 'src/services/crypto'
 import { send, on, off, confirmPendingReads, getServerNow } from 'src/services/websocket'
 import { notifyNewMessage } from 'src/services/notify'
+import { buildEncryptedFileOfferPayload, openFileOfferMetadata, sealFileMetadata, validateFileMetadata } from 'src/services/file-metadata.mjs'
 import { useIdentityStore } from 'src/stores/identity'
 
 // ──Safety constants────────────────────────────────────────────
@@ -18,17 +19,7 @@ const BURN_AFTER_READ_DELAY = 2 * 60 * 60 * 1000  //2 hours
 // ── File transfer constants ────────────────────────────────────────
 
 const CHUNK_SIZE = 128 * 1024  //128KB binary chunks
-const MAX_FILE_SIZE = 10 * 1024 * 1024  // 10MB
-const MAX_FILENAME_BYTES = 255
 const AES_GCM_TAG_SIZE = 16
-// Browsers and operating systems report MIME inconsistently, so file eligibility is based
-// only on the final filename extension. MIME is retained as display/download metadata.
-const ALLOWED_FILE_EXTENSIONS = new Set([
-  'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg',
-  'mp4', 'webm', 'mov',
-  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'pdf',
-  'zip', 'rar', '7z', 'tar', 'gz', 'apk'
-])
 
 function expectedFileChunks(filesize) {
   return Math.ceil((filesize + AES_GCM_TAG_SIZE) / CHUNK_SIZE)
@@ -36,17 +27,6 @@ function expectedFileChunks(filesize) {
 
 function expectedFileChunkSize(filesize, chunkIndex) {
   return Math.min(CHUNK_SIZE, filesize + AES_GCM_TAG_SIZE - chunkIndex * CHUNK_SIZE)
-}
-
-function validateFileMetadata(filename, _filetype, filesize) {
-  if (typeof filename !== 'string' || !filename || new TextEncoder().encode(filename).length > MAX_FILENAME_BYTES) {
-    throw new Error('File name is invalid or too long')
-  }
-  if (!Number.isInteger(filesize) || filesize <= 0) throw new Error('Cannot send empty files')
-  if (filesize > MAX_FILE_SIZE) throw new Error('File exceeds 10MB Limit')
-
-  const ext = filename.split('.').pop()?.toLowerCase() ?? ''
-  if (!ALLOWED_FILE_EXTENSIONS.has(ext)) throw new Error('Unsupported file format')
 }
 
 // ── Message encryption key management ───────────────────────────────────────────
@@ -1036,6 +1016,7 @@ export const useChatStore = defineStore('chat', () => {
       // Read and encrypt files
       const fileBuffer = await file.arrayBuffer()
       const { ephemeralPubKey, iv, ciphertext } = await encryptFile(fileBuffer, recipientPubKey)
+      const sealedMetadata = await sealFileMetadata({ filename: file.name, filetype: file.type }, recipientPubKey)
 
       // First create a local record of the sender to be confirmed and save the file body. In this way, the file_done on the receiving end is even on the sending side.
       // After a momentary disconnection, the file can be reposted offline and the file can be restored to successfully sent based on msg_id by restarting the application.
@@ -1064,19 +1045,17 @@ export const useChatStore = defineStore('chat', () => {
       fileTransfers.value[transferId].totalChunks = totalChunks
 
       // Send offer
-      const ok = send('file_offer', {
+      const ok = send('file_offer', buildEncryptedFileOfferPayload({
         to: toChatId,
-        transfer_id: transferId,
-        msg_id: msgId,
-        filename: file.name,
+        transferId,
+        msgId,
         filesize: file.size,
-        filetype: file.type,
-        total_chunks: totalChunks,
-        ephemeral_pub_key: ephemeralPubKey,
+        totalChunks,
+        ephemeralPubKey,
         iv,
-        burn_after_read: burnAfterRead,
-        ts: Date.now()  //The sender timestamp is used by the receiver as the message time (overridden by the backend relay if ts is injected)
-      })
+        burnAfterRead,
+        sealedMetadata
+      }))
       if (!ok) throw new Error('Sending failed，Please check network connection')
 
       // Wait for the other party to accept
@@ -1371,11 +1350,12 @@ function validateMsgId(msgId) {
       send('file_error', { to: transfer.fromChatId, transfer_id: transfer.id, reason })
     }
 
-    function onFileOffer(payload) {
-      const { from, transfer_id, msg_id, filename, filesize, filetype, total_chunks, ephemeral_pub_key, iv } = payload
+    async function onFileOffer(payload) {
+      const { from, transfer_id, msg_id, filesize, total_chunks, ephemeral_pub_key, iv } = payload
       if (!validateChatId(from) || !TRANSFER_ID_PATTERN.test(transfer_id)) return
+      let metadata
       try {
-        validateFileMetadata(filename, filetype, filesize)
+        metadata = await openFileOfferMetadata(payload)
         if (!validateMsgId(msg_id)) throw new Error('File message number is invalid')
         if (!Number.isInteger(total_chunks) || total_chunks !== expectedFileChunks(filesize)) {
           throw new Error('Number of file chunks does not match declared size')
@@ -1384,9 +1364,9 @@ function validateMsgId(msgId) {
           throw new Error('Missing file encryption parameters')
         }
         if (fileTransfers.value[transfer_id]) throw new Error('Duplicate file transfer number')
-      } catch (error) {
-        console.warn('[chat] rejected invalid file offer:', error.message)
-        send('file_error', { to: from, transfer_id, reason: error.message })
+      } catch {
+        console.warn('[chat] rejected invalid file offer')
+        send('file_error', { to: from, transfer_id, reason: 'File metadata is invalid' })
         return
       }
 
@@ -1395,9 +1375,9 @@ function validateMsgId(msgId) {
         msgId: msg_id,
         direction: 'receive',
         fromChatId: from,
-        filename,
+        filename: metadata.filename,
         filesize,
-        filetype,
+        filetype: metadata.filetype,
         totalChunks: total_chunks,
         chunks: new Array(total_chunks).fill(null),
         receivedCount: 0,
