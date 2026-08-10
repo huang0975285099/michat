@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log"
 	"path"
 	"regexp"
@@ -992,16 +993,110 @@ func (h *Hub) registerFileTransfer(transferID string, session *fileTransferSessi
 
 // FileOfferPayload file send request payload
 type FileOfferPayload struct {
-	To              string `json:"to"`
-	TransferID      string `json:"transfer_id"`
-	MsgID           string `json:"msg_id"`
-	Filename        string `json:"filename"`
-	Filesize        int64  `json:"filesize"`
-	Filetype        string `json:"filetype"`
-	TotalChunks     int    `json:"total_chunks"`
-	EphemeralPubKey string `json:"ephemeral_pub_key"`
-	IV              string `json:"iv"`
-	BurnAfterRead   bool   `json:"burn_after_read"`
+	To                      string `json:"to"`
+	TransferID              string `json:"transfer_id"`
+	MsgID                   string `json:"msg_id"`
+	Filename                string `json:"filename"`
+	Filesize                int64  `json:"filesize"`
+	Filetype                string `json:"filetype"`
+	TotalChunks             int    `json:"total_chunks"`
+	EphemeralPubKey         string `json:"ephemeral_pub_key"`
+	IV                      string `json:"iv"`
+	MetadataEphemeralPubKey string `json:"metadata_ephemeral_pub_key"`
+	MetadataIV              string `json:"metadata_iv"`
+	MetadataCiphertext      string `json:"metadata_ciphertext"`
+	BurnAfterRead           bool   `json:"burn_after_read"`
+}
+
+type metadataMode uint8
+
+const (
+	fileMetadataLegacy metadataMode = iota
+	fileMetadataEncrypted
+)
+
+type ForwardFileOffer struct {
+	From                    string `json:"from"`
+	TransferID              string `json:"transfer_id"`
+	MsgID                   string `json:"msg_id"`
+	Filename                string `json:"filename,omitempty"`
+	Filesize                int64  `json:"filesize"`
+	Filetype                string `json:"filetype,omitempty"`
+	TotalChunks             int    `json:"total_chunks"`
+	EphemeralPubKey         string `json:"ephemeral_pub_key"`
+	IV                      string `json:"iv"`
+	MetadataEphemeralPubKey string `json:"metadata_ephemeral_pub_key,omitempty"`
+	MetadataIV              string `json:"metadata_iv,omitempty"`
+	MetadataCiphertext      string `json:"metadata_ciphertext,omitempty"`
+	BurnAfterRead           bool   `json:"burn_after_read"`
+	Timestamp               int64  `json:"ts"`
+}
+
+func validBase64Size(value string, minDecoded, maxDecoded int) bool {
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	return err == nil && len(decoded) >= minDecoded && len(decoded) <= maxDecoded
+}
+
+func validateFileOffer(p FileOfferPayload) (metadataMode, error) {
+	if !chatIDRe.MatchString(p.To) {
+		return fileMetadataLegacy, errors.New("无效的接收方")
+	}
+	if !transferIDRe.MatchString(p.TransferID) {
+		return fileMetadataLegacy, errors.New("无效的传输编号")
+	}
+	if !msgIDRe.MatchString(p.MsgID) {
+		return fileMetadataLegacy, errors.New("无效的消息编号")
+	}
+	if p.Filesize <= 0 || p.Filesize > maxFileSize {
+		return fileMetadataLegacy, errors.New("文件大小必须大于 0 且不能超过 10MB")
+	}
+	if p.TotalChunks != expectedFileChunks(p.Filesize) || p.TotalChunks > maxTotalChunks {
+		return fileMetadataLegacy, errors.New("文件分块数量与声明大小不匹配")
+	}
+	if p.EphemeralPubKey == "" || p.IV == "" {
+		return fileMetadataLegacy, errors.New("缺少文件加密参数")
+	}
+
+	metadataFields := 0
+	for _, value := range []string{p.MetadataEphemeralPubKey, p.MetadataIV, p.MetadataCiphertext} {
+		if value != "" {
+			metadataFields++
+		}
+	}
+	if metadataFields != 0 && metadataFields != 3 {
+		return fileMetadataLegacy, errors.New("文件元数据加密参数不完整")
+	}
+	if metadataFields == 3 {
+		if !validBase64Size(p.MetadataEphemeralPubKey, 1, 256) ||
+			!validBase64Size(p.MetadataIV, 12, 12) ||
+			!validBase64Size(p.MetadataCiphertext, 1, 1024) {
+			return fileMetadataLegacy, errors.New("文件元数据加密参数无效")
+		}
+		return fileMetadataEncrypted, nil
+	}
+
+	if len(p.Filename) == 0 || len(p.Filename) > maxFilename || !validFileMetadata(p.Filename, p.Filetype) {
+		return fileMetadataLegacy, errors.New("文件名或文件类型无效")
+	}
+	return fileMetadataLegacy, nil
+}
+
+func newForwardFileOffer(from string, p FileOfferPayload, timestamp int64, mode metadataMode) ForwardFileOffer {
+	forwarded := ForwardFileOffer{
+		From: from, TransferID: p.TransferID, MsgID: p.MsgID,
+		Filesize: p.Filesize, TotalChunks: p.TotalChunks,
+		EphemeralPubKey: p.EphemeralPubKey, IV: p.IV,
+		BurnAfterRead: p.BurnAfterRead, Timestamp: timestamp,
+	}
+	if mode == fileMetadataEncrypted {
+		forwarded.MetadataEphemeralPubKey = p.MetadataEphemeralPubKey
+		forwarded.MetadataIV = p.MetadataIV
+		forwarded.MetadataCiphertext = p.MetadataCiphertext
+	} else {
+		forwarded.Filename = p.Filename
+		forwarded.Filetype = p.Filetype
+	}
+	return forwarded
 }
 
 func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
@@ -1017,37 +1112,9 @@ func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
 		}
 	}
 
-	if !chatIDRe.MatchString(p.To) {
-		reject("无效的接收方")
-		return
-	}
-	if !transferIDRe.MatchString(p.TransferID) {
-		log.Printf("[ws] file_offer invalid transfer_id from %s", from.ChatID)
-		return
-	}
-	if !msgIDRe.MatchString(p.MsgID) {
-		reject("无效的消息编号")
-		return
-	}
-	if len(p.Filename) == 0 || len(p.Filename) > maxFilename {
-		reject("文件名无效或过长")
-		return
-	}
-	if !validFileMetadata(p.Filename, p.Filetype) {
-		reject("不支持的文件格式或文件类型不匹配")
-		return
-	}
-	if p.Filesize <= 0 || p.Filesize > maxFileSize {
-		reject("文件大小必须大于 0 且不能超过 10MB")
-		return
-	}
-	expectedChunks := expectedFileChunks(p.Filesize)
-	if p.TotalChunks != expectedChunks || p.TotalChunks > maxTotalChunks {
-		reject("文件分块数量与声明大小不匹配")
-		return
-	}
-	if p.EphemeralPubKey == "" || p.IV == "" {
-		reject("缺少文件加密参数")
+	metadataMode, err := validateFileOffer(p)
+	if err != nil {
+		reject(err.Error())
 		return
 	}
 
@@ -1093,34 +1160,9 @@ func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
 		return
 	}
 
-	type ForwardOffer struct {
-		From            string `json:"from"`
-		TransferID      string `json:"transfer_id"`
-		MsgID           string `json:"msg_id"`
-		Filename        string `json:"filename"`
-		Filesize        int64  `json:"filesize"`
-		Filetype        string `json:"filetype"`
-		TotalChunks     int    `json:"total_chunks"`
-		EphemeralPubKey string `json:"ephemeral_pub_key"`
-		IV              string `json:"iv"`
-		BurnAfterRead   bool   `json:"burn_after_read"`
-		Timestamp       int64  `json:"ts"` //Server timestamp, based on which both ends unify the file message time
-	}
 	fwd, _ := json.Marshal(Message{
-		Type: "file_offer",
-		Payload: mustMarshal(ForwardOffer{
-			From:            from.ChatID,
-			TransferID:      p.TransferID,
-			MsgID:           p.MsgID,
-			Filename:        p.Filename,
-			Filesize:        p.Filesize,
-			Filetype:        p.Filetype,
-			TotalChunks:     p.TotalChunks,
-			EphemeralPubKey: p.EphemeralPubKey,
-			IV:              p.IV,
-			BurnAfterRead:   p.BurnAfterRead,
-			Timestamp:       timestamp,
-		}),
+		Type:    "file_offer",
+		Payload: mustMarshal(newForwardFileOffer(from.ChatID, p, timestamp, metadataMode)),
 	})
 	select {
 	case recipientClient.send <- fwd:

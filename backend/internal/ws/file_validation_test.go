@@ -45,6 +45,110 @@ func TestValidFileMetadata(t *testing.T) {
 	}
 }
 
+func TestValidateEncryptedFileOffer(t *testing.T) {
+	offer := validEncryptedFileOffer()
+	mode, err := validateFileOffer(offer)
+	if err != nil {
+		t.Fatalf("validate encrypted file offer: %v", err)
+	}
+	if mode != fileMetadataEncrypted {
+		t.Fatalf("metadata mode = %v, want encrypted", mode)
+	}
+}
+
+func TestValidateFileOfferRejectsMalformedEncryptedMetadata(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*FileOfferPayload)
+	}{
+		{name: "partial envelope", mutate: func(p *FileOfferPayload) { p.MetadataIV = "" }},
+		{name: "invalid base64", mutate: func(p *FileOfferPayload) { p.MetadataCiphertext = "%%%" }},
+		{name: "wrong iv length", mutate: func(p *FileOfferPayload) {
+			p.MetadataIV = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 11))
+		}},
+		{name: "oversized ciphertext", mutate: func(p *FileOfferPayload) {
+			p.MetadataCiphertext = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{5}, 1025))
+		}},
+		{name: "wrong chunk count", mutate: func(p *FileOfferPayload) { p.TotalChunks = 2 }},
+		{name: "oversized file", mutate: func(p *FileOfferPayload) { p.Filesize = maxFileSize + 1 }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			offer := validEncryptedFileOffer()
+			tt.mutate(&offer)
+			if _, err := validateFileOffer(offer); err == nil {
+				t.Fatal("malformed encrypted offer was accepted")
+			}
+		})
+	}
+}
+
+func TestValidateFileOfferAcceptsLegacyMetadata(t *testing.T) {
+	offer := validEncryptedFileOffer()
+	offer.MetadataEphemeralPubKey = ""
+	offer.MetadataIV = ""
+	offer.MetadataCiphertext = ""
+	offer.Filename = "report.pdf"
+	offer.Filetype = "application/pdf"
+
+	mode, err := validateFileOffer(offer)
+	if err != nil {
+		t.Fatalf("validate legacy file offer: %v", err)
+	}
+	if mode != fileMetadataLegacy {
+		t.Fatalf("metadata mode = %v, want legacy", mode)
+	}
+}
+
+func TestForwardEncryptedFileOfferOmitsPlaintextMetadata(t *testing.T) {
+	offer := validEncryptedFileOffer()
+	offer.Filename = "diagnosis-report.pdf"
+	offer.Filetype = "application/pdf"
+
+	forwarded := newForwardFileOffer("1111-AAAA", offer, 123456789, fileMetadataEncrypted)
+	raw, err := json.Marshal(forwarded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("diagnosis-report.pdf")) || bytes.Contains(raw, []byte("application/pdf")) {
+		t.Fatalf("encrypted forward leaked plaintext metadata: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte(offer.MetadataCiphertext)) {
+		t.Fatal("encrypted metadata was not forwarded")
+	}
+}
+
+func TestForwardLegacyFileOfferPreservesPlaintextMetadata(t *testing.T) {
+	offer := validEncryptedFileOffer()
+	offer.Filename = "report.pdf"
+	offer.Filetype = "application/pdf"
+
+	forwarded := newForwardFileOffer("1111-AAAA", offer, 123456789, fileMetadataLegacy)
+	raw, err := json.Marshal(forwarded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte("report.pdf")) || !bytes.Contains(raw, []byte("application/pdf")) {
+		t.Fatalf("legacy forward dropped plaintext metadata: %s", raw)
+	}
+}
+
+func validEncryptedFileOffer() FileOfferPayload {
+	return FileOfferPayload{
+		To:                      "2222-BBBB",
+		TransferID:              "11111111-1111-1111-1111-111111111111",
+		MsgID:                   "loyw3v28-1-abc123",
+		Filesize:                128,
+		TotalChunks:             1,
+		EphemeralPubKey:         base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 91)),
+		IV:                      base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{2}, 12)),
+		MetadataEphemeralPubKey: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{3}, 91)),
+		MetadataIV:              base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 12)),
+		MetadataCiphertext:      base64.StdEncoding.EncodeToString([]byte("authenticated metadata")),
+	}
+}
+
 func TestExpectedFileChunksAndSizes(t *testing.T) {
 	tests := []struct {
 		filesize int64
