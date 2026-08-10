@@ -143,7 +143,7 @@ func writeAuthorityError(c *gin.Context, err error) {
 		c.JSON(authorityHTTPStatus(err), gin.H{"error": authorityErr.Code})
 		return
 	}
-	log.Printf("[ironfist] authority request failed: %v", err)
+	log.Printf("[ironfist] authority request failed")
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 }
 

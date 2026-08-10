@@ -380,7 +380,7 @@ func (s *IronFistService) ReportMatch(ctx context.Context, userID uint64, req *R
 		sr, serr := s.SettlePVP(ctx, *req.RoomID, userID, req.Result)
 		if serr != nil {
 			// If settlement fails, only logs will be recorded and statistics will not be returned; the caller can prompt on the result page.
-			fmt.Printf("[ironfist] settle pvp room %d by user %d: %v\n", *req.RoomID, userID, serr)
+			fmt.Printf("[ironfist] pvp settlement failed: %v\n", serr)
 		} else {
 			settle = sr
 		}

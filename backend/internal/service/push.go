@@ -42,7 +42,7 @@ func (s *PushService) NotifyOfflineUser(recipientChatID, senderChatID string) {
 		return
 	}
 	if err := s.send(regIDs, senderChatID); err != nil {
-		log.Printf("[push] send to %s failed: %v", recipientChatID, err)
+		log.Printf("[push] notification delivery failed: %v", err)
 	}
 }
 

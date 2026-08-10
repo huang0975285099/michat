@@ -267,10 +267,10 @@ func (s *IdentityService) DeleteAccount(ctx context.Context, chatID string) erro
 	}
 
 	if err := s.revokeAllSessions(ctx, chatID); err != nil {
-		log.Printf("[identity] account %s deleted but session revocation cleanup failed: %v", chatID, err)
+		log.Printf("[identity] deleted account session cleanup failed: %v", err)
 	}
 	if err := s.eraseAccountRedisData(ctx, chatID); err != nil {
-		log.Printf("[identity] account %s deleted but Redis trace cleanup failed: %v", chatID, err)
+		log.Printf("[identity] deleted account Redis cleanup failed: %v", err)
 	}
 	return nil
 }

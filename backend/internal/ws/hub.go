@@ -201,7 +201,7 @@ func (h *Hub) Register(c *Client) {
 	h.mu.Unlock()
 	if !wasOnline && h.ironFistSvc != nil {
 		if err := h.ironFistSvc.SetIronFistPresence(context.Background(), c.UserID, true); err != nil {
-			log.Printf("[ws] set IronFist presence online for %s: %v", c.ChatID, err)
+			log.Printf("[ws] set IronFist presence online failed: %v", err)
 		}
 	}
 
@@ -233,7 +233,7 @@ func (h *Hub) Unregister(c *Client) {
 	}
 	if h.ironFistSvc != nil {
 		if err := h.ironFistSvc.SetIronFistPresence(context.Background(), c.UserID, false); err != nil {
-			log.Printf("[ws] set IronFist presence offline for %s: %v", c.ChatID, err)
+			log.Printf("[ws] set IronFist presence offline failed: %v", err)
 		}
 	}
 
@@ -262,7 +262,7 @@ func (h *Hub) Unregister(c *Client) {
 				return //Reconnected, skip cancellation
 			}
 			if _, err := h.ironFistSvc.CancelPVPQueue(context.Background(), chatID); err != nil {
-				log.Printf("[ws] auto cancel pvp queue for %s: %v", chatID, err)
+				log.Printf("[ws] auto cancel pvp queue failed: %v", err)
 			}
 		}(c.ChatID)
 	}
@@ -396,7 +396,7 @@ func (h *Hub) FlushStoredReadReceipts(c *Client) {
 	}
 	grouped, err := h.messageReadSvc.GetReadReceiptsForSender(context.Background(), c.ChatID)
 	if err != nil {
-		log.Printf("[ws] load stored read receipts for %s: %v", c.ChatID, err)
+		log.Printf("[ws] load stored read receipts failed: %v", err)
 		return
 	}
 	const receiptBatchSize = 100
@@ -467,7 +467,7 @@ func (c *Client) readPump(h *Hub) {
 		_, raw, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("[ws] unexpected close for %s: %v", c.ChatID, err)
+				log.Printf("[ws] unexpected connection close")
 			}
 			break
 		}
@@ -477,7 +477,7 @@ func (c *Client) readPump(h *Hub) {
 		}
 		var msg Message
 		if err := json.Unmarshal(raw, &msg); err != nil {
-			log.Printf("[ws] bad message from %s: %v", c.ChatID, err)
+			log.Printf("[ws] invalid message envelope: %v", err)
 			continue
 		}
 		h.dispatch(c, &msg, raw)
@@ -595,7 +595,7 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 		// Take the initiative to leave the PVP lobby
 		h.handleIronFistLobbyLeave(c)
 	default:
-		log.Printf("[ws] unknown message type %q from %s", msg.Type, c.ChatID)
+		log.Printf("[ws] unknown message type")
 	}
 }
 
@@ -612,23 +612,23 @@ type ChatMessagePayload struct {
 func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 	var p ChatMessagePayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		log.Printf("[ws] invalid message payload from %s: %v", from.ChatID, err)
+		log.Printf("[ws] invalid message payload: %v", err)
 		return
 	}
 
 	// Validate target chat_id format
 	if !chatIDRe.MatchString(p.To) {
-		log.Printf("[ws] invalid to chat_id from %s: %q", from.ChatID, p.To)
+		log.Printf("[ws] invalid recipient")
 		return
 	}
 	// msg_id is a necessary field for deduplication at the receiving end and ACK association at the sending end, and is prohibited from being empty.
 	if !msgIDRe.MatchString(p.MsgID) {
-		log.Printf("[ws] invalid msg_id from %s: %q", from.ChatID, p.MsgID)
+		log.Printf("[ws] invalid message id")
 		return
 	}
 	// Require all encryption fields
 	if p.Ciphertext == "" || p.IV == "" || p.EphemeralPubKey == "" {
-		log.Printf("[ws] missing encryption fields from %s", from.ChatID)
+		log.Printf("[ws] missing message encryption fields")
 		return
 	}
 
@@ -636,17 +636,17 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 	ctx := context.Background()
 	isFriend, err := h.friendSvc.AreFriends(ctx, from.UserID, p.To)
 	if err != nil || !isFriend {
-		log.Printf("[ws] %s tried to message non-friend %s", from.ChatID, p.To)
+		log.Printf("[ws] message to non-friend rejected")
 		return
 	}
 	// Persist message ownership before forwarding, and subsequent read receipts can only be created by the actual recipient of this delivery.
 	// Failed to close when the database is abnormal, to avoid the occurrence of disappearing messages that have been delivered but can never be safely confirmed for reading.
 	if h.messageReadSvc == nil {
-		log.Printf("[ws] message read service unavailable; rejected message from %s", from.ChatID)
+		log.Printf("[ws] message read service unavailable")
 		return
 	}
 	if err = h.messageReadSvc.RecordMessage(ctx, p.MsgID, from.ChatID, p.To); err != nil {
-		log.Printf("[ws] failed to record delivery %q from %s: %v", p.MsgID, from.ChatID, err)
+		log.Printf("[ws] record message delivery failed: %v", err)
 		return
 	}
 
@@ -712,18 +712,18 @@ type RecallPayload struct {
 func (h *Hub) handleRecall(from *Client, payload json.RawMessage) {
 	var p RecallPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		log.Printf("[ws] invalid recall payload from %s: %v", from.ChatID, err)
+		log.Printf("[ws] invalid recall payload: %v", err)
 		return
 	}
 	if !chatIDRe.MatchString(p.To) || !msgIDRe.MatchString(p.MsgID) {
-		log.Printf("[ws] invalid recall payload from %s: to=%q msg_id=%q", from.ChatID, p.To, p.MsgID)
+		log.Printf("[ws] invalid recall fields")
 		return
 	}
 
 	// Only allow recalling to a friend
 	ctx := context.Background()
 	if ok, err := h.friendSvc.AreFriends(ctx, from.UserID, p.To); err != nil || !ok {
-		log.Printf("[ws] %s tried to recall to non-friend %s", from.ChatID, p.To)
+		log.Printf("[ws] recall to non-friend rejected")
 		return
 	}
 	type ForwardRecall struct {
@@ -759,27 +759,27 @@ type ReadPayload struct {
 func (h *Hub) handleRead(from *Client, payload json.RawMessage) {
 	var p ReadPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		log.Printf("[ws] invalid read payload from %s: %v", from.ChatID, err)
+		log.Printf("[ws] invalid read payload: %v", err)
 		return
 	}
 	if !chatIDRe.MatchString(p.To) || len(p.MsgID) == 0 || len(p.MsgID) > 100 {
-		log.Printf("[ws] invalid read payload from %s", from.ChatID)
+		log.Printf("[ws] invalid read fields")
 		return
 	}
 	// Validate each msg_id format
 	for _, id := range p.MsgID {
 		if !msgIDRe.MatchString(id) {
-			log.Printf("[ws] invalid msg_id in read from %s: %q", from.ChatID, id)
+			log.Printf("[ws] invalid read message id")
 			return
 		}
 	}
 	ctx := context.Background()
 	if ok, err := h.friendSvc.AreFriends(ctx, from.UserID, p.To); err != nil || !ok {
-		log.Printf("[ws] %s tried to send read receipt to non-friend %s", from.ChatID, p.To)
+		log.Printf("[ws] read receipt to non-friend rejected")
 		return
 	}
 	if h.messageReadSvc == nil {
-		log.Printf("[ws] read service unavailable for %s", from.ChatID)
+		log.Printf("[ws] read service unavailable")
 		return
 	}
 
@@ -797,7 +797,7 @@ func (h *Hub) handleRead(from *Client, payload json.RawMessage) {
 	receipts, err := h.messageReadSvc.RecordReads(ctx, uniqueIDs, p.To, from.ChatID)
 	if err != nil {
 		// No ACK for transient database errors, the front end retains the entire batch and retries when reconnecting/opening the session again.
-		log.Printf("[ws] failed to record read batch from %s: %v", from.ChatID, err)
+		log.Printf("[ws] record read batch failed: %v", err)
 		return
 	}
 	acceptedSet := make(map[string]struct{}, len(receipts))
@@ -806,7 +806,7 @@ func (h *Hub) handleRead(from *Client, payload json.RawMessage) {
 	}
 	for _, msgID := range uniqueIDs {
 		if _, accepted := acceptedSet[msgID]; !accepted {
-			log.Printf("[ws] rejected unowned read receipt %q from %s", msgID, from.ChatID)
+			log.Printf("[ws] unowned read receipt rejected")
 		}
 	}
 
@@ -845,18 +845,18 @@ func (h *Hub) handleRead(from *Client, payload json.RawMessage) {
 func (h *Hub) handleReadReceiptApplied(from *Client, payload json.RawMessage) {
 	var p ReadPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		log.Printf("[ws] invalid read_receipt_applied payload from %s: %v", from.ChatID, err)
+		log.Printf("[ws] invalid read receipt applied payload: %v", err)
 		return
 	}
 	if !chatIDRe.MatchString(p.To) || len(p.MsgID) == 0 || len(p.MsgID) > 100 {
-		log.Printf("[ws] invalid read_receipt_applied payload from %s", from.ChatID)
+		log.Printf("[ws] invalid read receipt applied fields")
 		return
 	}
 	uniqueIDs := make([]string, 0, len(p.MsgID))
 	seen := make(map[string]struct{}, len(p.MsgID))
 	for _, msgID := range p.MsgID {
 		if !msgIDRe.MatchString(msgID) {
-			log.Printf("[ws] invalid msg_id in read_receipt_applied from %s: %q", from.ChatID, msgID)
+			log.Printf("[ws] invalid applied receipt message id")
 			return
 		}
 		if _, exists := seen[msgID]; exists {
@@ -869,7 +869,7 @@ func (h *Hub) handleReadReceiptApplied(from *Client, payload json.RawMessage) {
 		return
 	}
 	if err := h.messageReadSvc.MarkReadReceiptsApplied(context.Background(), uniqueIDs, from.ChatID, p.To); err != nil {
-		log.Printf("[ws] failed to mark read receipts applied for %s: %v", from.ChatID, err)
+		log.Printf("[ws] mark read receipts applied failed: %v", err)
 	}
 }
 
@@ -938,13 +938,13 @@ func (h *Hub) NotifyPVPMatched(toChatID string, payload any) {
 	c, ok := h.clients[toChatID]
 	h.mu.RUnlock()
 	if !ok {
-		log.Printf("[ws] notify pvp matched: %s offline, room may be swept as draw", toChatID)
+		log.Printf("[ws] pvp match recipient offline")
 		return
 	}
 	select {
 	case c.send <- msg:
 	case <-time.After(2 * time.Second):
-		log.Printf("[ws] notify pvp matched: %s send buffer full after 2s, room may be swept as draw", toChatID)
+		log.Printf("[ws] pvp match recipient buffer full")
 	}
 }
 
@@ -1102,11 +1102,11 @@ func newForwardFileOffer(from string, p FileOfferPayload, timestamp int64, mode 
 func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
 	var p FileOfferPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		log.Printf("[ws] invalid file_offer from %s: %v", from.ChatID, err)
+		log.Printf("[ws] invalid file offer payload: %v", err)
 		return
 	}
 	reject := func(reason string) {
-		log.Printf("[ws] rejected file_offer %q from %s: %s", p.TransferID, from.ChatID, reason)
+		log.Printf("[ws] file offer rejected")
 		if transferIDRe.MatchString(p.TransferID) {
 			h.sendFileError(from, p.TransferID, reason)
 		}
@@ -1155,7 +1155,7 @@ func (h *Hub) handleFileOffer(from *Client, payload json.RawMessage) {
 		h.fileTransferMu.Lock()
 		delete(h.fileTransfers, p.TransferID)
 		h.fileTransferMu.Unlock()
-		log.Printf("[ws] failed to record file delivery %q from %s: %v", p.MsgID, from.ChatID, err)
+		log.Printf("[ws] record file delivery failed: %v", err)
 		reject("无法建立安全文件传输")
 		return
 	}
@@ -1184,20 +1184,20 @@ func (h *Hub) handleFileChunk(from *Client, payload json.RawMessage) {
 		Data       string `json:"data"`
 	}
 	if err := json.Unmarshal(payload, &p); err != nil {
-		log.Printf("[ws] invalid file_chunk from %s: %v", from.ChatID, err)
+		log.Printf("[ws] invalid file chunk payload: %v", err)
 		return
 	}
 	if !chatIDRe.MatchString(p.To) || !transferIDRe.MatchString(p.TransferID) {
-		log.Printf("[ws] file_chunk invalid fields from %s", from.ChatID)
+		log.Printf("[ws] file chunk rejected")
 		return
 	}
 	if p.ChunkIndex < 0 || p.ChunkIndex >= maxTotalChunks {
-		log.Printf("[ws] file_chunk invalid index %d from %s", p.ChunkIndex, from.ChatID)
+		log.Printf("[ws] file chunk index rejected")
 		h.sendFileError(from, p.TransferID, "文件分块序号无效")
 		return
 	}
 	if len(p.Data) == 0 || len(p.Data) > maxChunkData {
-		log.Printf("[ws] file_chunk invalid data length %d from %s", len(p.Data), from.ChatID)
+		log.Printf("[ws] file chunk length rejected")
 		h.sendFileError(from, p.TransferID, "文件分块大小无效")
 		return
 	}
@@ -1269,7 +1269,7 @@ func (h *Hub) handleFileChunk(from *Client, payload json.RawMessage) {
 	default:
 		delete(h.fileTransfers, p.TransferID)
 		h.fileTransferMu.Unlock()
-		log.Printf("[ws] file_chunk dropped for %s (buffer full)", p.To)
+		log.Printf("[ws] file chunk dropped because recipient buffer is full")
 		h.sendFileError(from, p.TransferID, "接收方连接繁忙，文件传输中断")
 	}
 }
@@ -1283,11 +1283,11 @@ func (h *Hub) handleFileSimpleRelay(from *Client, msgType string, payload json.R
 		Timestamp  int64  `json:"ts,omitempty"` //file_done returns the server timestamp of file_offer
 	}
 	if err := json.Unmarshal(payload, &p); err != nil {
-		log.Printf("[ws] invalid %s from %s: %v", msgType, from.ChatID, err)
+		log.Printf("[ws] invalid file control payload: %v", err)
 		return
 	}
 	if !chatIDRe.MatchString(p.To) || !transferIDRe.MatchString(p.TransferID) {
-		log.Printf("[ws] invalid %s fields from %s", msgType, from.ChatID)
+		log.Printf("[ws] invalid file control fields")
 		return
 	}
 	if len(p.Reason) > 512 {
@@ -1417,13 +1417,13 @@ func (h *Hub) handleCallOffer(from *Client, payload json.RawMessage) {
 	}
 	if err := json.Unmarshal(payload, &p); err != nil ||
 		!chatIDRe.MatchString(p.To) || !transferIDRe.MatchString(p.CallID) || len(p.SDP) == 0 {
-		log.Printf("[ws] invalid call_offer from %s", from.ChatID)
+		log.Printf("[ws] invalid call offer")
 		return
 	}
 
 	ctx := context.Background()
 	if ok, err := h.friendSvc.AreFriends(ctx, from.UserID, p.To); err != nil || !ok {
-		log.Printf("[ws] call_offer: %s not friends with %s", from.ChatID, p.To)
+		log.Printf("[ws] call offer to non-friend rejected")
 		return
 	}
 
@@ -1510,7 +1510,7 @@ func buildCallRelayPayload(from, msgType string, p callRelayPayload) map[string]
 func (h *Hub) handleCallRelay(from *Client, msgType string, payload json.RawMessage) {
 	p, ok := parseCallRelayPayload(msgType, payload)
 	if !ok {
-		log.Printf("[ws] invalid %s from %s", msgType, from.ChatID)
+		log.Printf("[ws] invalid call relay payload")
 		return
 	}
 
@@ -1518,7 +1518,7 @@ func (h *Hub) handleCallRelay(from *Client, msgType string, payload json.RawMess
 	// The current peer performs session-level verification, forming a double line of defense of server authorization + client status binding.
 	ctx := context.Background()
 	if ok, err := h.friendSvc.AreFriends(ctx, from.UserID, p.To); err != nil || !ok {
-		log.Printf("[ws] %s: %s not friends with %s", msgType, from.ChatID, p.To)
+		log.Printf("[ws] call relay to non-friend rejected")
 		return
 	}
 
@@ -1547,7 +1547,7 @@ func (h *Hub) handleGameRelay(from *Client, msgType string, payload json.RawMess
 		RoomID string `json:"room_id"`
 	}
 	if err := json.Unmarshal(payload, &header); err != nil || !chatIDRe.MatchString(header.To) {
-		log.Printf("[ws] invalid %s from %s", msgType, from.ChatID)
+		log.Printf("[ws] invalid game relay payload")
 		return
 	}
 
@@ -1555,7 +1555,7 @@ func (h *Hub) handleGameRelay(from *Client, msgType string, payload json.RawMess
 		ctx := context.Background()
 		ok, err := h.friendSvc.AreFriends(ctx, from.UserID, header.To)
 		if err != nil || !ok {
-			log.Printf("[ws] game_invite: %s not friends with %s", from.ChatID, header.To)
+			log.Printf("[ws] game invite to non-friend rejected")
 			return
 		}
 		if header.Game == "ironfist" {
@@ -1682,7 +1682,7 @@ func (h *Hub) handleIronFistLobbyJoin(c *Client) {
 	ctx := context.Background()
 	p, err := h.ironFistSvc.GetLobbyUserProfile(ctx, c.ChatID)
 	if err != nil {
-		log.Printf("[ws] ironfist_lobby_join get profile for %s: %v", c.ChatID, err)
+		log.Printf("[ws] ironfist lobby profile lookup failed: %v", err)
 		return
 	}
 
