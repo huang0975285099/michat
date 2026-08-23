@@ -17,7 +17,7 @@ func TestIsLocalDevOrigin(t *testing.T) {
 		{name: "loopback ipv4", origin: "http://127.0.0.1:8888", want: true},
 		{name: "loopback ipv6", origin: "http://[::1]:8888", want: true},
 
-		{name: "public site is not a dev origin", origin: "https://m.yzs88.com", want: false},
+		{name: "public site is not a dev origin", origin: "https://m.yzs88.com:8088", want: false},
 		{name: "empty origin", origin: "", want: false},
 		// Suffix-matching a host would let these through; the check is exact for that reason.
 		{name: "localhost suffix bypass", origin: "https://localhost.evil.com", want: false},

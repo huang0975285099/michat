@@ -766,7 +766,7 @@ function copyId() {
 function generateInviteLink() {
     // Native shells serve from file:// or a private scheme, so their own origin is
     // useless in a shareable link — point those at the public site instead.
-    const baseUrl = isNativeShell() ? 'https://m.yzs88.com' : window.location.origin;
+    const baseUrl = isNativeShell() ? 'https://m.yzs88.com:8088' : window.location.origin;
     inviteLink.value = baseUrl + "/#/init?invite=" + identity.chatId;
     showInviteDialog.value = true;
 }

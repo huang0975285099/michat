@@ -31,8 +31,8 @@ jpush:
 version:
   latest: "1.0.0"
   min_supported: "1.0.0"
-  url: "https://m.yzs88.com"
+  url: "https://m.yzs88.com:8088"
   notes: ""
 
 allowed_origins:
-  - "https://m.yzs88.com"
+  - "https://m.yzs88.com:8088"

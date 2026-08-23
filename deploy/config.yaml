@@ -21,6 +21,6 @@ jpush:
   enabled: true
 
 allowed_origins:
-  - "https://m.yzs88.com"
+  - "https://m.yzs88.com:8088"
   - "https://localhost"
   - "capacitor://localhost"

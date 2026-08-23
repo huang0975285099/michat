@@ -353,13 +353,13 @@ const showInviteDialog = ref(false);
 const showIosDialog = ref(false);
 
 function openWebVersion() {
-    window.open('https://m.yzs88.com', '_blank');
+    window.open('https://m.yzs88.com:8088', '_blank');
 }
 import logoUrl from "src/assets/logo.png";
 
 const downloadUrls = {
-    windows: 'https://m.yzs88.com/download/yunChat.exe',
-    apk: 'https://m.yzs88.com/download/yunChat.apk',
+    windows: 'https://m.yzs88.com:8088/download/yunChat.exe',
+    apk: 'https://m.yzs88.com:8088/download/yunChat.apk',
 };
 
 function downloadFile(url) {

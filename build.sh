@@ -220,7 +220,7 @@ log_info "Removing old untagged images without touching other running services..
 docker image prune -f >/dev/null
 
 docker compose ps
-log_info "Deployment complete: https://m.yzs88.com"
+log_info "Deployment complete: https://m.yzs88.com:8088"
 LOADSCRIPT
 
     chmod +x "$OUTPUT_DIR/load.sh"

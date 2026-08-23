@@ -10,7 +10,7 @@
 
 - **产品名称**：云密
 - **产品定位**：隐私安全工具
-- **部署域名**：https://m.yzs88.com
+- **部署地址**：https://m.yzs88.com:8088
 - **支持平台**：Web 浏览器、PWA（可安装到桌面）、Electron 桌面客户端（Windows .exe）、Android 原生客户端（.apk）
 - **客户端下载**：首页提供 Windows 桌面端（`yunChat.exe`）与 Android（`yunChat.apk`）下载，iOS 暂以 PWA 形式提供
 - **当前游戏入口**：铁拳3D（1v1策略对战）
@@ -365,7 +365,7 @@
 ┌────────────────────────────────────────────────────┐
 │                 Docker Compose                     │
 │                                                    │
-│  edge Nginx (:80/:443) ──> frontend ──> backend   │
+│ edge Nginx (host :8088 → TLS :443) → frontend     │
 │                                             │      │
 │                                     MySQL + Redis  │
 │                                                    │
@@ -381,7 +381,7 @@
 | MySQL | Compose 内置；用户数据、好友关系、消息回执存储 |
 | Redis | Compose 内置；会话缓存、WebSocket 状态管理、最多7天离线密文队列 |
 | TURN Server | Compose 内置 coturn；WebRTC NAT 穿透（3478 与 UDP 49160-49200） |
-| Nginx | Compose 内置；反向代理、SSL 终止、WebSocket 升级（80/443） |
+| Nginx | Compose 内置；反向代理、SSL 终止、WebSocket 升级（公网 TCP 8088） |
 | JPush (极光推送) | Android 端离线消息推送（REST API，需配置 AppKey/MasterSecret） |
 
 ### 6.3 构建与部署

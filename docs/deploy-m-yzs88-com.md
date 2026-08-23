@@ -6,7 +6,7 @@
 - SSH 端口：`2202`
 - SSH 用户默认值：`test`
 - 部署目录默认值：`/home/test/e2eechat`
-- 域名：`m.yzs88.com`
+- 访问地址：`https://m.yzs88.com:8088`
 - Compose 项目名：`e2eechat`
 
 部署栈拥有独立的 MySQL 与 Redis 数据卷，不连接或修改服务器已有的
@@ -15,9 +15,9 @@
 ## 上线前条件
 
 1. 将 `m.yzs88.com` 的公共 DNS A 记录改为 `112.18.238.6`。
-2. 确认服务器可以接收入站 TCP 80、TCP 443、TCP/UDP 3478，以及
-   UDP 49160-49200。主机没有防火墙时，Compose 发布端口会创建监听；
-   如果端口仍无法从公网访问，需要在运营商、路由器或云平台边界放行。
+2. 确认公网 TCP 8088 映射到服务器 `10.0.9.4:8088`。音视频通话还需
+   映射 TCP/UDP 3478 和 UDP 49160-49200；主机上的 Docker 发布端口
+   不能代替上级 NAT 映射。
 3. 将部署机的 SSH 公钥加入服务器 `test` 用户的 `authorized_keys`，或在
    脚本运行时输入 SSH 密码。可通过 `SSH_KEY` 指定独立部署密钥。
 4. 复制 `.env.example` 为 `.env`，确认 `MYSQL_USER`，并为以下字段填写
@@ -59,18 +59,17 @@ SSH_KEY=~/.ssh/michat_deploy_ed25519 \
 cd /home/test/e2eechat
 docker compose ps
 curl -fsS http://127.0.0.1/api/version
-curl -kfsS https://127.0.0.1/api/version
+curl -kfsS https://127.0.0.1:8088/api/version
 ```
 
 DNS 生效后在外部网络执行：
 
 ```bash
-curl -fsSI http://m.yzs88.com
-curl -fsS https://m.yzs88.com/api/version
+curl -fsS https://m.yzs88.com:8088/api/version
 ```
 
-HTTP 请求应跳转到 HTTPS，HTTPS API 应返回版本信息。音视频通话还应在
-两个不同 NAT 网络的客户端之间做一次真实通话验收，以覆盖 TURN 中继。
+HTTPS API 应返回版本信息。音视频通话还应在两个不同 NAT 网络的客户端
+之间做一次真实通话验收，以覆盖 TURN 中继。
 
 ## 运维
 
