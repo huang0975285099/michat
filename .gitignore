@@ -40,3 +40,5 @@ Thumbs.db
 *.log
 
 *.tar
+# Offline deployment packages contain .env and the TLS private key.
+e2eechat-deploy-*.tar.gz

@@ -11,7 +11,7 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     --mount=type=cache,target=/app/node_modules/.cache \
     npx quasar build -m pwa
 
-FROM nginx:latest
+FROM nginx:1.30.4-alpine
 COPY --from=builder /app/dist/pwa /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80

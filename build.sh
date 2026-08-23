@@ -1,11 +1,15 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# E2EE Chat 构建与部署脚本
-# 用法：
-#   ./build.sh                 # 构建并发布前后端
-#   ./build.sh backend         # 仅构建并发布后端
-#   ./build.sh frontend        # 仅构建并发布前端
-#   ./build.sh all --package   # 发布并额外生成离线部署包
+# E2EE Chat build and deployment script for m.yzs88.com.
+#
+# Usage:
+#   ./build.sh                 # build and deploy backend + frontend
+#   ./build.sh backend         # build and deploy backend only
+#   ./build.sh frontend        # build and deploy frontend only
+#   ./build.sh all --package   # also create an offline deployment archive
+#
+# Override the SSH target when needed:
+#   SSH_KEY=~/.ssh/michat_deploy_ed25519 REMOTE_USER=test ./build.sh
 
 set -Eeuo pipefail
 
@@ -25,18 +29,21 @@ OUTPUT_DIR="./dist"
 MODE="all"
 CREATE_PACKAGE=false
 
-REMOTE_USER="root"
-REMOTE_IP="47.108.52.145"
-REMOTE_DIR="/opt/e2eechat"
+REMOTE_USER="${REMOTE_USER:-test}"
+REMOTE_IP="${REMOTE_IP:-112.18.238.6}"
+REMOTE_DIR="${REMOTE_DIR:-/home/test/e2eechat}"
+SSH_KEY="${SSH_KEY:-}"
+SSH_ARGS=()
+SCP_ARGS=()
 
 usage() {
     cat <<'EOF'
-用法: ./build.sh [all|backend|frontend] [--package]
+Usage: ./build.sh [all|backend|frontend] [--package]
 
-  all        构建并发布前后端（默认）
-  backend    仅构建并发布后端
-  frontend   仅构建并发布前端
-  --package  额外生成离线部署压缩包
+  all        Build and deploy backend and frontend (default)
+  backend    Build and deploy only the backend
+  frontend   Build and deploy only the frontend
+  --package  Also create an offline deployment archive
 EOF
 }
 
@@ -46,185 +53,173 @@ parse_args() {
             all|backend|frontend) MODE="$arg" ;;
             --package) CREATE_PACKAGE=true ;;
             -h|--help) usage; exit 0 ;;
-            *) log_error "未知参数: $arg"; usage; exit 1 ;;
+            *) log_error "Unknown argument: $arg"; usage; exit 1 ;;
         esac
     done
 }
 
+require_file() {
+    if [[ ! -f "$1" ]]; then
+        log_error "Missing required file: $1"
+        exit 1
+    fi
+}
+
+require_env_key() {
+    local key="$1"
+    if ! grep -Eq "^${key}=.+" .env; then
+        log_error ".env is missing a non-empty ${key}. See .env.example."
+        exit 1
+    fi
+}
+
+preflight() {
+    local command_name
+    for command_name in docker ssh scp gzip tar; do
+        if ! command -v "$command_name" >/dev/null 2>&1; then
+            log_error "Required command is not installed: $command_name"
+            exit 1
+        fi
+    done
+
+    require_file .env
+    require_file ssl/m.yzs88.com.pem
+    require_file ssl/m.yzs88.com.key
+    for key in JWT_SECRET MYSQL_PASSWORD MYSQL_ROOT_PASSWORD TURN_SECRET; do
+        require_env_key "$key"
+    done
+
+    if [[ -n "$SSH_KEY" ]]; then
+        require_file "$SSH_KEY"
+        SSH_ARGS=(-i "$SSH_KEY")
+        SCP_ARGS=(-i "$SSH_KEY")
+    fi
+
+    if command -v openssl >/dev/null 2>&1; then
+        openssl x509 -in ssl/m.yzs88.com.pem -noout -checkend 86400 >/dev/null || {
+            log_error "The m.yzs88.com certificate is invalid or expires within 24 hours."
+            exit 1
+        }
+    else
+        log_warn "openssl is unavailable; certificate expiry will be checked by nginx on the server."
+    fi
+}
+
 clean() {
-    log_info "准备构建目录..."
+    log_info "Preparing build directory..."
     rm -rf -- "$OUTPUT_DIR"
     mkdir -p "$OUTPUT_DIR"
 }
 
 build_backend() {
-    log_info "构建后端镜像 e2eechat-backend:$VERSION..."
+    log_info "Building e2eechat-backend:$VERSION..."
     docker build -t "e2eechat-backend:$VERSION" -t e2eechat-backend:latest ./backend
-    docker save "e2eechat-backend:$VERSION" | gzip > "$OUTPUT_DIR/e2eechat-backend.tar.gz"
-    log_info "后端镜像已导出"
+    docker save "e2eechat-backend:$VERSION" e2eechat-backend:latest | gzip > "$OUTPUT_DIR/e2eechat-backend.tar.gz"
 }
 
 build_frontend() {
-    log_info "构建前端镜像 e2eechat-frontend:$VERSION..."
+    log_info "Building e2eechat-frontend:$VERSION..."
     docker build -t "e2eechat-frontend:$VERSION" -t e2eechat-frontend:latest ./frontend
-    docker save "e2eechat-frontend:$VERSION" | gzip > "$OUTPUT_DIR/e2eechat-frontend.tar.gz"
-    log_info "前端镜像已导出"
+    docker save "e2eechat-frontend:$VERSION" e2eechat-frontend:latest | gzip > "$OUTPUT_DIR/e2eechat-frontend.tar.gz"
 }
 
 copy_configs() {
     cp docker-compose.yml "$OUTPUT_DIR/"
-    cp backend/config.prod.yaml "$OUTPUT_DIR/config.prod.yaml"
-    cp -r nginx-vhost "$OUTPUT_DIR/nginx-vhost"
+    cp .env "$OUTPUT_DIR/.env"
+    mkdir -p "$OUTPUT_DIR/deploy" "$OUTPUT_DIR/nginx-vhost" "$OUTPUT_DIR/ssl" "$OUTPUT_DIR/downloads"
+    cp deploy/config.yaml "$OUTPUT_DIR/deploy/config.yaml"
+    cp nginx-vhost/m.yzs88.com.conf "$OUTPUT_DIR/nginx-vhost/m.yzs88.com.conf"
+    cp ssl/m.yzs88.com.pem "$OUTPUT_DIR/ssl/m.yzs88.com.pem"
+    cp ssl/m.yzs88.com.key "$OUTPUT_DIR/ssl/m.yzs88.com.key"
+    chmod 600 "$OUTPUT_DIR/.env" "$OUTPUT_DIR/ssl/m.yzs88.com.key"
 }
 
 create_load_script() {
     cat > "$OUTPUT_DIR/load.sh" <<'LOADSCRIPT'
-#!/bin/bash
+#!/usr/bin/env bash
 set -Eeuo pipefail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 NC='\033[0m'
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-REMOTE_DIR="/opt/e2eechat"
-INIT_MARKER="$REMOTE_DIR/.server-initialized"
-DEPLOY_BACKEND=false
-DEPLOY_FRONTEND=false
-BACKEND_LOADED=""
-FRONTEND_LOADED=""
+cd "$(dirname "$0")"
 
-if [[ $EUID -ne 0 ]]; then
-    log_error "需要 root 权限运行"
-    exit 1
-fi
+for path in .env docker-compose.yml deploy/config.yaml nginx-vhost/m.yzs88.com.conf \
+    ssl/m.yzs88.com.pem ssl/m.yzs88.com.key; do
+    if [[ ! -f "$path" ]]; then
+        log_error "Missing deployment file: $path"
+        exit 1
+    fi
+done
 
-load_image() {
-    local archive="$1"
-    gunzip -c "$archive" | docker load | sed -n 's/^Loaded image: //p' | tail -n 1
-}
+chmod 600 .env ssl/m.yzs88.com.key
+mkdir -p downloads
 
 if [[ -f e2eechat-backend.tar.gz ]]; then
-    log_info "加载后端镜像..."
-    BACKEND_LOADED=$(load_image e2eechat-backend.tar.gz)
-    docker tag "$BACKEND_LOADED" e2eechat-backend:latest
-    DEPLOY_BACKEND=true
+    log_info "Loading backend image..."
+    gunzip -c e2eechat-backend.tar.gz | docker load >/dev/null
 fi
 
 if [[ -f e2eechat-frontend.tar.gz ]]; then
-    log_info "加载前端镜像..."
-    FRONTEND_LOADED=$(load_image e2eechat-frontend.tar.gz)
-    docker tag "$FRONTEND_LOADED" e2eechat-frontend:latest
-    DEPLOY_FRONTEND=true
+    log_info "Loading frontend image..."
+    gunzip -c e2eechat-frontend.tar.gz | docker load >/dev/null
 fi
 
-if ! $DEPLOY_BACKEND && ! $DEPLOY_FRONTEND; then
-    log_error "没有找到待部署的镜像包"
+if [[ ! -f e2eechat-backend.tar.gz && ! -f e2eechat-frontend.tar.gz ]]; then
+    log_error "No application image archives were uploaded."
     exit 1
 fi
 
-log_info "确保 Docker 网络可用..."
-docker network inspect e2eechat-net >/dev/null 2>&1 || docker network create e2eechat-net >/dev/null
-docker network connect e2eechat-net yzs-mysql 2>/dev/null || true
-docker network connect e2eechat-net yzs-redis 2>/dev/null || true
+log_info "Validating Compose and nginx configuration..."
+docker compose config --quiet
+docker compose pull mysql redis edge coturn
+docker compose run --rm --no-deps edge nginx -t
 
-# 数据库账号只在服务器首次部署时初始化；表结构迁移由后端 AutoMigrate 负责。
-if [[ ! -f "$INIT_MARKER" ]]; then
-    log_info "首次部署：初始化数据库账号..."
-    MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-}"
-    if [[ -z "$MYSQL_ROOT_PASSWORD" && -f "$REMOTE_DIR/.env" ]]; then
-        MYSQL_ROOT_PASSWORD=$(grep '^MYSQL_ROOT_PASSWORD=' "$REMOTE_DIR/.env" | cut -d'=' -f2- || true)
-    fi
-    if [[ -z "$MYSQL_ROOT_PASSWORD" ]]; then
-        read -rsp "请输入 yzs-mysql 的 root 密码: " MYSQL_ROOT_PASSWORD
-        echo
-        read -rp "是否保存密码到 $REMOTE_DIR/.env？[y/N] " SAVE_PW
-        if [[ "$SAVE_PW" =~ ^[Yy]$ ]]; then
-            printf 'MYSQL_ROOT_PASSWORD=%s\n' "$MYSQL_ROOT_PASSWORD" > "$REMOTE_DIR/.env"
-            chmod 600 "$REMOTE_DIR/.env"
-        fi
-    fi
-    docker exec -i yzs-mysql mysql -uroot -p"$MYSQL_ROOT_PASSWORD" <<SQL
-CREATE DATABASE IF NOT EXISTS e2eechat CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'e2eechat'@'%' IDENTIFIED BY 'e2eechat123';
-GRANT ALL PRIVILEGES ON e2eechat.* TO 'e2eechat'@'%';
-FLUSH PRIVILEGES;
-SQL
-    touch "$INIT_MARKER"
-fi
+log_info "Starting the isolated e2eechat stack..."
+docker compose up -d --remove-orphans
 
-log_info "更新服务（不中断未变更的容器）..."
-if $DEPLOY_BACKEND && $DEPLOY_FRONTEND; then
-    docker compose up -d --force-recreate
-elif $DEPLOY_BACKEND; then
-    docker compose up -d --no-deps --force-recreate backend
-else
-    docker compose up -d --no-deps --force-recreate frontend
-fi
-
-# 仅当 Nginx 配置内容变化时才复制并重载。
-NGINX_SOURCE="$REMOTE_DIR/nginx-vhost/yb.yzs88.com.conf"
-NGINX_HASH_FILE="$REMOTE_DIR/.nginx-vhost.sha256"
-if [[ -f "$NGINX_SOURCE" ]]; then
-    NEW_NGINX_HASH=$(sha256sum "$NGINX_SOURCE" | awk '{print $1}')
-    OLD_NGINX_HASH=$(cat "$NGINX_HASH_FILE" 2>/dev/null || true)
-    if [[ "$NEW_NGINX_HASH" != "$OLD_NGINX_HASH" ]]; then
-        log_info "Nginx 配置有变化，正在更新..."
-        docker network connect e2eechat_default yzs-nginx 2>/dev/null || true
-        docker cp "$NGINX_SOURCE" yzs-nginx:/etc/nginx/conf.d/
-        docker exec yzs-nginx nginx -t
-        docker exec yzs-nginx nginx -s reload
-        printf '%s' "$NEW_NGINX_HASH" > "$NGINX_HASH_FILE"
-    fi
-fi
-
-check_service() {
+wait_for_service() {
     local service="$1"
-    local container_id
+    local container_id state health
     container_id=$(docker compose ps -q "$service")
     if [[ -z "$container_id" ]]; then
-        log_error "$service 容器不存在"
+        log_error "$service container was not created."
         return 1
     fi
 
-    for _ in {1..15}; do
-        if [[ $(docker inspect -f '{{.State.Status}}' "$container_id") == "running" ]]; then
-            sleep 2
-            if [[ $(docker inspect -f '{{.State.Status}}' "$container_id") == "running" ]]; then
-                log_info "$service 运行正常"
-                return 0
-            fi
+    for _ in {1..40}; do
+        state=$(docker inspect -f '{{.State.Status}}' "$container_id")
+        health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")
+        if [[ "$state" == "running" && ("$health" == "healthy" || "$health" == "none") ]]; then
+            log_info "$service is ready."
+            return 0
         fi
-        sleep 2
+        if [[ "$state" == "exited" || "$state" == "dead" ]]; then
+            break
+        fi
+        sleep 3
     done
 
-    log_error "$service 启动失败，最近日志如下："
-    docker compose logs --tail=80 "$service" || true
+    log_error "$service failed to become ready. Recent logs:"
+    docker compose logs --tail=100 "$service" || true
     return 1
 }
 
-log_info "检查部署状态..."
-$DEPLOY_BACKEND && check_service backend
-$DEPLOY_FRONTEND && check_service frontend
+for service in mysql redis backend frontend edge coturn; do
+    wait_for_service "$service"
+done
 
-log_info "清理本次更新组件的旧镜像..."
-if $DEPLOY_BACKEND; then
-    docker images e2eechat-backend --format '{{.Repository}}:{{.Tag}}' \
-        | grep -v ':latest$' | grep -vF "$BACKEND_LOADED" \
-        | xargs -r docker rmi 2>/dev/null || true
-fi
-if $DEPLOY_FRONTEND; then
-    docker images e2eechat-frontend --format '{{.Repository}}:{{.Tag}}' \
-        | grep -v ':latest$' | grep -vF "$FRONTEND_LOADED" \
-        | xargs -r docker rmi 2>/dev/null || true
-fi
+log_info "Running local HTTPS smoke test..."
+docker compose exec -T edge wget --no-check-certificate -q -O /dev/null https://127.0.0.1/api/version
+
+log_info "Removing old untagged images without touching other running services..."
 docker image prune -f >/dev/null
 
 docker compose ps
-log_info "部署完成：https://yb.yzs88.com"
+log_info "Deployment complete: https://m.yzs88.com"
 LOADSCRIPT
 
     chmod +x "$OUTPUT_DIR/load.sh"
@@ -233,55 +228,29 @@ LOADSCRIPT
 create_package() {
     if $CREATE_PACKAGE; then
         local package_name="e2eechat-deploy-$VERSION.tar.gz"
-        log_info "生成离线部署包 $package_name..."
+        log_info "Creating offline package $package_name (contains the private TLS key; store securely)..."
         tar -czf "$package_name" -C "$OUTPUT_DIR" .
+        chmod 600 "$package_name"
     fi
 }
 
 upload() {
-    log_info "上传发布文件到 ${REMOTE_USER}@${REMOTE_IP}:${REMOTE_DIR}/ ..."
-    # 先删除旧镜像包，避免单组件发布误加载上一次遗留的另一个组件。
-    ssh "${REMOTE_USER}@${REMOTE_IP}" \
-        "mkdir -p '${REMOTE_DIR}' && rm -f '${REMOTE_DIR}/e2eechat-backend.tar.gz' '${REMOTE_DIR}/e2eechat-frontend.tar.gz'"
-
-    local files=(
-        "$OUTPUT_DIR/config.prod.yaml"
-        "$OUTPUT_DIR/docker-compose.yml"
-        "$OUTPUT_DIR/load.sh"
-        "$OUTPUT_DIR/nginx-vhost"
-    )
-    [[ -f "$OUTPUT_DIR/e2eechat-backend.tar.gz" ]] && files+=("$OUTPUT_DIR/e2eechat-backend.tar.gz")
-    [[ -f "$OUTPUT_DIR/e2eechat-frontend.tar.gz" ]] && files+=("$OUTPUT_DIR/e2eechat-frontend.tar.gz")
-    [[ -f ".env" ]] && files+=(".env")
-
-    scp -C -r "${files[@]}" "${REMOTE_USER}@${REMOTE_IP}:${REMOTE_DIR}/"
-    ssh "${REMOTE_USER}@${REMOTE_IP}" "chmod +x '${REMOTE_DIR}/load.sh'"
+    log_info "Uploading release to ${REMOTE_USER}@${REMOTE_IP}:${REMOTE_DIR}/ ..."
+    ssh "${SSH_ARGS[@]}" "${REMOTE_USER}@${REMOTE_IP}" "mkdir -p '${REMOTE_DIR}' && chmod 700 '${REMOTE_DIR}' && rm -f '${REMOTE_DIR}/e2eechat-backend.tar.gz' '${REMOTE_DIR}/e2eechat-frontend.tar.gz'"
+    scp -C -r "${SCP_ARGS[@]}" "$OUTPUT_DIR/." "${REMOTE_USER}@${REMOTE_IP}:${REMOTE_DIR}/"
+    ssh "${SSH_ARGS[@]}" "${REMOTE_USER}@${REMOTE_IP}" "chmod 600 '${REMOTE_DIR}/.env' '${REMOTE_DIR}/ssl/m.yzs88.com.key' && chmod +x '${REMOTE_DIR}/load.sh'"
 }
 
 deploy() {
-    log_info "执行远程部署..."
-    ssh "${REMOTE_USER}@${REMOTE_IP}" "cd '${REMOTE_DIR}' && ./load.sh"
+    log_info "Executing remote deployment..."
+    ssh "${SSH_ARGS[@]}" "${REMOTE_USER}@${REMOTE_IP}" "cd '${REMOTE_DIR}' && ./load.sh"
 }
 
 main() {
     parse_args "$@"
+    preflight
 
-    if ! command -v docker >/dev/null 2>&1; then
-        log_error "Docker 未安装"
-        exit 1
-    fi
-
-    if [[ ! -f .env ]]; then
-        log_error "缺少 .env；请先配置部署密钥（JWT_SECRET、MYSQL_DSN、TURN_SECRET 等）"
-        exit 1
-    fi
-
-    echo
-    echo "=========================================="
-    echo "  E2EE Chat - $MODE 发布"
-    echo "=========================================="
-    echo
-
+    log_info "Target: ${REMOTE_USER}@${REMOTE_IP}:${REMOTE_DIR} (mode: $MODE)"
     clean
     case "$MODE" in
         all) build_backend; build_frontend ;;

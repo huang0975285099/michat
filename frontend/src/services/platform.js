@@ -4,7 +4,7 @@
 // live in one place — scattered `location.protocol === 'file:'` checks silently
 // misclassify Tauri, which serves over http(s) like the web build does:
 //
-//   web / PWA          https://yb.yzs88.com
+//   web / PWA          https://m.yzs88.com
 //   Electron           file://
 //   Tauri (Windows)    http://tauri.localhost
 //   Tauri (mac/Linux)  tauri://localhost

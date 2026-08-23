@@ -201,7 +201,7 @@ export function connect() {
     const isDev = process.env.DEV
     const url = isDev
       ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
-      : 'wss://yb.yzs88.com/ws'
+      : 'wss://m.yzs88.com/ws'
 
     socket = new WebSocket(url)
     authPending = true

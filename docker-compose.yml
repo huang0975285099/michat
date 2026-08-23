@@ -1,43 +1,123 @@
-# E2EE Chat - Docker Compose 配置
-# 部署域名: https://yb.yzs88.com
-# 复用服务器上已有的 yzs-mysql / yzs-redis 容器
+name: e2eechat
 
+# m.yzs88.com - self-contained production stack.
+# Only the web and TURN ports are published on the host. MySQL and Redis stay
+# on the private Compose network, so they do not conflict with existing host
+# services (including the MySQL instance already bound to port 3306).
 services:
+  mysql:
+    image: mysql:8.1.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: e2eechat
+      MYSQL_USER: e2eechat
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$${MYSQL_ROOT_PASSWORD}\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
   backend:
     image: e2eechat-backend:latest
     pull_policy: never
-    restart: always
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       CONFIG: /app/config.yaml
-      # Required deployment secrets. Provide these through the host environment
-      # or a protected Compose env file; never commit them to this repository.
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
-      MYSQL_DSN: ${MYSQL_DSN:?MYSQL_DSN is required}
+      MYSQL_DSN: e2eechat:${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}@tcp(mysql:3306)/e2eechat?charset=utf8mb4&parseTime=True&loc=Local
       TURN_SECRET: ${TURN_SECRET:?TURN_SECRET is required}
       JPUSH_APP_KEY: ${JPUSH_APP_KEY:-}
       JPUSH_MASTER_SECRET: ${JPUSH_MASTER_SECRET:-}
-      # 版本信息：每次发版时同步修改前端 package.json 的 version 与这里的 APP_LATEST_VERSION
-      APP_LATEST_VERSION: "1.1.1"   # 线上最新版本号
-      APP_MIN_VERSION: "1.0.0"      # 低于此版本强制更新（可留空）
-      APP_UPDATE_URL: "https://yb.yzs88.com"  # 更新/下载地址
-      APP_VERSION_NOTES: ""         # 更新说明（可留空）
+      APP_LATEST_VERSION: "1.1.1"
+      APP_MIN_VERSION: "1.0.0"
+      APP_UPDATE_URL: "https://m.yzs88.com"
+      APP_VERSION_NOTES: ""
     volumes:
-      # build.sh uploads this protected file to the deployment directory root.
-      - ./config.prod.yaml:/app/config.yaml:ro
-    networks:
-      - default
-      - e2eechat-net
+      - ./deploy/config.yaml:/app/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8888/api/version"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   frontend:
     image: e2eechat-frontend:latest
     pull_policy: never
-    restart: always
+    restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     volumes:
-      - /usr/share/nginx/html/download:/usr/share/nginx/html/download:ro
+      - ./downloads:/usr/share/nginx/html/download:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
 
-networks:
-  default: {}
-  e2eechat-net:
-    external: true
+  edge:
+    image: nginx:1.30.4-alpine
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx-vhost/m.yzs88.com.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./ssl/m.yzs88.com.pem:/etc/nginx/ssl/m.yzs88.com.pem:ro
+      - ./ssl/m.yzs88.com.key:/etc/nginx/ssl/m.yzs88.com.key:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-q", "-O", "/dev/null", "https://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  coturn:
+    image: coturn/coturn:4.17.2-r0-alpine
+    restart: unless-stopped
+    command:
+      - --no-cli
+      - --log-file=stdout
+      - --fingerprint
+      - --use-auth-secret
+      - --static-auth-secret=${TURN_SECRET:?TURN_SECRET is required}
+      - --realm=m.yzs88.com
+      - --external-ip=112.18.238.6
+      - --min-port=49160
+      - --max-port=49200
+      - --no-tls
+      - --no-dtls
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "49160-49200:49160-49200/udp"
+
+volumes:
+  mysql-data:
+  redis-data:

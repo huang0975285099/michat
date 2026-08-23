@@ -1,0 +1,26 @@
+server:
+  port: 8888
+  jwt_secret: ""
+
+mysql:
+  dsn: ""
+
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 0
+
+turn:
+  secret: ""
+  host: "m.yzs88.com"
+  port: 3478
+
+jpush:
+  app_key: ""
+  master_secret: ""
+  enabled: true
+
+allowed_origins:
+  - "https://m.yzs88.com"
+  - "https://localhost"
+  - "capacitor://localhost"

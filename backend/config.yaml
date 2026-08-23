@@ -17,7 +17,7 @@ redis:
 turn:
   # Override: TURN_SECRET environment variable
   secret: "8642c022c77b01f463a84f842d074ccc500bb3d2b220249ee2cd02cd07a6af27"
-  host: "yb.yzs88.com"
+  host: "m.yzs88.com"
   port: 3478
 
 # CORS and WebSocket allowed sources (actual domain name must be filled in for production environment)
@@ -31,8 +31,8 @@ jpush:
 version:
   latest: "1.0.0"
   min_supported: "1.0.0"
-  url: "https://yb.yzs88.com"
+  url: "https://m.yzs88.com"
   notes: ""
 
 allowed_origins:
-  - "https://yb.yzs88.com"
+  - "https://m.yzs88.com"

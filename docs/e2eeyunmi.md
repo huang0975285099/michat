@@ -10,7 +10,7 @@
 
 - **产品名称**：云密
 - **产品定位**：隐私安全工具
-- **部署域名**：https://yb.yzs88.com
+- **部署域名**：https://m.yzs88.com
 - **支持平台**：Web 浏览器、PWA（可安装到桌面）、Electron 桌面客户端（Windows .exe）、Android 原生客户端（.apk）
 - **客户端下载**：首页提供 Windows 桌面端（`yunChat.exe`）与 Android（`yunChat.apk`）下载，iOS 暂以 PWA 形式提供
 - **当前游戏入口**：铁拳3D（1v1策略对战）
@@ -362,34 +362,34 @@
 ### 6.1 容器化部署
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  Docker Compose                  │
-│                                                  │
-│  ┌──────────────────┐  ┌──────────────────────┐ │
-│  │  e2eechat-backend │  │  e2eechat-frontend   │ │
-│  │  (Go 服务)        │  │  (Nginx 静态托管)     │ │
-│  │  Port: 8888      │  │  Port: 80            │ │
-│  └──────────────────┘  └──────────────────────┘ │
-│                                                  │
-│  Network: e2eechat-net (连接外部 MySQL/Redis)     │
-└─────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────┐
+│                 Docker Compose                     │
+│                                                    │
+│  edge Nginx (:80/:443) ──> frontend ──> backend   │
+│                                             │      │
+│                                     MySQL + Redis  │
+│                                                    │
+│  coturn (:3478, UDP relay :49160-49200)            │
+│  MySQL/Redis 仅在 Compose 私有网络内可达              │
+└────────────────────────────────────────────────────┘
 ```
 
-### 6.2 外部依赖
+### 6.2 运行依赖
 
 | 服务 | 说明 |
 |------|------|
-| MySQL | 用户数据、好友关系、消息回执存储 |
-| Redis | 会话缓存、WebSocket 状态管理、最多7天离线密文队列 |
-| TURN Server | WebRTC NAT 穿透（coturn，端口 3478） |
-| Nginx | 反向代理、SSL 终止、WebSocket 升级 |
+| MySQL | Compose 内置；用户数据、好友关系、消息回执存储 |
+| Redis | Compose 内置；会话缓存、WebSocket 状态管理、最多7天离线密文队列 |
+| TURN Server | Compose 内置 coturn；WebRTC NAT 穿透（3478 与 UDP 49160-49200） |
+| Nginx | Compose 内置；反向代理、SSL 终止、WebSocket 升级（80/443） |
 | JPush (极光推送) | Android 端离线消息推送（REST API，需配置 AppKey/MasterSecret） |
 
 ### 6.3 构建与部署
 
 - **本地构建**：`build.sh` 脚本构建前后端 Docker 镜像并打包发布包
-- **服务器部署**：`load.sh` 脚本加载镜像、初始化数据库、启动服务、配置 Nginx
+- **服务器部署**：`load.sh` 脚本加载镜像、校验 Compose/Nginx 配置并启动隔离的服务栈
 - **SSL 配置**：TLS 1.2/1.3，强密码套件
+- **部署说明**：参见 `docs/deploy-m-yzs88-com.md`
 
 ---
 

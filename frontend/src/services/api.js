@@ -4,7 +4,7 @@ import { Notify } from 'quasar'
 const isDev = process.env.DEV
 
 const api = axios.create({
-  baseURL: isDev ? '/api' : 'https://yb.yzs88.com/api',
+  baseURL: isDev ? '/api' : 'https://m.yzs88.com/api',
   timeout: 10000
 })
 
