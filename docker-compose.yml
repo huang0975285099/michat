@@ -10,7 +10,7 @@ services:
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: e2eechat
-      MYSQL_USER: e2eechat
+      MYSQL_USER: ${MYSQL_USER:-e2eechat}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
       TZ: Asia/Shanghai
@@ -47,7 +47,7 @@ services:
     environment:
       CONFIG: /app/config.yaml
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
-      MYSQL_DSN: e2eechat:${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}@tcp(mysql:3306)/e2eechat?charset=utf8mb4&parseTime=True&loc=Local
+      MYSQL_DSN: ${MYSQL_USER:-e2eechat}:${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}@tcp(mysql:3306)/e2eechat?charset=utf8mb4&parseTime=True&loc=Local
       TURN_SECRET: ${TURN_SECRET:?TURN_SECRET is required}
       JPUSH_APP_KEY: ${JPUSH_APP_KEY:-}
       JPUSH_MASTER_SECRET: ${JPUSH_MASTER_SECRET:-}

@@ -19,8 +19,9 @@
    如果端口仍无法从公网访问，需要在运营商、路由器或云平台边界放行。
 3. 将部署机的 SSH 公钥加入服务器 `test` 用户的 `authorized_keys`，或在
    脚本运行时输入 SSH 密码。可通过 `SSH_KEY` 指定独立部署密钥。
-4. 复制 `.env.example` 为 `.env`，为以下字段填写非空随机值：
-   `JWT_SECRET`、`MYSQL_PASSWORD`、`MYSQL_ROOT_PASSWORD`、`TURN_SECRET`。
+4. 复制 `.env.example` 为 `.env`，确认 `MYSQL_USER`，并为以下字段填写
+   非空随机值：`JWT_SECRET`、`MYSQL_PASSWORD`、`MYSQL_ROOT_PASSWORD`、
+   `TURN_SECRET`。
 5. 保证 `ssl/m.yzs88.com.pem` 与 `ssl/m.yzs88.com.key` 存在且匹配。
 
 `.env`、证书私钥、构建目录均被 Git 忽略。发布脚本会把远程 `.env` 和
