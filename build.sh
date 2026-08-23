@@ -9,7 +9,7 @@
 #   ./build.sh all --package   # also create an offline deployment archive
 #
 # Override the SSH target when needed:
-#   SSH_KEY=~/.ssh/michat_deploy_ed25519 REMOTE_USER=test ./build.sh
+#   SSH_KEY=~/.ssh/michat_deploy_ed25519 REMOTE_USER=test SSH_PORT=2202 ./build.sh
 
 set -Eeuo pipefail
 
@@ -32,9 +32,10 @@ CREATE_PACKAGE=false
 REMOTE_USER="${REMOTE_USER:-test}"
 REMOTE_IP="${REMOTE_IP:-112.18.238.6}"
 REMOTE_DIR="${REMOTE_DIR:-/home/test/e2eechat}"
+SSH_PORT="${SSH_PORT:-2202}"
 SSH_KEY="${SSH_KEY:-}"
-SSH_ARGS=()
-SCP_ARGS=()
+SSH_ARGS=(-p "$SSH_PORT")
+SCP_ARGS=(-P "$SSH_PORT")
 
 usage() {
     cat <<'EOF'
@@ -91,8 +92,8 @@ preflight() {
 
     if [[ -n "$SSH_KEY" ]]; then
         require_file "$SSH_KEY"
-        SSH_ARGS=(-i "$SSH_KEY")
-        SCP_ARGS=(-i "$SSH_KEY")
+        SSH_ARGS+=(-i "$SSH_KEY")
+        SCP_ARGS+=(-i "$SSH_KEY")
     fi
 
     if command -v openssl >/dev/null 2>&1; then
@@ -250,7 +251,7 @@ main() {
     parse_args "$@"
     preflight
 
-    log_info "Target: ${REMOTE_USER}@${REMOTE_IP}:${REMOTE_DIR} (mode: $MODE)"
+    log_info "Target: ${REMOTE_USER}@${REMOTE_IP}:${SSH_PORT}${REMOTE_DIR} (mode: $MODE)"
     clean
     case "$MODE" in
         all) build_backend; build_frontend ;;

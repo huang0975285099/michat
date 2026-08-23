@@ -3,6 +3,7 @@
 ## 目标
 
 - 服务器：`112.18.238.6`
+- SSH 端口：`2202`
 - SSH 用户默认值：`test`
 - 部署目录默认值：`/home/test/e2eechat`
 - 域名：`m.yzs88.com`
@@ -40,6 +41,7 @@
 ```bash
 REMOTE_USER=test \
 REMOTE_IP=112.18.238.6 \
+SSH_PORT=2202 \
 REMOTE_DIR=/home/test/e2eechat \
 SSH_KEY=~/.ssh/michat_deploy_ed25519 \
 ./build.sh
