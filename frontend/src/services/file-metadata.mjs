@@ -1,6 +1,6 @@
 import { decryptMessage, encryptMessage } from './crypto.js'
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024
+const MAX_FILE_SIZE = 100 * 1024 * 1024
 const MAX_FILENAME_BYTES = 255
 const MAX_FILETYPE_BYTES = 255
 const ALLOWED_FILE_EXTENSIONS = new Set([

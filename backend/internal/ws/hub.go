@@ -44,10 +44,10 @@ const (
 	maxMessageSize  = 256 * 1024 //256KB (supports file block transfer)
 	fileChunkSize   = 128 * 1024 //Frontend chunk size (original ciphertext bytes)
 	maxChunkData    = ((fileChunkSize + 2) / 3) * 4
-	aesGCMTagSize   = 16               //WebCrypto AES-GCM default 128-bit tag
-	maxFileSize     = 10 * 1024 * 1024 //10MB plain text limit
+	aesGCMTagSize   = 16                //WebCrypto AES-GCM default 128-bit tag
+	maxFileSize     = 100 * 1024 * 1024 //100MB plain text limit
 	maxFilename     = 255
-	maxTotalChunks  = 100
+	maxTotalChunks  = (maxFileSize + aesGCMTagSize + fileChunkSize - 1) / fileChunkSize
 	fileTransferTTL = 3 * time.Minute
 )
 
@@ -1048,7 +1048,7 @@ func validateFileOffer(p FileOfferPayload) (metadataMode, error) {
 		return fileMetadataLegacy, errors.New("无效的消息编号")
 	}
 	if p.Filesize <= 0 || p.Filesize > maxFileSize {
-		return fileMetadataLegacy, errors.New("文件大小必须大于 0 且不能超过 10MB")
+		return fileMetadataLegacy, errors.New("文件大小必须大于 0 且不能超过 100MB")
 	}
 	if p.TotalChunks != expectedFileChunks(p.Filesize) || p.TotalChunks > maxTotalChunks {
 		return fileMetadataLegacy, errors.New("文件分块数量与声明大小不匹配")

@@ -56,6 +56,16 @@ func TestValidateEncryptedFileOffer(t *testing.T) {
 	}
 }
 
+func TestValidateFileOfferAccepts100MBFile(t *testing.T) {
+	offer := validEncryptedFileOffer()
+	offer.Filesize = maxFileSize
+	offer.TotalChunks = expectedFileChunks(maxFileSize)
+
+	if _, err := validateFileOffer(offer); err != nil {
+		t.Fatalf("validate 100MB file offer: %v", err)
+	}
+}
+
 func TestValidateFileOfferRejectsMalformedEncryptedMetadata(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -158,7 +168,7 @@ func TestExpectedFileChunksAndSizes(t *testing.T) {
 		{filesize: 1, chunks: 1, lastSize: 1 + aesGCMTagSize},
 		{filesize: fileChunkSize - aesGCMTagSize, chunks: 1, lastSize: fileChunkSize},
 		{filesize: fileChunkSize - aesGCMTagSize + 1, chunks: 2, lastSize: 1},
-		{filesize: maxFileSize, chunks: 81, lastSize: aesGCMTagSize},
+		{filesize: maxFileSize, chunks: 801, lastSize: aesGCMTagSize},
 	}
 	for _, tt := range tests {
 		if got := expectedFileChunks(tt.filesize); got != tt.chunks {

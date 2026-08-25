@@ -216,7 +216,7 @@
         :disable="sending || isTransferring"
         @click="fileInputEl.click()"
       >
-        <q-tooltip>Send files（maximum10MB）</q-tooltip>
+        <q-tooltip>Send files（maximum100MB）</q-tooltip>
       </q-btn>
       <q-btn round flat icon="sentiment_satisfied_alt" color="grey-7">
         <q-menu anchor="top right" self="bottom right" :offset="[0, 8]" max-height="260px">

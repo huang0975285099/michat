@@ -84,6 +84,11 @@ test('validates decrypted filenames using UTF-8 length and final extension', () 
   assert.doesNotThrow(() => validateFileMetadata('archive.tar.gz', 'application/gzip', 123))
 })
 
+test('accepts files up to 100MB and rejects larger files', () => {
+  assert.doesNotThrow(() => validateFileMetadata('archive.zip', 'application/zip', 100 * 1024 * 1024))
+  assert.throws(() => validateFileMetadata('archive.zip', 'application/zip', 100 * 1024 * 1024 + 1))
+})
+
 test('accepts legacy plaintext metadata during the compatibility window', async () => {
   const opened = await openFileOfferMetadata({
     filename: 'legacy.docx',
