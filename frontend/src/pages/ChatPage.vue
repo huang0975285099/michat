@@ -213,8 +213,15 @@
       </div>
     </div>
 
-    <!-- Input field -->
-    <div class="row q-pa-sm q-gutter-xs items-center bg-white" style="border-top: 1px solid #eee; padding-left: 0;">
+    <!-- Burn-after-read status: only takes up space when enabled -->
+    <div v-if="burnMode" class="burn-mode-status">
+      <q-icon name="local_fire_department" size="17px" />
+      <span>阅后即焚已开启 · 对方阅读 2 小时后删除</span>
+      <q-btn flat round dense icon="close" size="sm" aria-label="关闭阅后即焚" @click="burnMode = false" />
+    </div>
+
+    <!-- Compact dynamic input bar -->
+    <div class="chat-composer bg-white">
       <!-- Hidden file picker -->
       <input
         ref="fileInputEl"
@@ -223,51 +230,48 @@
         :accept="allowedFileTypes"
         @change="onFileSelected"
       />
-      <!-- Burn after reading switch -->
+
+      <!-- Switch between text and hold-to-talk modes -->
       <q-btn
         round
         flat
-        icon="local_fire_department"
-        :color="burnMode ? 'orange' : 'grey-5'"
-        @click="burnMode = !burnMode"
+        dense
+        :icon="voiceInputMode ? 'keyboard' : 'mic_none'"
+        color="grey-7"
+        :disable="voicePreparing || voiceRecording"
+        :aria-label="voiceInputMode ? '切换到文字输入' : '切换到语音输入'"
+        @click="toggleVoiceInputMode"
       >
-        <q-tooltip>{{ burnMode ? 'Burn after reading is enabled：After the other party reads2Automatically delete after hours' : 'Turn on and burn after reading' }}</q-tooltip>
+        <q-tooltip>{{ voiceInputMode ? '切换到文字输入' : '切换到语音输入' }}</q-tooltip>
       </q-btn>
+
+      <button
+        v-if="voiceInputMode"
+        type="button"
+        class="voice-hold-input"
+        :class="{ recording: voicePreparing || voiceRecording }"
+        :disabled="sending || voiceSending || isTransferring || callStore.state !== 'idle'"
+        @pointerdown.prevent="beginVoiceGesture"
+        @contextmenu.prevent
+      >
+        {{ voicePreparing ? '正在启用麦克风…' : voiceRecording ? '松开发送，上滑取消' : '按住说话' }}
+      </button>
+
       <q-input
+        v-else
         ref="inputEl"
         v-model="inputText"
         outlined
         dense
         rounded
-        placeholder="Enter message..."
-        class="col"
+        placeholder="输入消息…"
+        class="composer-input"
         @keyup.enter="sendMsg"
+        @focus="morePanelOpen = false"
         :disable="sending || voiceSending || voiceRecording"
       />
-      <q-btn
-        round
-        flat
-        icon="mic"
-        :color="voiceRecording ? 'negative' : 'grey-7'"
-        :disable="sending || voiceSending || isTransferring || callStore.state !== 'idle'"
-        class="voice-record-button"
-        @pointerdown.prevent="beginVoiceGesture"
-        @contextmenu.prevent
-      >
-        <q-tooltip>按住说话</q-tooltip>
-      </q-btn>
-      <!-- Attachment button -->
-      <q-btn
-        round
-        flat
-        icon="attach_file"
-        color="grey-7"
-        :disable="sending || voiceSending || voiceRecording || isTransferring"
-        @click="fileInputEl.click()"
-      >
-        <q-tooltip>Send files（maximum100MB）</q-tooltip>
-      </q-btn>
-      <q-btn round flat icon="sentiment_satisfied_alt" color="grey-7">
+
+      <q-btn v-if="!voiceInputMode" round flat dense icon="sentiment_satisfied_alt" color="grey-7" aria-label="选择表情">
         <q-menu anchor="top right" self="bottom right" :offset="[0, 8]" max-height="260px">
           <div style="width: 288px">
             <q-tabs v-model="emojiTab" dense align="justify" class="bg-grey-2 text-grey-8" indicator-color="primary" style="font-size:18px">
@@ -284,15 +288,55 @@
           </div>
         </q-menu>
       </q-btn>
+
       <q-btn
+        v-if="hasInputText && !voiceInputMode"
         round
         unelevated
+        dense
         :color="burnMode ? 'orange' : 'primary'"
         icon="send"
         :loading="sending || voiceSending"
+        aria-label="发送消息"
         @click="sendMsg"
       />
+      <q-btn
+        v-else
+        round
+        flat
+        dense
+        :icon="morePanelOpen ? 'close' : 'add'"
+        color="grey-7"
+        :disable="sending || voiceSending || voicePreparing || voiceRecording || isTransferring"
+        aria-label="更多功能"
+        @click="toggleMorePanel"
+      />
     </div>
+
+    <q-slide-transition>
+      <div v-show="morePanelOpen" class="composer-more-panel">
+        <button
+          type="button"
+          class="composer-more-action"
+          :disabled="sending || voiceSending || voiceRecording || isTransferring"
+          @click="openFilePicker"
+        >
+          <span class="composer-more-icon"><q-icon name="attach_file" size="26px" /></span>
+          <span>文件</span>
+          <small>最大 100MB</small>
+        </button>
+        <button
+          type="button"
+          class="composer-more-action"
+          :class="{ active: burnMode }"
+          @click="toggleBurnMode"
+        >
+          <span class="composer-more-icon"><q-icon name="local_fire_department" size="26px" /></span>
+          <span>{{ burnMode ? '关闭阅后即焚' : '阅后即焚' }}</span>
+          <small>阅读 2 小时后删除</small>
+        </button>
+      </div>
+    </q-slide-transition>
 
     <!-- Picture full screen preview -->
     <q-dialog v-model="imagePreview.show" maximized>
@@ -371,6 +415,9 @@ const fileInputEl = ref(null)
 const inputText = ref('')
 const sending = ref(false)
 const burnMode = ref(false)  //Burn after reading mode
+const voiceInputMode = ref(false)
+const morePanelOpen = ref(false)
+const hasInputText = computed(() => inputText.value.trim().length > 0)
 // The message area is displayed only after the initial scroll to the bottom is completed to avoid users seeing jitter when jumping from the middle to the bottom.
 const scrolled = ref(false)
 // The server calibration time is refreshed every minute, and the driver displays a countdown that burns after reading.
@@ -412,6 +459,35 @@ const allowedFileTypes = [
 ].join(',')
 
 // ── Voice recording and playback ───────────────────────────────────
+
+function toggleVoiceInputMode() {
+  const keepBottom = isNearBottom()
+  voiceInputMode.value = !voiceInputMode.value
+  morePanelOpen.value = false
+  if (voiceInputMode.value) inputEl.value?.blur?.()
+  nextTick(() => {
+    if (!voiceInputMode.value) inputEl.value?.focus?.()
+    if (keepBottom) scrollToBottomReliable()
+  })
+}
+
+function toggleMorePanel() {
+  const keepBottom = isNearBottom()
+  const opening = !morePanelOpen.value
+  morePanelOpen.value = opening
+  if (opening) inputEl.value?.blur?.()
+  if (keepBottom) nextTick(() => scrollToBottomReliable())
+}
+
+function openFilePicker() {
+  morePanelOpen.value = false
+  fileInputEl.value?.click()
+}
+
+function toggleBurnMode() {
+  burnMode.value = !burnMode.value
+  morePanelOpen.value = false
+}
 
 function voiceBarHeight(index) {
   const shape = 0.45 + Math.abs(Math.sin(index * 1.37)) * 0.55
@@ -1084,6 +1160,113 @@ function shouldCompact(msgs, idx) {
 }
 .emoji-item:hover {
   background: rgba(0, 0, 0, 0.08);
+}
+.burn-mode-status {
+  min-height: 30px;
+  padding: 3px 8px 3px 12px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #e65100;
+  background: #fff3e0;
+  border-top: 1px solid #ffe0b2;
+  font-size: 12px;
+}
+.burn-mode-status span {
+  flex: 1;
+  min-width: 0;
+}
+.chat-composer {
+  min-height: 54px;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-top: 1px solid #eee;
+}
+.chat-composer :deep(.q-btn) {
+  flex: 0 0 auto;
+  min-width: 40px;
+  min-height: 40px;
+}
+.composer-input,
+.voice-hold-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.voice-hold-input {
+  height: 40px;
+  border: 1px solid #c7c7c7;
+  border-radius: 20px;
+  background: #fff;
+  color: #333;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.voice-hold-input:active,
+.voice-hold-input.recording {
+  color: #1565c0;
+  background: #e3f2fd;
+  border-color: #90caf9;
+}
+.voice-hold-input:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.composer-more-panel {
+  min-height: 118px;
+  padding: 14px 16px 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  background: #f6f7f9;
+  border-top: 1px solid #e5e5e5;
+}
+.composer-more-action {
+  width: 102px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: #444;
+  font: inherit;
+  cursor: pointer;
+}
+.composer-more-icon {
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e0e0e0;
+  border-radius: 14px;
+  background: #fff;
+  color: #555;
+}
+.composer-more-action small {
+  color: #999;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.composer-more-action.active,
+.composer-more-action.active small,
+.composer-more-action.active .composer-more-icon {
+  color: #ef6c00;
+}
+.composer-more-action.active .composer-more-icon {
+  border-color: #ffcc80;
+  background: #fff3e0;
+}
+.composer-more-action:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .bubble-mine {
   background: #1976d2;

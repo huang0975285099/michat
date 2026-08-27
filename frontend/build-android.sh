@@ -134,7 +134,7 @@ build_release_apk() {
         OUTPUT_APK="../../dist/yunChat-$(date +%Y%m%d%H%M%S)-release.apk"
         cp "$APK_PATH" "$OUTPUT_APK"
         log_info "✓ Release APK: $OUTPUT_APK"
-        log_warn "APK unsigned，Requires signature before publishing to Play Store"
+        log_info "✓ Release signature applied by the Gradle signing configuration"
         ls -lh "$OUTPUT_APK"
     else
         log_error "Release APK not found"
