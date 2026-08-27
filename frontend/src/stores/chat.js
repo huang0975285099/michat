@@ -808,7 +808,12 @@ export const useChatStore = defineStore('chat', () => {
     messages.value[chatId].push(fullMsg)
     try {
       await ensureMessageKey()
-      const metaText = JSON.stringify({ filename: msg.filename, filesize: msg.filesize, filetype: msg.filetype })
+      const metaText = JSON.stringify({
+        filename: msg.filename,
+        filesize: msg.filesize,
+        filetype: msg.filetype,
+        ...(msg.kind === 'voice' ? { kind: 'voice', durationMs: msg.durationMs } : {})
+      })
       const encryptedText = await encryptMessageText(metaText, messageEncryptKey)
       await dbAddMessage({
         id: msg.id,
@@ -956,6 +961,8 @@ export const useChatStore = defineStore('chat', () => {
         filename: transfer.filename,
         filesize: transfer.filesize,
         filetype: transfer.filetype,
+        kind: transfer.kind,
+        durationMs: transfer.durationMs,
         objectUrl,
         mine: false,
         burnAfterRead: transfer.burnAfterRead || false,
@@ -993,9 +1000,13 @@ export const useChatStore = defineStore('chat', () => {
    * @param {string} recipientPubKey
    * @param {File} file
    * @param {boolean} burnAfterRead - burn after reading (automatically deleted 2 hours after the other party reads it)
+   * @param {{kind?: 'voice', durationMs?: number}} options - encrypted attachment metadata
    */
-  async function sendFile(toChatId, recipientPubKey, file, burnAfterRead = false) {
+  async function sendFile(toChatId, recipientPubKey, file, burnAfterRead = false, options = {}) {
     validateFile(file)
+
+    const kind = options.kind === 'voice' ? 'voice' : undefined
+    const durationMs = kind === 'voice' ? Math.round(options.durationMs) : undefined
 
     const transferId = crypto.randomUUID()
     const msgId = genMsgId()  //Message record ID (in read receipt format), separate from the UUID used for WebSocket routing
@@ -1007,6 +1018,8 @@ export const useChatStore = defineStore('chat', () => {
       filename: file.name,
       filesize: file.size,
       filetype: file.type,
+      kind,
+      durationMs,
       totalChunks: 0,
       progress: 0,
       status: 'pending'
@@ -1016,7 +1029,12 @@ export const useChatStore = defineStore('chat', () => {
       // Read and encrypt files
       const fileBuffer = await file.arrayBuffer()
       const { ephemeralPubKey, iv, ciphertext } = await encryptFile(fileBuffer, recipientPubKey)
-      const sealedMetadata = await sealFileMetadata({ filename: file.name, filetype: file.type }, recipientPubKey)
+      const sealedMetadata = await sealFileMetadata({
+        filename: file.name,
+        filetype: file.type,
+        kind,
+        durationMs
+      }, recipientPubKey)
 
       // First create a local record of the sender to be confirmed and save the file body. In this way, the file_done on the receiving end is even on the sending side.
       // After a momentary disconnection, the file can be reposted offline and the file can be restored to successfully sent based on msg_id by restarting the application.
@@ -1028,6 +1046,8 @@ export const useChatStore = defineStore('chat', () => {
         filename: file.name,
         filesize: file.size,
         filetype: file.type,
+        kind,
+        durationMs,
         objectUrl: localObjectUrl,
         mine: true,
         status: 'pending',
@@ -1378,6 +1398,8 @@ function validateMsgId(msgId) {
         filename: metadata.filename,
         filesize,
         filetype: metadata.filetype,
+        kind: metadata.kind,
+        durationMs: metadata.durationMs,
         totalChunks: total_chunks,
         chunks: new Array(total_chunks).fill(null),
         receivedCount: 0,

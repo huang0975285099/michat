@@ -26,6 +26,7 @@ var (
 	allowedFileExtensions = map[string]struct{}{
 		"jpg": {}, "jpeg": {}, "png": {}, "gif": {}, "webp": {}, "bmp": {}, "svg": {},
 		"mp4": {}, "webm": {}, "mov": {},
+		"ogg": {}, "m4a": {}, "aac": {}, "mp3": {}, "wav": {},
 		"doc": {}, "docx": {}, "xls": {}, "xlsx": {}, "ppt": {}, "pptx": {}, "pdf": {},
 		"zip": {}, "rar": {}, "7z": {}, "tar": {}, "gz": {}, "apk": {},
 	}

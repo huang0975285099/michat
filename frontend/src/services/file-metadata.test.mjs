@@ -43,6 +43,41 @@ test('encrypts file metadata without plaintext wire fields and decrypts it for t
   assert.deepEqual(opened, { filename: '身份证照片.jpg', filetype: 'image/jpeg' })
 })
 
+test('encrypts and validates voice metadata', async () => {
+  const { pair, publicKey } = await recipientKeyPair()
+  const sealed = await sealFileMetadata(
+    {
+      filename: 'voice-123.webm',
+      filetype: 'audio/webm;codecs=opus',
+      kind: 'voice',
+      durationMs: 2450,
+    },
+    publicKey,
+  )
+
+  assert.equal(JSON.stringify(sealed).includes('voice'), false)
+  const opened = await openFileOfferMetadata(
+    { ...sealed, filesize: 321 },
+    payload => decryptMessageWithPrivateKey(payload, pair.privateKey),
+  )
+  assert.deepEqual(opened, {
+    filename: 'voice-123.webm',
+    filetype: 'audio/webm;codecs=opus',
+    kind: 'voice',
+    durationMs: 2450,
+  })
+})
+
+test('rejects invalid voice metadata', async () => {
+  const { publicKey } = await recipientKeyPair()
+  await assert.rejects(() => sealFileMetadata({
+    filename: 'voice.webm',
+    filetype: 'video/webm',
+    kind: 'voice',
+    durationMs: 1000,
+  }, publicKey))
+})
+
 test('rejects tampered encrypted file metadata', async () => {
   const { pair, publicKey } = await recipientKeyPair()
   const sealed = await sealFileMetadata(

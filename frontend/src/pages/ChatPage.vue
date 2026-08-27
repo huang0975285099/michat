@@ -58,7 +58,18 @@
           <div class="q-pa-sm bubble-theirs" :class="{ 'bubble-burn': msg.burnAfterRead }">
             <!-- file message -->
             <template v-if="msg.type === 'file'">
-              <img v-if="isMsgImage(msg) && msg.objectUrl" :src="msg.objectUrl" class="file-img" @click="imagePreview = { show: true, url: msg.objectUrl }" />
+              <button
+                v-if="isMsgVoice(msg)"
+                type="button"
+                class="voice-message voice-message-theirs"
+                :disabled="!msg.objectUrl"
+                @click="toggleVoicePlayback(msg)"
+              >
+                <q-icon :name="playingVoiceId === msg.id ? 'pause' : 'play_arrow'" size="22px" />
+                <span class="voice-message-wave">▂▄▆▃▇▅▂▄▆</span>
+                <span>{{ formatVoiceDuration(msg.durationMs) }}</span>
+              </button>
+              <img v-else-if="isMsgImage(msg) && msg.objectUrl" :src="msg.objectUrl" class="file-img" @click="imagePreview = { show: true, url: msg.objectUrl }" />
               <video v-else-if="isMsgVideo(msg) && msg.objectUrl" :src="msg.objectUrl" controls class="file-video" />
               <div v-else class="file-card file-card-theirs">
                 <span class="file-icon">{{ getFileIcon(msg.filetype, msg.filename) }}</span>
@@ -101,7 +112,18 @@
           <div class="q-pa-sm bubble-mine" :class="{ 'bubble-burn': msg.burnAfterRead }">
             <!-- file message -->
             <template v-if="msg.type === 'file'">
-              <img v-if="isMsgImage(msg) && msg.objectUrl" :src="msg.objectUrl" class="file-img" @click="imagePreview = { show: true, url: msg.objectUrl }" />
+              <button
+                v-if="isMsgVoice(msg)"
+                type="button"
+                class="voice-message voice-message-mine"
+                :disabled="!msg.objectUrl"
+                @click="toggleVoicePlayback(msg)"
+              >
+                <q-icon :name="playingVoiceId === msg.id ? 'pause' : 'play_arrow'" size="22px" />
+                <span class="voice-message-wave">▂▄▆▃▇▅▂▄▆</span>
+                <span>{{ formatVoiceDuration(msg.durationMs) }}</span>
+              </button>
+              <img v-else-if="isMsgImage(msg) && msg.objectUrl" :src="msg.objectUrl" class="file-img" @click="imagePreview = { show: true, url: msg.objectUrl }" />
               <video v-else-if="isMsgVideo(msg) && msg.objectUrl" :src="msg.objectUrl" controls class="file-video" />
               <div v-else class="file-card file-card-mine">
                 <span class="file-icon">{{ getFileIcon(msg.filetype, msg.filename) }}</span>
@@ -176,6 +198,21 @@
       <q-icon v-else-if="activeTransfer.status === 'done'" name="check_circle_outline" color="positive" size="18px" />
     </div>
 
+    <div v-if="voicePreparing || voiceRecording" class="voice-record-overlay" :class="{ cancelling: voiceCancelling }">
+      <div class="voice-record-card">
+        <q-icon :name="voiceCancelling ? 'delete_outline' : 'mic'" size="34px" />
+        <div class="voice-record-time">{{ voicePreparing ? '正在启用麦克风…' : formatVoiceDuration(voiceDurationMs) }}</div>
+        <div v-if="!voicePreparing" class="voice-levels" aria-hidden="true">
+          <span
+            v-for="index in 15"
+            :key="index"
+            :style="{ height: voiceBarHeight(index) + 'px' }"
+          />
+        </div>
+        <div class="voice-record-hint">{{ voiceCancelling ? '松开取消' : '松开发送，上滑取消' }}</div>
+      </div>
+    </div>
+
     <!-- Input field -->
     <div class="row q-pa-sm q-gutter-xs items-center bg-white" style="border-top: 1px solid #eee; padding-left: 0;">
       <!-- Hidden file picker -->
@@ -205,15 +242,27 @@
         placeholder="Enter message..."
         class="col"
         @keyup.enter="sendMsg"
-        :disable="sending"
+        :disable="sending || voiceSending || voiceRecording"
       />
+      <q-btn
+        round
+        flat
+        icon="mic"
+        :color="voiceRecording ? 'negative' : 'grey-7'"
+        :disable="sending || voiceSending || isTransferring || callStore.state !== 'idle'"
+        class="voice-record-button"
+        @pointerdown.prevent="beginVoiceGesture"
+        @contextmenu.prevent
+      >
+        <q-tooltip>按住说话</q-tooltip>
+      </q-btn>
       <!-- Attachment button -->
       <q-btn
         round
         flat
         icon="attach_file"
         color="grey-7"
-        :disable="sending || isTransferring"
+        :disable="sending || voiceSending || voiceRecording || isTransferring"
         @click="fileInputEl.click()"
       >
         <q-tooltip>Send files（maximum100MB）</q-tooltip>
@@ -240,7 +289,7 @@
         unelevated
         :color="burnMode ? 'orange' : 'primary'"
         icon="send"
-        :loading="sending"
+        :loading="sending || voiceSending"
         @click="sendMsg"
       />
     </div>
@@ -263,6 +312,13 @@ import { useIdentityStore } from 'src/stores/identity'
 import { useCallStore } from 'src/stores/call'
 import { friendApi } from 'src/services/api'
 import { on, off, getServerNow } from 'src/services/websocket'
+import {
+  MAX_VOICE_DURATION_MS,
+  MIN_VOICE_DURATION_MS,
+  chooseVoiceFormat,
+  createVoiceFilename,
+  formatVoiceDuration,
+} from 'src/services/voice-recorder.mjs'
 import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
 
 // ── File utility functions ─────────────────────────────────────────────
@@ -293,6 +349,7 @@ function formatFileSize(bytes) {
 
 function isMsgImage(msg) { return msg.filetype?.startsWith('image/') }
 function isMsgVideo(msg) { return msg.filetype?.startsWith('video/') }
+function isMsgVoice(msg) { return msg.kind === 'voice' || msg.filetype?.startsWith('audio/') }
 
 const $q = useQuasar()
 const route = useRoute()
@@ -323,6 +380,28 @@ let nudgeTimer = null
 let heightResizeObserver = null
 let rafNudgeId = null
 const imagePreview = ref({ show: false, url: '' })
+const voicePreparing = ref(false)
+const voiceRecording = ref(false)
+const voiceCancelling = ref(false)
+const voiceSending = ref(false)
+const voiceDurationMs = ref(0)
+const voiceLevel = ref(0)
+const playingVoiceId = ref(null)
+
+let voiceStream = null
+let mediaRecorder = null
+let voiceChunks = []
+let voiceFormat = null
+let voiceStartedAt = 0
+let voiceStartY = 0
+let voicePointerHeld = false
+let voiceStopping = false
+let voiceElapsedTimer = null
+let voiceMaxTimer = null
+let voiceAudioContext = null
+let voiceAnalyser = null
+let voiceLevelFrame = null
+let voicePlayer = null
 
 // Allowed file types (for input accept attribute)
 const allowedFileTypes = [
@@ -331,6 +410,224 @@ const allowedFileTypes = [
   '.doc,.docx,.xls,.xlsx,.ppt,.pptx,.pdf',
   '.zip,.rar,.7z,.tar,.gz,.apk'
 ].join(',')
+
+// ── Voice recording and playback ───────────────────────────────────
+
+function voiceBarHeight(index) {
+  const shape = 0.45 + Math.abs(Math.sin(index * 1.37)) * 0.55
+  return 4 + Math.round(voiceLevel.value * shape * 30)
+}
+
+function addVoicePointerListeners() {
+  window.addEventListener('pointermove', updateVoiceGesture, { passive: true })
+  window.addEventListener('pointerup', endVoiceGesture, { once: true })
+  window.addEventListener('pointercancel', cancelVoiceGesture, { once: true })
+}
+
+function removeVoicePointerListeners() {
+  window.removeEventListener('pointermove', updateVoiceGesture)
+  window.removeEventListener('pointerup', endVoiceGesture)
+  window.removeEventListener('pointercancel', cancelVoiceGesture)
+}
+
+async function beginVoiceGesture(event) {
+  if (voicePreparing.value || voiceRecording.value || voiceStopping) return
+  if (!friendPubKey.value) {
+    $q.notify({ type: 'warning', message: '无法获取对方公钥，请刷新后重试' })
+    return
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    $q.notify({ type: 'warning', message: '当前环境不支持麦克风录音' })
+    return
+  }
+
+  voicePointerHeld = true
+  voiceStartY = event.clientY
+  voiceCancelling.value = false
+  voicePreparing.value = true
+  try { event.currentTarget?.setPointerCapture?.(event.pointerId) } catch { /* unsupported capture */ }
+  addVoicePointerListeners()
+
+  try {
+    voiceFormat = chooseVoiceFormat()
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      }
+    })
+
+    if (!voicePointerHeld) {
+      stream.getTracks().forEach(track => track.stop())
+      voicePreparing.value = false
+      return
+    }
+
+    voiceStream = stream
+    voiceChunks = []
+    mediaRecorder = new MediaRecorder(stream, { mimeType: voiceFormat.mimeType })
+    mediaRecorder.addEventListener('dataavailable', event => {
+      if (event.data?.size) voiceChunks.push(event.data)
+    })
+    mediaRecorder.start(200)
+
+    voicePreparing.value = false
+    voiceRecording.value = true
+    voiceStartedAt = Date.now()
+    voiceDurationMs.value = 0
+    startVoiceLevelMeter(stream)
+    voiceElapsedTimer = setInterval(() => {
+      voiceDurationMs.value = Date.now() - voiceStartedAt
+    }, 100)
+    voiceMaxTimer = setTimeout(() => {
+      voicePointerHeld = false
+      removeVoicePointerListeners()
+      finishVoiceRecording(false)
+    }, MAX_VOICE_DURATION_MS)
+  } catch (error) {
+    voicePointerHeld = false
+    voicePreparing.value = false
+    removeVoicePointerListeners()
+    stopVoiceCaptureResources()
+    const denied = error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError'
+    $q.notify({
+      type: 'warning',
+      message: denied ? '麦克风权限未开启，请在系统设置中允许后重试' : `录音启动失败：${error?.message || '未知错误'}`
+    })
+  }
+}
+
+function updateVoiceGesture(event) {
+  if (!voicePointerHeld) return
+  voiceCancelling.value = voiceStartY - event.clientY > 80
+}
+
+function endVoiceGesture() {
+  const shouldCancel = voiceCancelling.value
+  voicePointerHeld = false
+  removeVoicePointerListeners()
+  if (voicePreparing.value) return
+  finishVoiceRecording(shouldCancel)
+}
+
+function cancelVoiceGesture() {
+  voicePointerHeld = false
+  removeVoicePointerListeners()
+  if (voicePreparing.value) return
+  finishVoiceRecording(true)
+}
+
+function startVoiceLevelMeter(stream) {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext
+  if (!AudioContextClass) return
+  try {
+    voiceAudioContext = new AudioContextClass()
+    voiceAnalyser = voiceAudioContext.createAnalyser()
+    voiceAnalyser.fftSize = 256
+    voiceAudioContext.createMediaStreamSource(stream).connect(voiceAnalyser)
+    const samples = new Uint8Array(voiceAnalyser.frequencyBinCount)
+    const update = () => {
+      if (!voiceAnalyser || !voiceRecording.value) return
+      voiceAnalyser.getByteFrequencyData(samples)
+      const average = samples.reduce((sum, value) => sum + value, 0) / samples.length
+      voiceLevel.value = Math.min(1, average / 90)
+      voiceLevelFrame = requestAnimationFrame(update)
+    }
+    update()
+  } catch {
+    voiceLevel.value = 0.2
+  }
+}
+
+function clearVoiceTimers() {
+  if (voiceElapsedTimer) { clearInterval(voiceElapsedTimer); voiceElapsedTimer = null }
+  if (voiceMaxTimer) { clearTimeout(voiceMaxTimer); voiceMaxTimer = null }
+  if (voiceLevelFrame) { cancelAnimationFrame(voiceLevelFrame); voiceLevelFrame = null }
+}
+
+function stopVoiceCaptureResources() {
+  clearVoiceTimers()
+  voiceStream?.getTracks().forEach(track => track.stop())
+  voiceStream = null
+  voiceAnalyser = null
+  if (voiceAudioContext) voiceAudioContext.close().catch(() => {})
+  voiceAudioContext = null
+  voiceLevel.value = 0
+}
+
+async function finishVoiceRecording(cancelled) {
+  if (voiceStopping || !mediaRecorder) return
+  voiceStopping = true
+  const recorder = mediaRecorder
+  const durationMs = Math.min(MAX_VOICE_DURATION_MS, Math.max(0, Date.now() - voiceStartedAt))
+  clearVoiceTimers()
+
+  try {
+    const blob = await new Promise(resolve => {
+      recorder.addEventListener('stop', () => {
+        resolve(new Blob(voiceChunks, { type: recorder.mimeType || voiceFormat.mimeType }))
+      }, { once: true })
+      recorder.stop()
+    })
+
+    if (cancelled) {
+      $q.notify({ type: 'info', message: '已取消录音' })
+      return
+    }
+    if (durationMs < MIN_VOICE_DURATION_MS || blob.size === 0) {
+      $q.notify({ type: 'warning', message: '说话时间太短' })
+      return
+    }
+
+    const file = new File(
+      [blob],
+      createVoiceFilename(voiceFormat.extension),
+      { type: recorder.mimeType || voiceFormat.mimeType, lastModified: Date.now() }
+    )
+    voiceSending.value = true
+    await chatStore.sendFile(
+      friendChatId,
+      friendPubKey.value,
+      file,
+      burnMode.value,
+      { kind: 'voice', durationMs: Math.round(durationMs) }
+    )
+  } catch (error) {
+    $q.notify({ type: 'negative', message: `语音发送失败：${error?.message || '未知错误'}` })
+  } finally {
+    mediaRecorder = null
+    voiceChunks = []
+    voiceRecording.value = false
+    voicePreparing.value = false
+    voiceCancelling.value = false
+    voiceSending.value = false
+    voiceDurationMs.value = 0
+    stopVoiceCaptureResources()
+    voiceStopping = false
+  }
+}
+
+function toggleVoicePlayback(msg) {
+  if (!msg.objectUrl) return
+  if (playingVoiceId.value === msg.id && voicePlayer) {
+    voicePlayer.pause()
+    playingVoiceId.value = null
+    return
+  }
+  if (voicePlayer) voicePlayer.pause()
+  voicePlayer = new Audio(msg.objectUrl)
+  playingVoiceId.value = msg.id
+  voicePlayer.addEventListener('ended', () => { playingVoiceId.value = null }, { once: true })
+  voicePlayer.addEventListener('error', () => {
+    playingVoiceId.value = null
+    $q.notify({ type: 'warning', message: '语音无法播放' })
+  }, { once: true })
+  voicePlayer.play().catch(() => {
+    playingVoiceId.value = null
+    $q.notify({ type: 'warning', message: '语音播放失败' })
+  })
+}
 
 // Transmission currently in progress (send or receive)
 const activeTransfer = computed(() => {
@@ -419,6 +716,13 @@ const messages = computed(() => chatStore.getMessages(friendChatId))
 
 let stopStatus = null
 
+function handleVoiceVisibilityChange() {
+  if (!document.hidden) return
+  voicePointerHeld = false
+  removeVoicePointerListeners()
+  if (voiceRecording.value) finishVoiceRecording(true)
+}
+
 onMounted(async () => {
   // Register status listeners first to avoid missing status change events during asynchronous waiting.
   stopStatus = onStatusUpdate((chatId, online) => {
@@ -444,6 +748,7 @@ onMounted(async () => {
     if (footer) heightResizeObserver.observe(footer)
   }
   window.addEventListener('resize', updatePageHeight)
+  document.addEventListener('visibilitychange', handleVoiceVisibilityChange)
 
   // Loading messages - scroll to the end as soon as the message arrives, without waiting for subsequent network requests
   await chatStore.loadMessages(friendChatId)
@@ -497,6 +802,12 @@ onUnmounted(() => {
   cancelRafNudge()
   if (heightResizeObserver) { heightResizeObserver.disconnect(); heightResizeObserver = null }
   window.removeEventListener('resize', updatePageHeight)
+  document.removeEventListener('visibilitychange', handleVoiceVisibilityChange)
+  voicePointerHeld = false
+  removeVoicePointerListeners()
+  if (voiceRecording.value) finishVoiceRecording(true)
+  else stopVoiceCaptureResources()
+  if (voicePlayer) { voicePlayer.pause(); voicePlayer = null }
 })
 
 // Only monitor changes in the number of messages (new/deleted) to avoid deep traversal of the entire array.
@@ -853,5 +1164,87 @@ function shouldCompact(msgs, idx) {
   font-size: 11px;
   opacity: 0.5;
   flex-shrink: 0;
+}
+.voice-message {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 145px;
+  border: 0;
+  padding: 7px 9px;
+  border-radius: 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.voice-message:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.voice-message-mine {
+  color: white;
+  background: rgba(255,255,255,0.16);
+}
+.voice-message-theirs {
+  color: #222;
+  background: rgba(0,0,0,0.06);
+}
+.voice-message-wave {
+  flex: 1;
+  letter-spacing: -1px;
+  opacity: 0.8;
+  white-space: nowrap;
+}
+.voice-record-button {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.voice-record-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 6000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.18);
+}
+.voice-record-card {
+  width: 220px;
+  min-height: 170px;
+  padding: 22px 18px;
+  border-radius: 18px;
+  background: rgba(25, 118, 210, 0.95);
+  color: white;
+  text-align: center;
+  box-shadow: 0 10px 36px rgba(0,0,0,0.28);
+}
+.voice-record-overlay.cancelling .voice-record-card {
+  background: rgba(211, 47, 47, 0.95);
+}
+.voice-record-time {
+  margin-top: 8px;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+.voice-levels {
+  height: 42px;
+  margin: 10px 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+.voice-levels span {
+  display: block;
+  width: 4px;
+  min-height: 4px;
+  border-radius: 3px;
+  background: white;
+  transition: height 0.08s linear;
+}
+.voice-record-hint {
+  font-size: 13px;
+  opacity: 0.92;
 }
 </style>

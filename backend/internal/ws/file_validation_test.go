@@ -27,6 +27,8 @@ func TestValidFileMetadata(t *testing.T) {
 		{name: "rar vendor mime", filename: "archive.rar", filetype: "application/x-winrar", want: true},
 		{name: "rar nonstandard mime", filename: "archive.rar", filetype: "application/rar", want: true},
 		{name: "7z", filename: "archive.7z", filetype: "application/x-7z-compressed", want: true},
+		{name: "voice webm", filename: "voice.webm", filetype: "audio/webm", want: true},
+		{name: "voice ogg", filename: "voice.ogg", filetype: "audio/ogg", want: true},
 		{name: "generic mime requires allowed extension", filename: "archive.rar", filetype: "application/octet-stream", want: true},
 		{name: "empty mime requires allowed extension", filename: "archive.gz", filetype: "", want: true},
 		{name: "office reported as zip", filename: "report.docx", filetype: "application/zip", want: true},

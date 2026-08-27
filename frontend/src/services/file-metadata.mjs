@@ -6,9 +6,12 @@ const MAX_FILETYPE_BYTES = 255
 const ALLOWED_FILE_EXTENSIONS = new Set([
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg',
   'mp4', 'webm', 'mov',
+  'ogg', 'm4a', 'aac', 'mp3', 'wav',
   'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'pdf',
   'zip', 'rar', '7z', 'tar', 'gz', 'apk',
 ])
+
+const MAX_VOICE_DURATION_MS = 5 * 60 * 1000
 
 function validateNameAndType(filename, filetype) {
   if (typeof filename !== 'string' || !filename ||
@@ -32,9 +35,19 @@ export function validateFileMetadata(filename, filetype, filesize) {
   }
 }
 
-export async function sealFileMetadata({ filename, filetype }, recipientPublicKey, encrypt = encryptMessage) {
+function validateOptionalVoiceMetadata(kind, durationMs, filetype) {
+  if (kind === undefined && durationMs === undefined) return {}
+  if (kind !== 'voice' || !filetype.startsWith('audio/') ||
+      !Number.isInteger(durationMs) || durationMs <= 0 || durationMs > MAX_VOICE_DURATION_MS) {
+    throw new Error('File metadata is invalid')
+  }
+  return { kind, durationMs }
+}
+
+export async function sealFileMetadata({ filename, filetype, kind, durationMs }, recipientPublicKey, encrypt = encryptMessage) {
   validateNameAndType(filename, filetype)
-  const encrypted = await encrypt(JSON.stringify({ filename, filetype }), recipientPublicKey)
+  const voiceMetadata = validateOptionalVoiceMetadata(kind, durationMs, filetype)
+  const encrypted = await encrypt(JSON.stringify({ filename, filetype, ...voiceMetadata }), recipientPublicKey)
   return {
     metadata_ephemeral_pub_key: encrypted.ephemeralPubKey,
     metadata_iv: encrypted.iv,
@@ -97,8 +110,10 @@ export async function openFileOfferMetadata(payload, decrypt = decryptMessage) {
   }
 
   validateFileMetadata(metadata?.filename, metadata?.filetype, payload?.filesize)
+  const voiceMetadata = validateOptionalVoiceMetadata(metadata?.kind, metadata?.durationMs, metadata?.filetype)
   return {
     filename: metadata.filename,
     filetype: metadata.filetype,
+    ...voiceMetadata,
   }
 }
