@@ -12,6 +12,8 @@
     "build:android": "quasar build -m capacitor -T android --skip-pkg",
     "build:android:apk": "build-android.cmd debug",
     "build:android:release": "build-android.cmd release",
+    "build:release": "build-release.cmd",
+    "build:release:fast": "build-release.cmd -SkipTests",
     "android:studio": "build-android.cmd studio",
     "lint": "eslint --ext .js,.vue src/",
     "test:call": "node --test src/stores/call.test.mjs src/stores/call-media.test.mjs src/services/websocket-call-offer.test.mjs src/components/video-call-status.test.mjs",

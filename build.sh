@@ -10,6 +10,8 @@
 #
 # Override the SSH target when needed:
 #   SSH_KEY=~/.ssh/michat_deploy_ed25519 REMOTE_USER=test SSH_PORT=2202 ./build.sh
+# Override client package paths when needed:
+#   WINDOWS_INSTALLER=/path/yunChat.exe ANDROID_APK=/path/yunChat.apk ./build.sh
 
 set -Eeuo pipefail
 
@@ -28,6 +30,8 @@ VERSION=$(date +%Y%m%d%H%M%S)
 OUTPUT_DIR="./dist"
 MODE="all"
 CREATE_PACKAGE=false
+WINDOWS_INSTALLER="${WINDOWS_INSTALLER:-./frontend/dist/yunChat.exe}"
+ANDROID_APK="${ANDROID_APK:-./frontend/dist/yunChat.apk}"
 
 REMOTE_USER="${REMOTE_USER:-test}"
 REMOTE_IP="${REMOTE_IP:-112.18.238.6}"
@@ -76,7 +80,7 @@ require_env_key() {
 
 preflight() {
     local command_name
-    for command_name in docker ssh scp gzip tar; do
+    for command_name in docker ssh scp gzip tar sha256sum; do
         if ! command -v "$command_name" >/dev/null 2>&1; then
             log_error "Required command is not installed: $command_name"
             exit 1
@@ -86,6 +90,10 @@ preflight() {
     require_file .env
     require_file ssl/m.yzs88.com.pem
     require_file ssl/m.yzs88.com.key
+    if [[ "$MODE" != "backend" ]]; then
+        require_file "$WINDOWS_INSTALLER"
+        require_file "$ANDROID_APK"
+    fi
     for key in JWT_SECRET MYSQL_PASSWORD MYSQL_ROOT_PASSWORD TURN_SECRET; do
         require_env_key "$key"
     done
@@ -132,6 +140,14 @@ copy_configs() {
     cp nginx-vhost/m.yzs88.com.conf "$OUTPUT_DIR/nginx-vhost/m.yzs88.com.conf"
     cp ssl/m.yzs88.com.pem "$OUTPUT_DIR/ssl/m.yzs88.com.pem"
     cp ssl/m.yzs88.com.key "$OUTPUT_DIR/ssl/m.yzs88.com.key"
+    if [[ "$MODE" != "backend" ]]; then
+        cp "$WINDOWS_INSTALLER" "$OUTPUT_DIR/downloads/yunChat.exe"
+        cp "$ANDROID_APK" "$OUTPUT_DIR/downloads/yunChat.apk"
+        (
+            cd "$OUTPUT_DIR/downloads"
+            sha256sum yunChat.exe yunChat.apk > SHA256SUMS.txt
+        )
+    fi
     chmod 600 "$OUTPUT_DIR/.env" "$OUTPUT_DIR/ssl/m.yzs88.com.key"
 }
 
@@ -165,6 +181,12 @@ if [[ -f e2eechat-backend.tar.gz ]]; then
 fi
 
 if [[ -f e2eechat-frontend.tar.gz ]]; then
+    for path in downloads/yunChat.exe downloads/yunChat.apk downloads/SHA256SUMS.txt; do
+        if [[ ! -s "$path" ]]; then
+            log_error "Missing or empty client release file: $path"
+            exit 1
+        fi
+    done
     log_info "Loading frontend image..."
     gunzip -c e2eechat-frontend.tar.gz | docker load >/dev/null
 fi

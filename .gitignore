@@ -2,6 +2,7 @@
 ssl/
 
 dist/
+downloads/
 
 # 后端
 backend/tmp/
