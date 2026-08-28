@@ -54,6 +54,8 @@ services:
       APP_LATEST_VERSION: "1.1.3"
       APP_MIN_VERSION: "1.0.0"
       APP_UPDATE_URL: "https://m.yzs88.com:8088"
+      APP_WINDOWS_UPDATE_URL: "https://m.yzs88.com:8088/download/yunChat.exe"
+      APP_APK_UPDATE_URL: "https://m.yzs88.com:8088/download/yunChat.apk"
       APP_VERSION_NOTES: ""
     volumes:
       - ./deploy/config.yaml:/app/config.yaml:ro

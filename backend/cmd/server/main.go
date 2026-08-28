@@ -48,6 +48,8 @@ type Config struct {
 		Latest       string `yaml:"latest"`
 		MinSupported string `yaml:"min_supported"`
 		URL          string `yaml:"url"`
+		Windows      string `yaml:"windows"`
+		APK          string `yaml:"apk"`
 		Notes        string `yaml:"notes"`
 	} `yaml:"version"`
 	AllowedOrigins []string `yaml:"allowed_origins"`
@@ -92,6 +94,12 @@ func main() {
 	}
 	if v := os.Getenv("APP_UPDATE_URL"); v != "" {
 		cfg.Version.URL = v
+	}
+	if v := os.Getenv("APP_WINDOWS_UPDATE_URL"); v != "" {
+		cfg.Version.Windows = v
+	}
+	if v := os.Getenv("APP_APK_UPDATE_URL"); v != "" {
+		cfg.Version.APK = v
 	}
 	if v := os.Getenv("APP_VERSION_NOTES"); v != "" {
 		cfg.Version.Notes = v
@@ -188,7 +196,14 @@ func main() {
 	turnHandler := handler.NewTurnHandler(cfg.Turn.Secret, cfg.Turn.Host, cfg.Turn.Port)
 	messagesHandler := handler.NewMessagesHandler(messageReadSvc)
 	deviceHandler := handler.NewDeviceHandler(db)
-	versionHandler := handler.NewVersionHandler(cfg.Version.Latest, cfg.Version.MinSupported, cfg.Version.URL, cfg.Version.Notes)
+	versionHandler := handler.NewVersionHandler(
+		cfg.Version.Latest,
+		cfg.Version.MinSupported,
+		cfg.Version.URL,
+		cfg.Version.Windows,
+		cfg.Version.APK,
+		cfg.Version.Notes,
+	)
 	adminHandler := handler.NewAdminHandler(adminSvc)
 
 	// Current limiting (mainly mobile phone + operator CGNAT: relax the threshold by IP, the main line of defense is based on user authRL):

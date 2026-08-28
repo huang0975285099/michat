@@ -594,6 +594,7 @@ import {
 import { isNativeShell } from "src/services/platform";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
 import { useI18n } from "src/i18n";
+import { openUpdateUrl, selectUpdateUrl } from "src/services/native-update.mjs";
 
 const $q = useQuasar();
 const router = useRouter();
@@ -627,7 +628,7 @@ async function checkVersion() {
     try {
         const info = await fetchVersionInfo();
         latestVersion.value = info.latest || "";
-        updateUrl.value = info.url || "";
+        updateUrl.value = selectUpdateUrl(info);
         if (!latestVersion.value || !APP_VERSION) {
             updateState.value = "unknown";
             return;
@@ -645,7 +646,16 @@ async function checkVersion() {
 async function onUpdateClick() {
     // Native side (desktop/Android): Open the download page to update the installation package
     if (isNativeClient()) {
-        if (updateUrl.value) window.open(updateUrl.value, "_blank");
+        if (!updateUrl.value) {
+            $q.notify({ type: "warning", message: t("update.urlMissing") });
+            return;
+        }
+        try {
+            await openUpdateUrl(updateUrl.value);
+        } catch (error) {
+            console.warn("[version] Unable to open update URL", error);
+            $q.notify({ type: "negative", message: t("update.openFailed") });
+        }
         return;
     }
     // Browser/PWA: clear cache + log out of SW and refresh, users do not need to force refresh manually

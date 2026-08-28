@@ -48,6 +48,7 @@ export const messages = {
             refreshHint: "点击“刷新”即可更新到最新版本",
             updating: "正在更新到最新版…",
             urlMissing: "暂未配置更新下载地址",
+            openFailed: "无法打开浏览器，请稍后重试",
         },
         profile: {
             editNickname: "修改昵称",
@@ -475,6 +476,7 @@ export const messages = {
             refreshHint: "Select Refresh to update to the latest version",
             updating: "Updating to the latest version…",
             urlMissing: "No update download URL is configured",
+            openFailed: "Unable to open the browser. Please try again.",
         },
         profile: {
             editNickname: "Edit nickname",

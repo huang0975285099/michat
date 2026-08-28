@@ -391,6 +391,7 @@ import {
 } from 'src/services/voice-recorder.mjs'
 import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
 import { useI18n } from 'src/i18n'
+import { loadBurnMode, saveBurnMode } from 'src/services/chat-preferences.mjs'
 
 // ── File utility functions ─────────────────────────────────────────────
 
@@ -443,7 +444,7 @@ const fileInputEl = ref(null)
 const inputText = ref('')
 const sending = ref(false)
 const retryingMessageId = ref(null)
-const burnMode = ref(false)  //Burn after reading mode
+const burnMode = ref(loadBurnMode(identityStore.chatId, friendChatId))
 const voiceInputMode = ref(false)
 const morePanelOpen = ref(false)
 const hasInputText = computed(() => inputText.value.trim().length > 0)
@@ -517,6 +518,10 @@ function toggleBurnMode() {
   burnMode.value = !burnMode.value
   morePanelOpen.value = false
 }
+
+watch(burnMode, enabled => {
+  saveBurnMode(identityStore.chatId, friendChatId, enabled)
+})
 
 function voiceBarHeight(index) {
   const shape = 0.45 + Math.abs(Math.sin(index * 1.37)) * 0.55

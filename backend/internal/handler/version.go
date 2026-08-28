@@ -11,7 +11,9 @@ import (
 type VersionInfo struct {
 	Latest       string `json:"latest"`                  //The latest version number currently online
 	MinSupported string `json:"min_supported,omitempty"` //Versions below this should be forced to update (optional)
-	URL          string `json:"url,omitempty"`           //Update/download address (optional)
+	URL          string `json:"url,omitempty"`           //Legacy common download address (kept for older clients)
+	Windows      string `json:"windows,omitempty"`       //Windows installer download address
+	APK          string `json:"apk,omitempty"`           //Android APK download address
 	Notes        string `json:"notes,omitempty"`         //Update instructions (optional)
 }
 
@@ -19,11 +21,13 @@ type VersionHandler struct {
 	info VersionInfo
 }
 
-func NewVersionHandler(latest, minSupported, url, notes string) *VersionHandler {
+func NewVersionHandler(latest, minSupported, url, windows, apk, notes string) *VersionHandler {
 	return &VersionHandler{info: VersionInfo{
 		Latest:       latest,
 		MinSupported: minSupported,
 		URL:          url,
+		Windows:      windows,
+		APK:          apk,
 		Notes:        notes,
 	}}
 }

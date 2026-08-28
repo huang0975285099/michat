@@ -193,6 +193,7 @@ import IncomingCallDialog from "src/components/IncomingCallDialog.vue";
 import IncomingGameDialog from "src/components/IncomingGameDialog.vue";
 import { useGameStore } from "src/stores/game";
 import { useI18n } from "src/i18n";
+import { openUpdateUrl, selectUpdateUrl } from "src/services/native-update.mjs";
 
 const { t } = useI18n();
 
@@ -240,7 +241,7 @@ async function checkAppUpdate() {
     if (!APP_VERSION) return; //The version is not forced when it is not injected (exception) to avoid accidental locking.
     try {
         const info = await fetchVersionInfo();
-        updateUrl = info.url || "";
+        updateUrl = selectUpdateUrl(info);
         updateNotes.value = info.notes || "";
         const updateStatus = getUpdateStatus(APP_VERSION, info.latest, info.min_supported);
         if (updateStatus === "required") {
@@ -258,13 +259,19 @@ async function checkAppUpdate() {
     }
 }
 
-function openNativeUpdateUrl() {
+async function openNativeUpdateUrl() {
     if (!updateUrl) {
         Notify.create({ type: "warning", message: t("update.urlMissing"), timeout: 2500 });
         return false;
     }
-    window.open(updateUrl, "_blank");
-    return true;
+    try {
+        await openUpdateUrl(updateUrl);
+        return true;
+    } catch (error) {
+        console.warn("[version] Unable to open update URL", error);
+        Notify.create({ type: "negative", message: t("update.openFailed"), timeout: 3000 });
+        return false;
+    }
 }
 
 const forceUpdating = ref(false);
@@ -273,15 +280,15 @@ async function doForceUpdate() {
     forceUpdating.value = true;
     if (isNativeClient()) {
         // The native side (desktop/Android) can only download new installation package updates, and it is meaningless to refresh the old version packaged into the binary.
-        openNativeUpdateUrl();
+        await openNativeUpdateUrl();
         forceUpdating.value = false;
         return;
     }
     await forceRefresh();
 }
 
-function doNativeUpdate() {
-    if (openNativeUpdateUrl()) nativeUpdateAvailable.value = false;
+async function doNativeUpdate() {
+    if (await openNativeUpdateUrl()) nativeUpdateAvailable.value = false;
 }
 
 onMounted(() => {
