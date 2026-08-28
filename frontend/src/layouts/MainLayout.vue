@@ -22,7 +22,7 @@
                     <q-tooltip>{{ t("header.lockNow") }}</q-tooltip>
                 </q-btn>
                 <q-btn
-                    v-if="!wsConnected"
+                    v-if="wsConnectionState !== 'connected'"
                     flat
                     dense
                     round
@@ -35,12 +35,12 @@
                 </q-btn>
             </q-toolbar>
             <div
-                v-if="!wsConnected"
+                v-if="wsConnectionState !== 'connected'"
                 class="row items-center justify-center q-py-xs bg-orange-8 text-white text-caption"
                 style="letter-spacing: 0.5px"
             >
-                <q-icon name="wifi_off" size="14px" class="q-mr-xs" />
-                {{ t("header.disconnected") }}
+                <q-icon :name="connectionStatusIcon" size="14px" class="q-mr-xs" :class="{ 'connection-pulse': wsConnectionState !== 'offline' }" />
+                {{ connectionStatusText }}
             </div>
         </q-header>
 
@@ -170,7 +170,14 @@ import { Notify } from "quasar";
 import { useChatStore } from "src/stores/chat";
 import { useIdentityStore } from "src/stores/identity";
 import { useCallStore } from "src/stores/call";
-import { wsConnected, on, off } from "src/services/websocket";
+import {
+    wsConnected,
+    wsConnectionState,
+    reconnectNow,
+    startConnectionRecovery,
+    on,
+    off,
+} from "src/services/websocket";
 import { notifyNewMessage, initNotifications } from "src/services/notify";
 import {
     APP_VERSION,
@@ -215,6 +222,7 @@ gameStore.setRouter(router);
 let stopListening = null;
 let stopCallListening = null;
 let stopGameListening = null;
+let stopConnectionRecovery = null;
 function onFriendRequestGlobal() {
     identity.incPendingRequestCount();
     notifyNewMessage();
@@ -277,6 +285,7 @@ function doNativeUpdate() {
 }
 
 onMounted(() => {
+    stopConnectionRecovery = startConnectionRecovery();
     stopListening = chatStore.startListening();
     stopCallListening = callStore.startListening();
     stopGameListening = gameStore.startListening();
@@ -303,6 +312,7 @@ onUnmounted(() => {
     stopListening?.();
     stopCallListening?.();
     stopGameListening?.();
+    stopConnectionRecovery?.();
     chatStore.stopBurnTimer();
 });
 
@@ -319,6 +329,7 @@ watch(wsConnected, (connected) => {
     if (!connected) {
         everDisconnected = true;
     } else if (everDisconnected) {
+        refreshing.value = false;
         Notify.create({ type: "positive", message: t("header.reconnected"), timeout: 2000 });
     }
 });
@@ -334,8 +345,24 @@ const refreshing = ref(false);
 function doRefresh() {
     if (refreshing.value) return;
     refreshing.value = true;
-    window.location.reload();
+    reconnectNow("manual");
+    setTimeout(() => { refreshing.value = false; }, 1500);
 }
+
+const connectionStatusIcon = computed(() =>
+    wsConnectionState.value === "offline" ? "wifi_off" : "sync",
+);
+
+const connectionStatusText = computed(() => {
+    const key = {
+        offline: "header.offline",
+        connecting: "header.connecting",
+        authenticating: "header.authenticating",
+        reconnecting: "header.reconnecting",
+        disconnected: "header.disconnected",
+    }[wsConnectionState.value] || "header.disconnected";
+    return t(key);
+});
 
 const pageTitle = computed(() => {
     if (route.path === "/") return t("header.app");
@@ -354,5 +381,11 @@ const pageTitle = computed(() => {
 }
 .spin-once .q-icon {
     animation: spin-once 0.6s linear;
+}
+@keyframes connection-pulse {
+    50% { opacity: 0.45; }
+}
+.connection-pulse {
+    animation: connection-pulse 1.2s ease-in-out infinite;
 }
 </style>

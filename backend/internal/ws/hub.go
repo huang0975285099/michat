@@ -23,6 +23,7 @@ var (
 	chatIDRe              = regexp.MustCompile(`^\d{4}-[A-Z]{4}$`)
 	msgIDRe               = regexp.MustCompile(`^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$`)
 	transferIDRe          = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	healthNonceRe         = regexp.MustCompile(`^[a-z0-9]{1,32}$`)
 	allowedFileExtensions = map[string]struct{}{
 		"jpg": {}, "jpeg": {}, "png": {}, "gif": {}, "webp": {}, "bmp": {}, "svg": {},
 		"mp4": {}, "webm": {}, "mov": {},
@@ -138,7 +139,7 @@ type Hub struct {
 	redis          *rdb.Client
 	friendSvc      friendChecker
 	identitySvc    *service.IdentityService
-	messageReadSvc *service.MessageReadService
+	messageReadSvc messageReadStore
 	pushSvc        *service.PushService                 //Can be nil (disables pushing when not configured)
 	ironFistSvc    *service.IronFistService             //Can be nil (disabled for PVP lobbies)
 	pvpLobby       map[string]*service.LobbyUserProfile //chatID → Lobby User Profile (PVP Lobby Online List)
@@ -152,6 +153,16 @@ type Hub struct {
 type friendChecker interface {
 	GetFriendChatIDs(context.Context, uint64) ([]string, error)
 	AreFriends(context.Context, uint64, string) (bool, error)
+}
+
+type messageReadStore interface {
+	AcceptMessage(context.Context, string, string, string) (service.MessageDelivery, bool, error)
+	GetMessageDeliveries(context.Context, string, []string) ([]service.MessageDelivery, error)
+	RecordMessage(context.Context, string, string, string) error
+	DeleteMessage(context.Context, string, string, string) error
+	RecordReads(context.Context, []string, string, string) ([]service.ReadReceipt, error)
+	GetReadReceiptsForSender(context.Context, string) (map[string][]service.ReadReceipt, error)
+	MarkReadReceiptsApplied(context.Context, []string, string, string) error
 }
 
 type fileTransferSession struct {
@@ -335,6 +346,14 @@ func (h *Hub) notifyFriendsStatus(userID uint64, chatID string, online bool) {
 
 // Send sends a message to the specified chatID; if offline, it will be stored in Redis
 func (h *Hub) Send(chatID string, msg []byte) {
+	if err := h.sendReliable(chatID, msg); err != nil {
+		log.Printf("[ws] store offline message failed: %v", err)
+	}
+}
+
+// sendReliable reports whether a message was either queued to the live connection or durably appended to Redis.
+// Callers that produce a delivery ACK use this result to avoid acknowledging a message that was never retained.
+func (h *Hub) sendReliable(chatID string, msg []byte) error {
 	h.mu.RLock()
 	c, online := h.clients[chatID]
 	h.mu.RUnlock()
@@ -342,13 +361,13 @@ func (h *Hub) Send(chatID string, msg []byte) {
 	if online {
 		select {
 		case c.send <- msg:
+			return nil
 		default:
 			// The sending buffer is full and the storage is offline.
-			h.storeOffline(chatID, msg)
+			return h.storeOfflineChecked(chatID, msg)
 		}
-	} else {
-		h.storeOffline(chatID, msg)
 	}
+	return h.storeOfflineChecked(chatID, msg)
 }
 
 // IsOnline checks if the user is online
@@ -431,10 +450,24 @@ func (h *Hub) FlushStoredReadReceipts(c *Client) {
 }
 
 func (h *Hub) storeOffline(chatID string, msg []byte) {
+	if err := h.storeOfflineChecked(chatID, msg); err != nil {
+		log.Printf("[ws] store offline message failed: %v", err)
+	}
+}
+
+func (h *Hub) storeOfflineChecked(chatID string, msg []byte) error {
+	if h.redis == nil {
+		return errors.New("offline store unavailable")
+	}
 	ctx := context.Background()
 	key := pkgredis.OfflineKey(chatID)
-	h.redis.RPush(ctx, key, string(msg))
-	h.redis.Expire(ctx, key, pkgredis.OfflineMsgTTL)
+	if err := h.redis.RPush(ctx, key, string(msg)).Err(); err != nil {
+		return err
+	}
+	if err := h.redis.Expire(ctx, key, pkgredis.OfflineMsgTTL).Err(); err != nil {
+		log.Printf("[ws] refresh offline message expiry failed: %v", err)
+	}
+	return nil
 }
 
 // ServeClient starts the read/write goroutine
@@ -569,6 +602,10 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 	switch msg.Type {
 	case "message":
 		h.handleChatMessage(c, msg.Payload)
+	case "message_status_query":
+		h.handleMessageStatusQuery(c, msg.Payload)
+	case "health_ping":
+		h.handleHealthPing(c, msg.Payload)
 	case "recall":
 		h.handleRecall(c, msg.Payload)
 	case "read":
@@ -610,16 +647,48 @@ type ChatMessagePayload struct {
 	BurnAfterRead   bool   `json:"burn_after_read"`
 }
 
+type ChatAckPayload struct {
+	MsgID     string `json:"msg_id"`
+	Status    string `json:"status"`
+	Code      string `json:"code,omitempty"`
+	Retryable bool   `json:"retryable,omitempty"`
+	Timestamp int64  `json:"ts,omitempty"`
+}
+
+func (h *Hub) sendChatResult(to *Client, result ChatAckPayload) {
+	if to == nil || to.send == nil || !msgIDRe.MatchString(result.MsgID) {
+		return
+	}
+	ack, _ := json.Marshal(Message{Type: "ack", Payload: mustMarshal(result)})
+	select {
+	case to.send <- ack:
+	case <-time.After(2 * time.Second):
+		if h.redis != nil {
+			h.storeOffline(to.ChatID, ack)
+		}
+	}
+}
+
+func (h *Hub) rejectChatMessage(from *Client, msgID, code string, retryable bool) {
+	status := "rejected"
+	if retryable {
+		status = "retry"
+	}
+	h.sendChatResult(from, ChatAckPayload{MsgID: msgID, Status: status, Code: code, Retryable: retryable})
+}
+
 func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 	var p ChatMessagePayload
 	if err := json.Unmarshal(payload, &p); err != nil {
 		log.Printf("[ws] invalid message payload: %v", err)
+		h.rejectChatMessage(from, p.MsgID, "invalid_payload", false)
 		return
 	}
 
 	// Validate target chat_id format
 	if !chatIDRe.MatchString(p.To) {
 		log.Printf("[ws] invalid recipient")
+		h.rejectChatMessage(from, p.MsgID, "invalid_recipient", false)
 		return
 	}
 	// msg_id is a necessary field for deduplication at the receiving end and ACK association at the sending end, and is prohibited from being empty.
@@ -630,24 +699,43 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 	// Require all encryption fields
 	if p.Ciphertext == "" || p.IV == "" || p.EphemeralPubKey == "" {
 		log.Printf("[ws] missing message encryption fields")
+		h.rejectChatMessage(from, p.MsgID, "invalid_payload", false)
 		return
 	}
 
 	// Verify friendship — sender must be friends with recipient
 	ctx := context.Background()
 	isFriend, err := h.friendSvc.AreFriends(ctx, from.UserID, p.To)
-	if err != nil || !isFriend {
+	if err != nil {
+		log.Printf("[ws] friend check failed")
+		h.rejectChatMessage(from, p.MsgID, "temporary_failure", true)
+		return
+	}
+	if !isFriend {
 		log.Printf("[ws] message to non-friend rejected")
+		h.rejectChatMessage(from, p.MsgID, "not_friends", false)
 		return
 	}
 	// Persist message ownership before forwarding, and subsequent read receipts can only be created by the actual recipient of this delivery.
 	// Failed to close when the database is abnormal, to avoid the occurrence of disappearing messages that have been delivered but can never be safely confirmed for reading.
 	if h.messageReadSvc == nil {
 		log.Printf("[ws] message read service unavailable")
+		h.rejectChatMessage(from, p.MsgID, "service_unavailable", true)
 		return
 	}
-	if err = h.messageReadSvc.RecordMessage(ctx, p.MsgID, from.ChatID, p.To); err != nil {
+	delivery, created, err := h.messageReadSvc.AcceptMessage(ctx, p.MsgID, from.ChatID, p.To)
+	if err != nil {
 		log.Printf("[ws] record message delivery failed: %v", err)
+		if errors.Is(err, service.ErrMessageIDConflict) {
+			h.rejectChatMessage(from, p.MsgID, "message_id_conflict", false)
+		} else {
+			h.rejectChatMessage(from, p.MsgID, "temporary_failure", true)
+		}
+		return
+	}
+	if !created {
+		// The original attempt was already committed. Confirm it again, but never forward the ciphertext twice.
+		h.sendChatResult(from, ChatAckPayload{MsgID: p.MsgID, Status: "duplicate", Timestamp: delivery.SentAt})
 		return
 	}
 
@@ -660,7 +748,7 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 		Timestamp       int64  `json:"ts"`
 		BurnAfterRead   bool   `json:"burn_after_read"`
 	}
-	timestamp := time.Now().UnixMilli()
+	timestamp := delivery.SentAt
 	fwd, _ := json.Marshal(Message{
 		Type: "message",
 		Payload: mustMarshal(ForwardPayload{
@@ -673,7 +761,15 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 			BurnAfterRead:   p.BurnAfterRead,
 		}),
 	})
-	h.Send(p.To, fwd)
+	if err = h.sendReliable(p.To, fwd); err != nil {
+		// The recipient never obtained the ciphertext and Redis did not retain it. Revoke the attribution so the same msg_id can be retried safely.
+		if deleteErr := h.messageReadSvc.DeleteMessage(ctx, p.MsgID, from.ChatID, p.To); deleteErr != nil {
+			log.Printf("[ws] rollback undelivered message failed: %v", deleteErr)
+		}
+		log.Printf("[ws] retain recipient message failed: %v", err)
+		h.rejectChatMessage(from, p.MsgID, "temporary_failure", true)
+		return
+	}
 
 	// If the receiver is not online, Aurora push is triggered (asynchronous, does not block the main process)
 	h.mu.RLock()
@@ -683,24 +779,85 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 		go h.pushSvc.NotifyOfflineUser(p.To, from.ChatID)
 	}
 
-	// ack is sent back to the sender, carrying the server timestamp
-	type AckPayload struct {
-		MsgID     string `json:"msg_id"`
-		Timestamp int64  `json:"ts"`
-	}
-	ack, _ := json.Marshal(Message{
-		Type: "ack",
-		Payload: mustMarshal(AckPayload{
-			MsgID:     p.MsgID,
-			Timestamp: timestamp,
-		}),
-	})
 	// ACK cannot be silently discarded: it determines whether the sender mistakenly marked a message as failed when it was actually delivered.
-	// When the queue is temporarily congested, it waits for writePump to make room; when the connection is abnormal, it falls into the offline queue and is re-invested after reconnection.
+	h.sendChatResult(from, ChatAckPayload{MsgID: p.MsgID, Status: "accepted", Timestamp: timestamp})
+}
+
+func (h *Hub) handleMessageStatusQuery(from *Client, payload json.RawMessage) {
+	var query struct {
+		MsgID []string `json:"msg_id"`
+	}
+	if err := json.Unmarshal(payload, &query); err != nil || len(query.MsgID) == 0 || len(query.MsgID) > 100 {
+		log.Printf("[ws] invalid message status query")
+		return
+	}
+	uniqueIDs := make([]string, 0, len(query.MsgID))
+	seen := make(map[string]struct{}, len(query.MsgID))
+	for _, msgID := range query.MsgID {
+		if !msgIDRe.MatchString(msgID) {
+			log.Printf("[ws] invalid message status id")
+			return
+		}
+		if _, exists := seen[msgID]; exists {
+			continue
+		}
+		seen[msgID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, msgID)
+	}
+
+	type statusResult struct {
+		MsgID  string `json:"msg_id"`
+		Status string `json:"status"`
+		TS     int64  `json:"ts,omitempty"`
+	}
+	response := struct {
+		Complete bool           `json:"complete"`
+		Results  []statusResult `json:"results"`
+	}{Complete: false, Results: []statusResult{}}
+	if h.messageReadSvc != nil {
+		deliveries, err := h.messageReadSvc.GetMessageDeliveries(context.Background(), from.ChatID, uniqueIDs)
+		if err == nil {
+			accepted := make(map[string]service.MessageDelivery, len(deliveries))
+			for _, delivery := range deliveries {
+				accepted[delivery.MsgID] = delivery
+			}
+			for _, msgID := range uniqueIDs {
+				if delivery, ok := accepted[msgID]; ok {
+					response.Results = append(response.Results, statusResult{MsgID: msgID, Status: "accepted", TS: delivery.SentAt})
+				} else {
+					response.Results = append(response.Results, statusResult{MsgID: msgID, Status: "unknown"})
+				}
+			}
+			response.Complete = true
+		} else {
+			log.Printf("[ws] message status query failed: %v", err)
+		}
+	}
+	message, _ := json.Marshal(Message{Type: "message_status", Payload: mustMarshal(response)})
 	select {
-	case from.send <- ack:
-	case <-time.After(2 * time.Second):
-		h.storeOffline(from.ChatID, ack)
+	case from.send <- message:
+	default:
+	}
+}
+
+func (h *Hub) handleHealthPing(from *Client, payload json.RawMessage) {
+	var ping struct {
+		Nonce string `json:"nonce"`
+	}
+	if err := json.Unmarshal(payload, &ping); err != nil || !healthNonceRe.MatchString(ping.Nonce) {
+		log.Printf("[ws] invalid health ping")
+		return
+	}
+	message, _ := json.Marshal(Message{
+		Type: "health_pong",
+		Payload: mustMarshal(struct {
+			Nonce      string `json:"nonce"`
+			ServerTime int64  `json:"server_time"`
+		}{Nonce: ping.Nonce, ServerTime: time.Now().UnixMilli()}),
+	})
+	select {
+	case from.send <- message:
+	default:
 	}
 }
 

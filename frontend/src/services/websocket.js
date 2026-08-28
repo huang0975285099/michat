@@ -8,16 +8,187 @@ import { ref } from 'vue'
 
 let socket = null
 let reconnectTimer = null
+let reconnectAttempt = 0
+let reconnectSuppressed = false
 let authPending = false
+let authenticated = false
 let pendingFlushTimer = null
 let pendingRetryTimer = null
+let pendingMessageRetryTimer = null
 let readAckSupported = false
+let messageSyncSupported = false
+let healthCheckSupported = false
+let pendingMessageSync = false
+let pendingMessageSyncTimer = null
+let healthIntervalTimer = null
+let healthTimeoutTimer = null
+let healthNonce = null
+let recoveryCleanup = null
 const listeners = new Map() // type → Set<callback>
 const PENDING_QUEUE_KEY = 'ws_pending_queue'  //A persistent queue for key messages such as read receipts
 const READ_BATCH_SIZE = 100
+const MAX_PENDING_MESSAGES = 100
+const MESSAGE_RETRY_MS = 15000
+const MESSAGE_RETRY_MAX_MS = 120000
+const HEALTH_INTERVAL_MS = 20000
+const HEALTH_TIMEOUT_MS = 10000
+const RECONNECT_MAX_MS = 15000
+const DIAGNOSTIC_KEY = 'ws_connection_diagnostics_v1'
+const DIAGNOSTIC_MAX = 100
+let pendingMessageRetryDelay = MESSAGE_RETRY_MS
 const pendingQueue = loadPendingQueue()        //Messages cached during disconnection (retained across refreshes)
 const pendingReadInFlight = new Set()          //The ID of the current connection that has been written and is waiting for read_ack
+const pendingMessageInFlight = new Set()       //Text messages written on the current connection and waiting for ACK
 let serverClock = null //{ epochMs, monotonicMs }, calibrated by the server during authentication
+
+function browserOnline() {
+  return typeof navigator === 'undefined' || navigator.onLine !== false
+}
+
+export const wsConnected = ref(false)
+export const wsConnectionState = ref(browserOnline() ? 'disconnected' : 'offline')
+
+function loadDiagnostics() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DIAGNOSTIC_KEY) || '[]')
+    return Array.isArray(parsed) ? parsed.slice(-DIAGNOSTIC_MAX) : []
+  } catch {
+    return []
+  }
+}
+
+const connectionDiagnostics = loadDiagnostics()
+
+function recordDiagnostic(event, details = {}) {
+  const safe = {}
+  for (const key of ['state', 'reason', 'close_code', 'retry_ms', 'queue_size']) {
+    const value = details[key]
+    if (typeof value === 'number' || typeof value === 'boolean') safe[key] = value
+    else if (typeof value === 'string') safe[key] = value.slice(0, 40)
+  }
+  connectionDiagnostics.push({ ts: Date.now(), event: String(event).slice(0, 40), ...safe })
+  if (connectionDiagnostics.length > DIAGNOSTIC_MAX) connectionDiagnostics.splice(0, connectionDiagnostics.length - DIAGNOSTIC_MAX)
+  try {
+    localStorage.setItem(DIAGNOSTIC_KEY, JSON.stringify(connectionDiagnostics))
+  } catch {
+    // Diagnostics remain in memory when persistent storage is unavailable.
+  }
+}
+
+export function getConnectionDiagnostics() {
+  return connectionDiagnostics.map(entry => ({ ...entry }))
+}
+
+function setConnectionState(state, reason) {
+  if (wsConnectionState.value !== state) {
+    wsConnectionState.value = state
+    recordDiagnostic('state_change', { state, reason })
+  }
+  wsConnected.value = state === 'connected'
+}
+
+function clearHealthTimers() {
+  if (healthIntervalTimer) clearInterval(healthIntervalTimer)
+  if (healthTimeoutTimer) clearTimeout(healthTimeoutTimer)
+  healthIntervalTimer = null
+  healthTimeoutTimer = null
+  healthNonce = null
+}
+
+let healthSequence = 0
+function sendHealthProbe(force = false) {
+  if (!healthCheckSupported) return false
+  if (!(socket && socket.readyState === WebSocket.OPEN && authenticated)) return false
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return false
+  if (healthTimeoutTimer) {
+    if (!force) return false
+    clearTimeout(healthTimeoutTimer)
+    healthTimeoutTimer = null
+  }
+  healthNonce = `${Date.now().toString(36)}${(++healthSequence).toString(36)}`.slice(-32)
+  try {
+    socket.send(JSON.stringify({ type: 'health_ping', payload: { nonce: healthNonce } }))
+  } catch {
+    forceReconnect('health_send_failed')
+    return false
+  }
+  const expectedNonce = healthNonce
+  healthTimeoutTimer = setTimeout(() => {
+    healthTimeoutTimer = null
+    if (healthNonce !== expectedNonce) return
+    recordDiagnostic('health_timeout', { state: wsConnectionState.value })
+    forceReconnect('health_timeout', true)
+  }, HEALTH_TIMEOUT_MS)
+  return true
+}
+
+function handleHealthPong(payload) {
+  if (typeof payload?.nonce !== 'string' || payload.nonce !== healthNonce) return
+  if (healthTimeoutTimer) clearTimeout(healthTimeoutTimer)
+  healthTimeoutTimer = null
+  healthNonce = null
+}
+
+function startHealthMonitor() {
+  clearHealthTimers()
+  if (!healthCheckSupported) return
+  healthIntervalTimer = setInterval(() => sendHealthProbe(), HEALTH_INTERVAL_MS)
+}
+
+function scheduleReconnect(reason, immediate = false) {
+  if (reconnectSuppressed || !localStorage.getItem('session_token')) {
+    setConnectionState('disconnected', reason)
+    return
+  }
+  if (!browserOnline()) {
+    setConnectionState('offline', reason)
+    return
+  }
+  const delay = immediate ? 0 : Math.min(1000 * (2 ** reconnectAttempt), RECONNECT_MAX_MS)
+  if (reconnectTimer) {
+    if (!immediate) return
+    clearTimeout(reconnectTimer)
+  }
+  setConnectionState('reconnecting', reason)
+  recordDiagnostic('reconnect_scheduled', { reason, retry_ms: delay })
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
+    reconnectAttempt++
+    connect()
+  }, delay)
+}
+
+function abandonCurrentSocket() {
+  const staleSocket = socket
+  socket = null
+  if (!staleSocket) return
+  staleSocket.onopen = null
+  staleSocket.onmessage = null
+  staleSocket.onerror = null
+  staleSocket.onclose = null
+  try { staleSocket.close() } catch { /* already closed */ }
+}
+
+function resetTransientConnectionState() {
+  authPending = false
+  authenticated = false
+  pendingReadInFlight.clear()
+  pendingMessageInFlight.clear()
+  pendingMessageSync = false
+  clearHealthTimers()
+  if (pendingFlushTimer) { clearTimeout(pendingFlushTimer); pendingFlushTimer = null }
+  if (pendingRetryTimer) { clearTimeout(pendingRetryTimer); pendingRetryTimer = null }
+  if (pendingMessageRetryTimer) { clearTimeout(pendingMessageRetryTimer); pendingMessageRetryTimer = null }
+  if (pendingMessageSyncTimer) { clearTimeout(pendingMessageSyncTimer); pendingMessageSyncTimer = null }
+}
+
+function forceReconnect(reason, immediate = false) {
+  recordDiagnostic('connection_recycled', { reason, state: wsConnectionState.value })
+  abandonCurrentSocket()
+  resetTransientConnectionState()
+  setConnectionState(browserOnline() ? 'reconnecting' : 'offline', reason)
+  scheduleReconnect(reason, immediate)
+}
 
 // Inbound early arrival buffer: During cold start, the backend will flush offline messages immediately after successful authentication, while the chat listener will wait
 // Registered only after MainLayout is mounted (onMounted → startListening). If the message arrives first and the listener has not been registered yet,
@@ -51,8 +222,16 @@ function loadPendingQueue() {
     const result = []
     const readsByPeer = new Map()
     for (const item of parsed) {
+      if (item?.type === 'message') {
+        const loadedMessages = result.reduce((count, existing) => count + (existing.type === 'message' ? 1 : 0), 0)
+        if (loadedMessages < MAX_PENDING_MESSAGES && isValidPendingMessage(item.payload) && !result.some(existing =>
+          existing.type === 'message' && existing.payload.msg_id === item.payload.msg_id
+        )) {
+          result.push({ type: 'message', payload: { ...item.payload } })
+        }
+        continue
+      }
       if (item?.type !== 'read') {
-        result.push(item)
         continue
       }
       const to = item.payload?.to
@@ -72,6 +251,79 @@ function loadPendingQueue() {
   } catch {
     return []
   }
+}
+
+function isValidPendingMessage(payload) {
+  return Boolean(
+    payload &&
+    typeof payload.to === 'string' &&
+    typeof payload.msg_id === 'string' &&
+    typeof payload.ephemeral_pub_key === 'string' && payload.ephemeral_pub_key.length > 0 &&
+    typeof payload.iv === 'string' && payload.iv.length > 0 &&
+    typeof payload.ciphertext === 'string' && payload.ciphertext.length > 0 &&
+    typeof payload.burn_after_read === 'boolean'
+  )
+}
+
+function queuePendingMessage(payload) {
+  if (!isValidPendingMessage(payload)) return false
+  const existing = pendingQueue.find(item => item.type === 'message' && item.payload?.msg_id === payload.msg_id)
+  if (existing) {
+    existing.payload = { ...payload }
+    savePendingQueue()
+    return true
+  }
+  const messageCount = pendingQueue.reduce((count, item) => count + (item.type === 'message' ? 1 : 0), 0)
+  if (messageCount >= MAX_PENDING_MESSAGES) return false
+  if (messageCount === 0) pendingMessageRetryDelay = MESSAGE_RETRY_MS
+  pendingQueue.push({ type: 'message', payload: { ...payload } })
+  savePendingQueue()
+  return true
+}
+
+export function hasPendingMessage(msgId) {
+  return typeof msgId === 'string' && pendingQueue.some(item =>
+    item.type === 'message' && item.payload?.msg_id === msgId
+  )
+}
+
+export function confirmPendingMessage(msgId) {
+  if (typeof msgId !== 'string' || !msgId) return
+  pendingMessageInFlight.delete(msgId)
+  for (let i = pendingQueue.length - 1; i >= 0; i--) {
+    if (pendingQueue[i].type === 'message' && pendingQueue[i].payload?.msg_id === msgId) pendingQueue.splice(i, 1)
+  }
+  savePendingQueue()
+  if (!pendingQueue.some(item => item.type === 'message')) {
+    if (pendingMessageRetryTimer) clearTimeout(pendingMessageRetryTimer)
+    pendingMessageRetryTimer = null
+    pendingMessageRetryDelay = MESSAGE_RETRY_MS
+  }
+}
+
+export function discardPendingMessagesTo(chatId) {
+  if (typeof chatId !== 'string' || !chatId) return
+  for (let i = pendingQueue.length - 1; i >= 0; i--) {
+    const item = pendingQueue[i]
+    if (item.type === 'message' && item.payload?.to === chatId) {
+      pendingMessageInFlight.delete(item.payload.msg_id)
+      pendingQueue.splice(i, 1)
+    }
+  }
+  savePendingQueue()
+  if (!pendingQueue.some(item => item.type === 'message')) {
+    if (pendingMessageRetryTimer) clearTimeout(pendingMessageRetryTimer)
+    pendingMessageRetryTimer = null
+    pendingMessageRetryDelay = MESSAGE_RETRY_MS
+  }
+}
+
+export function retryPendingMessage(msgId) {
+  if (!hasPendingMessage(msgId)) return false
+  pendingMessageInFlight.delete(msgId)
+  pendingMessageRetryDelay = MESSAGE_RETRY_MS
+  schedulePendingFlush()
+  return true
 }
 
 function syncServerClock(serverTime) {
@@ -118,7 +370,7 @@ export function confirmPendingReads(to, msgIds) {
     if (item.payload.msg_id.length === 0) pendingQueue.splice(i, 1)
   }
   savePendingQueue()
-  if (pendingQueue.length === 0 && pendingRetryTimer) {
+  if (!pendingQueue.some(item => item.type === 'read') && pendingRetryTimer) {
     clearTimeout(pendingRetryTimer)
     pendingRetryTimer = null
   }
@@ -134,13 +386,80 @@ function schedulePendingFlush() {
 }
 
 function schedulePendingRetry() {
-  if (!readAckSupported || pendingQueue.length === 0 || pendingRetryTimer) return
+  if (!readAckSupported || !pendingQueue.some(item => item.type === 'read') || pendingRetryTimer) return
   pendingRetryTimer = setTimeout(() => {
     pendingRetryTimer = null
     // read_ack may be lost due to current limiting or instantaneous disconnection; the entire batch is allowed to be resent. Server-side writes are idempotent.
     pendingReadInFlight.clear()
     flushPendingQueue()
   }, 5000)
+}
+
+function schedulePendingMessageRetry() {
+  if (!pendingQueue.some(item => item.type === 'message') || pendingMessageRetryTimer) return
+  pendingMessageRetryTimer = setTimeout(() => {
+    pendingMessageRetryTimer = null
+    pendingMessageInFlight.clear()
+    pendingMessageRetryDelay = Math.min(pendingMessageRetryDelay * 2, MESSAGE_RETRY_MAX_MS)
+    flushPendingQueue()
+  }, pendingMessageRetryDelay)
+}
+
+function pendingMessageIds() {
+  return pendingQueue
+    .filter(item => item.type === 'message' && typeof item.payload?.msg_id === 'string')
+    .map(item => item.payload.msg_id)
+    .slice(0, MAX_PENDING_MESSAGES)
+}
+
+function finishPendingMessageSync() {
+  pendingMessageSync = false
+  if (pendingMessageSyncTimer) clearTimeout(pendingMessageSyncTimer)
+  pendingMessageSyncTimer = null
+  flushPendingQueue()
+}
+
+function beginPendingMessageSync() {
+  const ids = pendingMessageIds()
+  if (!messageSyncSupported || ids.length === 0 || !(socket && socket.readyState === WebSocket.OPEN && authenticated)) {
+    pendingMessageSync = false
+    flushPendingQueue()
+    return
+  }
+  pendingMessageSync = true
+  try {
+    socket.send(JSON.stringify({ type: 'message_status_query', payload: { msg_id: ids } }))
+    // Read receipts do not depend on text-message reconciliation and may still be flushed now.
+    flushPendingQueue()
+    pendingMessageSyncTimer = setTimeout(finishPendingMessageSync, 3000)
+  } catch (e) {
+    console.error('[ws] message status sync failed', e)
+    finishPendingMessageSync()
+  }
+}
+
+function handleMessageStatus(payload) {
+  const results = Array.isArray(payload?.results) ? payload.results : []
+  if (payload?.complete === true) {
+    for (const result of results) {
+      if (result?.status !== 'accepted' || typeof result.msg_id !== 'string' ||
+          !Number.isFinite(result.ts) || result.ts <= 0) continue
+      confirmPendingMessage(result.msg_id)
+      // Reuse the normal ACK path so the local IndexedDB record is corrected too.
+      dispatchMessage('ack', { msg_id: result.msg_id, status: 'duplicate', ts: result.ts })
+    }
+  }
+  finishPendingMessageSync()
+}
+
+function processAckOutbox(payload) {
+  if (typeof payload?.msg_id !== 'string') return
+  const status = payload.status || 'accepted'
+  if (status === 'accepted' || status === 'duplicate' || status === 'rejected') {
+    confirmPendingMessage(payload.msg_id)
+  } else if (status === 'retry' || payload.retryable === true) {
+    pendingMessageInFlight.delete(payload.msg_id)
+  }
 }
 
 function savePendingQueue() {
@@ -162,39 +481,48 @@ export function clearPendingQueue() {
     clearTimeout(pendingRetryTimer)
     pendingRetryTimer = null
   }
+  if (pendingMessageRetryTimer) {
+    clearTimeout(pendingMessageRetryTimer)
+    pendingMessageRetryTimer = null
+  }
+  if (pendingMessageSyncTimer) {
+    clearTimeout(pendingMessageSyncTimer)
+    pendingMessageSyncTimer = null
+  }
+  pendingMessageSync = false
   pendingQueue.length = 0
   pendingReadInFlight.clear()
+  pendingMessageInFlight.clear()
+  pendingMessageRetryDelay = MESSAGE_RETRY_MS
   savePendingQueue()
   // Also clear the inbound early arrival buffer: otherwise unconsumed offline messages from the old identity may be played back when the new identity registers the listener.
   earlyBuffer.length = 0
 }
 
-// Responsive connection status for UI monitoring
-export const wsConnected = ref(false)
-
 export function connect() {
-  if (socket && socket.readyState === WebSocket.OPEN && !authPending) {
+  if (socket && socket.readyState === WebSocket.OPEN && authenticated) {
+    return Promise.resolve()
+  }
+
+  // Another caller may arrive while the singleton connection is opening/authenticating.
+  // Let that attempt finish instead of replacing handlers or sending a second auth frame.
+  if (socket && (socket.readyState === WebSocket.CONNECTING ||
+      (socket.readyState === WebSocket.OPEN && authPending))) {
     return Promise.resolve()
   }
 
   const token = localStorage.getItem('session_token')
   if (!token) return Promise.resolve()
+  reconnectSuppressed = false
+
+  if (!browserOnline()) {
+    setConnectionState('offline', 'browser_offline')
+    return Promise.resolve()
+  }
 
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
-  }
-
-  // If already connected, return Promise and wait
-  if (socket && socket.readyState === WebSocket.CONNECTING) {
-    return new Promise((resolve) => {
-      const origOpen = socket.onopen
-      socket.onopen = () => {
-        origOpen?.()
-        // Send authentication message
-        sendAuth(token, resolve)
-      }
-    })
   }
 
   return new Promise((resolve) => {
@@ -203,27 +531,40 @@ export function connect() {
       ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
       : 'wss://m.yzs88.com:8088/ws'
 
-    socket = new WebSocket(url)
+    const connectionSocket = new WebSocket(url)
+    socket = connectionSocket
     authPending = true
+    authenticated = false
+    setConnectionState(reconnectAttempt > 0 ? 'reconnecting' : 'connecting', 'connect_start')
+    recordDiagnostic('socket_created', { state: wsConnectionState.value })
 
-    socket.onopen = () => {
+    connectionSocket.onopen = () => {
+      if (socket !== connectionSocket) return
       console.log('[ws] connected, sending auth...')
+      setConnectionState('authenticating', 'socket_open')
       // After the connection is established, token authentication is sent through the message.
-      sendAuth(token, resolve)
+      sendAuth(token, resolve, connectionSocket)
     }
 
-    socket.onmessage = (event) => {
+    connectionSocket.onmessage = (event) => {
+      if (socket !== connectionSocket) return
       try {
         const msg = JSON.parse(event.data)
 
         // Handle authentication responses
         if (msg.type === 'auth_result') {
           authPending = false
+          authenticated = msg.payload?.success === true
           syncServerClock(msg.payload?.server_time)
           readAckSupported = msg.payload?.read_ack === true
+          messageSyncSupported = msg.payload?.message_sync === true
+          healthCheckSupported = msg.payload?.health_check === true
           if (msg.payload && msg.payload.success) {
             console.log('[ws] auth success')
-            flushPendingQueue()
+            reconnectAttempt = 0
+            setConnectionState('connected', 'auth_success')
+            startHealthMonitor()
+            beginPendingMessageSync()
           } else {
             console.warn('[ws] auth failed:', msg.payload?.reason)
             // Authentication failed, disconnected
@@ -232,30 +573,36 @@ export function connect() {
           return
         }
 
+        if (msg.type === 'health_pong') {
+          handleHealthPong(msg.payload)
+          return
+        }
+        if (msg.type === 'message_status') {
+          handleMessageStatus(msg.payload)
+          return
+        }
+        if (msg.type === 'ack') processAckOutbox(msg.payload)
         dispatchMessage(msg.type, msg.payload)
       } catch (e) {
         console.error('[ws] parse error', e)
       }
     }
 
-    socket.onclose = (e) => {
+    connectionSocket.onclose = (e) => {
+      if (socket !== connectionSocket) return
       console.log('[ws] closed', e.code)
       socket = null
-      authPending = false
-      wsConnected.value = false
-      pendingReadInFlight.clear()
-      if (pendingFlushTimer) { clearTimeout(pendingFlushTimer); pendingFlushTimer = null }
-      if (pendingRetryTimer) { clearTimeout(pendingRetryTimer); pendingRetryTimer = null }
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null
-        connect()
-      }, 3000)
+      resetTransientConnectionState()
+      recordDiagnostic('socket_closed', { close_code: e.code, reason: e.code === 1000 ? 'normal' : 'unexpected' })
+      scheduleReconnect('socket_closed')
     }
 
-    socket.onerror = (e) => {
-      console.error('[ws] error', e)
-      authPending = false
+    connectionSocket.onerror = (event) => {
+      if (socket !== connectionSocket) return
+      console.error('[ws] error', event)
+      recordDiagnostic('socket_error', { state: wsConnectionState.value })
       resolve() //Does not block applications
+      forceReconnect('socket_error')
     }
   })
 }
@@ -263,37 +610,47 @@ export function connect() {
 /**
  * Send authentication message (Token is passed through the message body and is not exposed in the URL)
  */
-function sendAuth(token, resolve) {
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: 'auth', payload: { token } }))
+function sendAuth(token, resolve, authenticatingSocket = socket) {
+  if (authenticatingSocket && authenticatingSocket.readyState === WebSocket.OPEN) {
+    authenticatingSocket.send(JSON.stringify({ type: 'auth', payload: { token } }))
     // Wait for auth_result response before resolving
     // Set a timeout to prevent the server from becoming unresponsive
     const timeout = setTimeout(() => {
       authPending = false
+      authenticated = false
       resolve()  //The timeout is also resolved and does not block the application.
+      if (socket === authenticatingSocket) forceReconnect('auth_timeout')
     }, 5000)
 
     // Listen for auth_result
-    const origOnMessage = socket.onmessage
-    socket.onmessage = (event) => {
+    const origOnMessage = authenticatingSocket.onmessage
+    authenticatingSocket.onmessage = (event) => {
+      if (socket !== authenticatingSocket) return
       try {
         const msg = JSON.parse(event.data)
         if (msg.type === 'auth_result') {
           clearTimeout(timeout)
           authPending = false
+          authenticated = msg.payload?.success === true
           syncServerClock(msg.payload?.server_time)
           readAckSupported = msg.payload?.read_ack === true
+          messageSyncSupported = msg.payload?.message_sync === true
+          healthCheckSupported = msg.payload?.health_check === true
           if (msg.payload?.success) {
             console.log('[ws] auth success')
-            wsConnected.value = true
-            flushPendingQueue()
+            reconnectAttempt = 0
+            setConnectionState('connected', 'auth_success')
+            startHealthMonitor()
+            beginPendingMessageSync()
           } else {
             console.warn('[ws] auth failed:', msg.payload?.reason)
-            wsConnected.value = false
+            setConnectionState('disconnected', 'auth_failed')
+            recordDiagnostic('auth_failed')
           }
           // Restore original message processing
-          socket.onmessage = origOnMessage
+          authenticatingSocket.onmessage = origOnMessage
           resolve()
+          if (!msg.payload?.success) disconnect()
           return
         }
         // Other messages are handed over to the original processing
@@ -303,26 +660,87 @@ function sendAuth(token, resolve) {
       }
     }
   } else {
+    authenticated = false
     resolve()
   }
 }
 
 export function disconnect() {
+  reconnectSuppressed = true
+  reconnectAttempt = 0
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
-  authPending = false
-  wsConnected.value = false
+  abandonCurrentSocket()
+  resetTransientConnectionState()
+  setConnectionState('disconnected', 'explicit_disconnect')
   readAckSupported = false
-  pendingReadInFlight.clear()
-  if (pendingFlushTimer) { clearTimeout(pendingFlushTimer); pendingFlushTimer = null }
-  if (pendingRetryTimer) { clearTimeout(pendingRetryTimer); pendingRetryTimer = null }
-  if (socket) {
-    socket.onclose = null //Prevent reconnection
-    socket.close()
-    socket = null
+  messageSyncSupported = false
+  healthCheckSupported = false
+}
+
+export function reconnectNow(reason = 'manual') {
+  if (!localStorage.getItem('session_token')) return false
+  reconnectSuppressed = false
+  if (!browserOnline()) {
+    setConnectionState('offline', reason)
+    return false
   }
+  if (isConnected()) {
+    startHealthMonitor()
+    sendHealthProbe(true)
+    flushPendingQueue()
+    return true
+  }
+  if (socket && (socket.readyState === WebSocket.CONNECTING || authPending)) return true
+  forceReconnect(reason, true)
+  return true
+}
+
+export function startConnectionRecovery() {
+  if (recoveryCleanup) return recoveryCleanup
+  if (typeof window === 'undefined' || typeof document === 'undefined') return () => {}
+
+  const onOnline = () => {
+    recordDiagnostic('network_online')
+    reconnectAttempt = 0
+    reconnectNow('network_online')
+  }
+  const onOffline = () => {
+    recordDiagnostic('network_offline')
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+    abandonCurrentSocket()
+    resetTransientConnectionState()
+    setConnectionState('offline', 'network_offline')
+  }
+  const onVisibilityChange = () => {
+    if (document.visibilityState === 'hidden') {
+      clearHealthTimers()
+      return
+    }
+    recordDiagnostic('app_foreground')
+    if (isConnected()) {
+      startHealthMonitor()
+      sendHealthProbe(true)
+    } else {
+      reconnectNow('app_foreground')
+    }
+  }
+  const onPageShow = () => reconnectNow('page_show')
+
+  window.addEventListener('online', onOnline)
+  window.addEventListener('offline', onOffline)
+  window.addEventListener('pageshow', onPageShow)
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  recoveryCleanup = () => {
+    window.removeEventListener('online', onOnline)
+    window.removeEventListener('offline', onOffline)
+    window.removeEventListener('pageshow', onPageShow)
+    document.removeEventListener('visibilitychange', onVisibilityChange)
+    recoveryCleanup = null
+  }
+  return recoveryCleanup
 }
 
 /**
@@ -333,11 +751,21 @@ export function send(type, payload) {
   // read is an "at least once delivery" message: it is persisted first regardless of whether it is currently online, and then deleted after read_ack.
   if (type === 'read') {
     queuePendingRead(payload)
-    const connected = Boolean(socket && socket.readyState === WebSocket.OPEN && !authPending)
+    const connected = Boolean(socket && socket.readyState === WebSocket.OPEN && authenticated)
     if (connected) schedulePendingFlush()
     return connected
   }
-  if (!socket || socket.readyState !== WebSocket.OPEN || authPending) {
+  // Text messages use an E2EE ciphertext outbox. Persist first, then send; reconnects and reloads can safely replay the same msg_id.
+  if (type === 'message') {
+    if (!queuePendingMessage(payload)) {
+      console.warn('[ws] pending message queue is full or invalid')
+      return false
+    }
+    const connected = Boolean(socket && socket.readyState === WebSocket.OPEN && authenticated)
+    if (connected) schedulePendingFlush()
+    return connected
+  }
+  if (!socket || socket.readyState !== WebSocket.OPEN || !authenticated) {
     console.warn('[ws] not connected or auth pending, message dropped')
     return false
   }
@@ -346,15 +774,20 @@ export function send(type, payload) {
     return true
   } catch (e) {
     console.error('[ws] send failed', e)
-    wsConnected.value = false
+    forceReconnect('send_failed')
     return false
   }
 }
 
 function flushPendingQueue() {
-  if (!(socket && socket.readyState === WebSocket.OPEN && !authPending)) return
+  if (!(socket && socket.readyState === WebSocket.OPEN && authenticated)) return
   const snapshot = pendingQueue.flatMap(item => {
-    if (item.type !== 'read') return [{ type: item.type, payload: { ...item.payload } }]
+    if (item.type === 'message') {
+      return pendingMessageSync || pendingMessageInFlight.has(item.payload.msg_id)
+        ? []
+        : [{ type: item.type, payload: { ...item.payload } }]
+    }
+    if (item.type !== 'read') return []
     const ids = (item.payload?.msg_id || []).filter(id => !pendingReadInFlight.has(`${item.payload.to}\u0000${id}`))
     return ids.length > 0 ? [{ type: item.type, payload: { ...item.payload, msg_id: ids } }] : []
   })
@@ -366,13 +799,16 @@ function flushPendingQueue() {
       sentItems.push({ type, payload })
       if (type === 'read') {
         for (const id of payload.msg_id) pendingReadInFlight.add(`${payload.to}\u0000${id}`)
+      } else if (type === 'message') {
+        pendingMessageInFlight.add(payload.msg_id)
       }
     } catch (e) {
       console.error('[ws] pending send failed', e)
-      wsConnected.value = false
+      forceReconnect('pending_send_failed')
       break
     }
   }
+  schedulePendingMessageRetry()
   if (!readAckSupported) {
     // The old backend does not have read_ack: regresses to the old version of "write to WebSocket and acknowledge" to avoid permanent accumulation of queues during upgrades.
     for (const item of sentItems) {
@@ -411,5 +847,5 @@ export function off(type, callback) {
 }
 
 export function isConnected() {
-  return socket?.readyState === WebSocket.OPEN && !authPending
+  return socket?.readyState === WebSocket.OPEN && authenticated
 }

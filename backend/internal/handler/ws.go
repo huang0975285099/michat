@@ -197,17 +197,19 @@ func (h *WSHandler) Serve(c *gin.Context) {
 
 func writeAuthResult(conn *websocket.Conn, success bool, reason string) {
 	type payload struct {
-		Success    bool   `json:"success"`
-		Reason     string `json:"reason,omitempty"`
-		ServerTime int64  `json:"server_time"`
-		ReadAck    bool   `json:"read_ack"`
+		Success     bool   `json:"success"`
+		Reason      string `json:"reason,omitempty"`
+		ServerTime  int64  `json:"server_time"`
+		ReadAck     bool   `json:"read_ack"`
+		MessageSync bool   `json:"message_sync"`
+		HealthCheck bool   `json:"health_check"`
 	}
 	type envelope struct {
 		Type    string  `json:"type"`
 		Payload payload `json:"payload"`
 	}
 	data, _ := json.Marshal(envelope{Type: "auth_result", Payload: payload{
-		Success: success, Reason: reason, ServerTime: time.Now().UnixMilli(), ReadAck: true,
+		Success: success, Reason: reason, ServerTime: time.Now().UnixMilli(), ReadAck: true, MessageSync: true, HealthCheck: true,
 	}})
 	conn.WriteMessage(websocket.TextMessage, data)
 }

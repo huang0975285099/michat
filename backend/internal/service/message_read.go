@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
-	"fmt"
+	"errors"
 	"strconv"
 	"strings"
 )
@@ -19,6 +19,16 @@ func NewMessageReadService(db *sql.DB) *MessageReadService {
 type ReadReceipt struct {
 	MsgID  string `json:"msg_id"`
 	ReadAt int64  `json:"read_at"`
+}
+
+var ErrMessageIDConflict = errors.New("message id already belongs to another delivery")
+
+// MessageDelivery is metadata only. The server never stores message plaintext or ciphertext.
+type MessageDelivery struct {
+	MsgID   string `json:"msg_id"`
+	MsgFrom string `json:"-"`
+	MsgTo   string `json:"-"`
+	SentAt  int64  `json:"ts"`
 }
 
 func msgIDTimestamp(msgID string) (int64, bool) {
@@ -37,24 +47,68 @@ func msgIDTimestamp(msgID string) (int64, bool) {
 
 // RecordMessage records the message attribution actually accepted by the server. The same ID is only allowed to belong to the same sender/receiver pair,
 // This prevents attackers from reusing other people's msg_id to forge read receipts.
-func (s *MessageReadService) RecordMessage(ctx context.Context, msgID, msgFrom, msgTo string) error {
-	if _, err := s.db.ExecContext(ctx,
+func (s *MessageReadService) AcceptMessage(ctx context.Context, msgID, msgFrom, msgTo string) (MessageDelivery, bool, error) {
+	res, err := s.db.ExecContext(ctx,
 		`INSERT IGNORE INTO message_deliveries (msg_id, msg_from, msg_to) VALUES (?, ?, ?)`,
 		msgID, msgFrom, msgTo,
-	); err != nil {
-		return err
+	)
+	if err != nil {
+		return MessageDelivery{}, false, err
 	}
 
-	var storedFrom, storedTo string
+	var delivery MessageDelivery
+	delivery.MsgID = msgID
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT msg_from, msg_to FROM message_deliveries WHERE msg_id = ?`, msgID,
-	).Scan(&storedFrom, &storedTo); err != nil {
-		return err
+		`SELECT msg_from, msg_to, CAST(UNIX_TIMESTAMP(sent_at) * 1000 AS SIGNED)
+		 FROM message_deliveries WHERE msg_id = ?`, msgID,
+	).Scan(&delivery.MsgFrom, &delivery.MsgTo, &delivery.SentAt); err != nil {
+		return MessageDelivery{}, false, err
 	}
-	if storedFrom != msgFrom || storedTo != msgTo {
-		return fmt.Errorf("message id already belongs to another delivery")
+	if delivery.MsgFrom != msgFrom || delivery.MsgTo != msgTo {
+		return MessageDelivery{}, false, ErrMessageIDConflict
 	}
-	return nil
+	created, err := res.RowsAffected()
+	if err != nil {
+		return MessageDelivery{}, false, err
+	}
+	return delivery, created == 1, nil
+}
+
+// RecordMessage retains the original API for file-transfer attribution.
+func (s *MessageReadService) RecordMessage(ctx context.Context, msgID, msgFrom, msgTo string) error {
+	_, _, err := s.AcceptMessage(ctx, msgID, msgFrom, msgTo)
+	return err
+}
+
+// GetMessageDeliveries returns accepted IDs owned by the sender. Missing IDs are intentionally omitted.
+func (s *MessageReadService) GetMessageDeliveries(ctx context.Context, msgFrom string, msgIDs []string) ([]MessageDelivery, error) {
+	if len(msgIDs) == 0 {
+		return []MessageDelivery{}, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(msgIDs)), ",")
+	args := make([]any, 0, len(msgIDs)+1)
+	args = append(args, msgFrom)
+	for _, id := range msgIDs {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT msg_id, msg_from, msg_to, CAST(UNIX_TIMESTAMP(sent_at) * 1000 AS SIGNED)
+		FROM message_deliveries
+		WHERE msg_from = ? AND msg_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	deliveries := make([]MessageDelivery, 0, len(msgIDs))
+	for rows.Next() {
+		var delivery MessageDelivery
+		if err = rows.Scan(&delivery.MsgID, &delivery.MsgFrom, &delivery.MsgTo, &delivery.SentAt); err != nil {
+			return nil, err
+		}
+		deliveries = append(deliveries, delivery)
+	}
+	return deliveries, rows.Err()
 }
 
 // DeleteMessage revokes the ownership of a message that has not yet been actually delivered (for example, a file offer cannot enter the receiving end buffer).

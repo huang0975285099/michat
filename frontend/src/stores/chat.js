@@ -1,7 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { encryptMessage, decryptMessage, encryptFile, decryptFile, bufToB64, b64ToBuf } from 'src/services/crypto'
-import { send, on, off, confirmPendingReads, getServerNow } from 'src/services/websocket'
+import {
+  send, on, off, confirmPendingReads, confirmPendingMessage,
+  discardPendingMessagesTo, retryPendingMessage, hasPendingMessage,
+  isConnected, getServerNow
+} from 'src/services/websocket'
 import { notifyNewMessage } from 'src/services/notify'
 import { buildEncryptedFileOfferPayload, openFileOfferMetadata, sealFileMetadata, validateFileMetadata } from 'src/services/file-metadata.mjs'
 import { useIdentityStore } from 'src/stores/identity'
@@ -350,7 +354,7 @@ async function dbCorrectBurnCountdown(msgId, readReceivedAt, burnAt) {
   })
 }
 
-async function dbUpdateMessageDelivery(msgId, status, ts) {
+async function dbUpdateMessageDelivery(msgId, status, ts, failureCode) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite')
@@ -361,6 +365,7 @@ async function dbUpdateMessageDelivery(msgId, status, ts) {
       if (record) {
         record.status = status
         if (typeof ts === 'number') record.ts = ts
+        if (failureCode !== undefined) record.failureCode = failureCode
         store.put(record)
       }
     }
@@ -451,7 +456,7 @@ export const useChatStore = defineStore('chat', () => {
   // fileTransfers: { [transferId]: { direction, status, progress, filename, ... } }
   const fileTransfers = ref({})
 
-  // Text message waiting for server ACK. ACK timeout only changes the local display status and does not automatically resend to avoid repeated messages.
+  // Text messages awaiting server ACK. The WebSocket outbox handles retransmission; this timer only updates the visible status.
   const ackTimers = new Map()
   const MESSAGE_ACK_TIMEOUT_MS = 15000
   // Message storage is asynchronous; the other party may have opened a session and sent back a read notification within a very short window.
@@ -478,6 +483,35 @@ export const useChatStore = defineStore('chat', () => {
 
   function ensureThread(chatId) {
     if (!messages.value[chatId]) messages.value[chatId] = []
+  }
+
+  function findLocalMessage(msgId) {
+    for (const chatId in messages.value) {
+      const msg = messages.value[chatId].find(item => item.id === msgId)
+      if (msg) return msg
+    }
+    return null
+  }
+
+  function armMessageAckTimer(msgId) {
+    const previous = ackTimers.get(msgId)
+    if (previous) clearTimeout(previous)
+    const timer = setTimeout(() => {
+      ackTimers.delete(msgId)
+      const msg = findLocalMessage(msgId)
+      if (msg?.status !== 'pending') return
+      msg.status = hasPendingMessage(msgId) ? 'queued' : 'failed'
+      dbUpdateMessageDelivery(msgId, msg.status).catch(() => {})
+    }, MESSAGE_ACK_TIMEOUT_MS)
+    ackTimers.set(msgId, timer)
+  }
+
+  function restoreOutgoingStatus(record) {
+    if (!record.mine) return undefined
+    if (hasPendingMessage(record.id)) return 'queued'
+    return record.status === 'pending' || record.status === 'queued'
+      ? 'failed'
+      : (record.status || 'sent')
   }
 
   /**
@@ -552,7 +586,8 @@ export const useChatStore = defineStore('chat', () => {
         burnAfterRead: msg.burnAfterRead || false,
         readReceivedAt: msg.readReceivedAt || null,
         burnAt: msg.burnAt || null,
-        status: msg.status || (msg.mine ? 'sent' : undefined)
+        status: msg.status || (msg.mine ? 'sent' : undefined),
+        failureCode: msg.failureCode || null
       })
       if (earlyReceipt) confirmReadReceiptsApplied(chatId, [earlyReceipt.msg_id])
     } catch (e) {
@@ -590,7 +625,7 @@ export const useChatStore = defineStore('chat', () => {
             const meta = JSON.parse(decryptedText)
             return { ...m, text: null, objectUrl: existingUrls[m.id] || null, ...meta }
           }
-          return { ...m, text: decryptedText, status: m.mine ? (m.status === 'pending' ? 'failed' : (m.status || 'sent')) : undefined }
+          return { ...m, text: decryptedText, status: restoreOutgoingStatus(m) }
         } catch (e) {
           console.warn('[chat] decrypt message failed:', m.id, e)
           return { ...m, text: '[Decryption failed]' }
@@ -658,7 +693,7 @@ export const useChatStore = defineStore('chat', () => {
             const meta = JSON.parse(decryptedText)
             grouped[cid].push({ ...m, text: null, objectUrl: existingUrls[m.id] || null, ...meta })
           } else {
-            grouped[cid].push({ ...m, text: decryptedText, status: m.mine ? (m.status === 'pending' ? 'failed' : (m.status || 'sent')) : undefined })
+            grouped[cid].push({ ...m, text: decryptedText, status: restoreOutgoingStatus(m) })
           }
         } catch (e) {
           console.warn('[chat] decrypt message failed:', m.id, e)
@@ -699,6 +734,7 @@ export const useChatStore = defineStore('chat', () => {
     // First release all file blob URLs of the session in memory to avoid leaks
     for (const m of messages.value[chatId] || []) releaseFileObjectUrl(m)
     try {
+      discardPendingMessagesTo(chatId)
       await dbClearMessages(chatId)
       await dbClearChatFiles(chatId)
     } catch (e) {
@@ -731,30 +767,59 @@ export const useChatStore = defineStore('chat', () => {
       burnAt: null
     })
 
-    const ok = send('message', {
+    const payload = {
       to: toChatId,
       msg_id: msgId,
       ephemeral_pub_key: encrypted.ephemeralPubKey,
       iv: encrypted.iv,
       ciphertext: encrypted.ciphertext,
       burn_after_read: burnAfterRead
-    })
-    if (!ok) {
-      const msg = messages.value[toChatId]?.find(m => m.id === msgId)
+    }
+    const sentNow = send('message', payload)
+    const queued = hasPendingMessage(msgId)
+    const msg = messages.value[toChatId]?.find(m => m.id === msgId)
+    if (!sentNow && !queued) {
       if (msg) msg.status = 'failed'
       await dbUpdateMessageDelivery(msgId, 'failed').catch(() => {})
       return false
     }
+    const status = sentNow ? 'pending' : 'queued'
+    if (msg) msg.status = status
+    await dbUpdateMessageDelivery(msgId, status).catch(() => {})
+    if (sentNow) armMessageAckTimer(msgId)
+    return true
+  }
 
-    const timer = setTimeout(() => {
-      ackTimers.delete(msgId)
-      const msg = messages.value[toChatId]?.find(m => m.id === msgId)
-      if (msg?.status === 'pending') {
-        msg.status = 'failed'
-        dbUpdateMessageDelivery(msgId, 'failed').catch(() => {})
-      }
-    }, MESSAGE_ACK_TIMEOUT_MS)
-    ackTimers.set(msgId, timer)
+  async function retryMessage(toChatId, recipientPubKey, msgId) {
+    const msg = messages.value[toChatId]?.find(item => item.id === msgId)
+    if (!msg?.mine || msg.type === 'file' || typeof msg.text !== 'string') return false
+
+    let queued = hasPendingMessage(msgId)
+    if (queued) {
+      retryPendingMessage(msgId)
+    } else {
+      const encrypted = await encryptMessage(msg.text, recipientPubKey)
+      send('message', {
+        to: toChatId,
+        msg_id: msgId,
+        ephemeral_pub_key: encrypted.ephemeralPubKey,
+        iv: encrypted.iv,
+        ciphertext: encrypted.ciphertext,
+        burn_after_read: msg.burnAfterRead || false
+      })
+      queued = hasPendingMessage(msgId)
+    }
+
+    if (!queued) {
+      msg.status = 'failed'
+      msg.failureCode = 'client_error'
+      await dbUpdateMessageDelivery(msgId, 'failed', undefined, msg.failureCode).catch(() => {})
+      return false
+    }
+    msg.status = isConnected() ? 'pending' : 'queued'
+    msg.failureCode = null
+    await dbUpdateMessageDelivery(msgId, msg.status, undefined, null).catch(() => {})
+    if (msg.status === 'pending') armMessageAckTimer(msgId)
     return true
   }
 
@@ -1140,6 +1205,12 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function recallMessage(chatId, msgId, toChatId) {
+    confirmPendingMessage(msgId)
+    const pendingTimer = ackTimers.get(msgId)
+    if (pendingTimer) {
+      clearTimeout(pendingTimer)
+      ackTimers.delete(msgId)
+    }
     // local delete
     const msgs = messages.value[chatId]
     let removed
@@ -1281,23 +1352,50 @@ function validateMsgId(msgId) {
         console.warn('[chat] invalid msg_id in ack:', payload.msg_id)
         return
       }
-      if (typeof payload.ts !== 'number' || payload.ts < 0) {
-        console.warn('[chat] invalid ts in ack:', payload.ts)
-        return
-      }
-
       const msgId = payload.msg_id
-      const ts = payload.ts
+      const status = payload.status || 'accepted'
       const timer = ackTimers.get(msgId)
       if (timer) {
         clearTimeout(timer)
         ackTimers.delete(msgId)
       }
-      for (const chatId in messages.value) {
-        const msg = messages.value[chatId].find(m => m.id === msgId)
-        if (msg) { msg.ts = ts; msg.status = 'sent'; break }
+
+      const msg = findLocalMessage(msgId)
+      if (status === 'accepted' || status === 'duplicate') {
+        if (typeof payload.ts !== 'number' || payload.ts <= 0) {
+          console.warn('[chat] invalid ts in ack:', payload.ts)
+          return
+        }
+        confirmPendingMessage(msgId)
+        if (msg) {
+          msg.ts = payload.ts
+          msg.status = 'sent'
+          msg.failureCode = null
+        }
+        await dbUpdateMessageDelivery(msgId, 'sent', payload.ts, null)
+        return
       }
-      await dbUpdateMessageDelivery(msgId, 'sent', ts)
+
+      if (status === 'retry' || payload.retryable === true) {
+        if (msg) {
+          msg.status = 'queued'
+          msg.failureCode = payload.code || 'temporary_failure'
+        }
+        await dbUpdateMessageDelivery(msgId, 'queued', undefined, payload.code || 'temporary_failure')
+        return
+      }
+
+      if (status === 'rejected') {
+        confirmPendingMessage(msgId)
+        if (msg) {
+          msg.status = 'failed'
+          msg.failureCode = payload.code || 'rejected'
+        }
+        await dbUpdateMessageDelivery(msgId, 'failed', undefined, payload.code || 'rejected')
+        return
+      }
+
+      console.warn('[chat] invalid ack status:', status)
     }
 
     async function onReadReceipt(payload) {
@@ -1603,6 +1701,7 @@ function validateMsgId(msgId) {
     if (!validateChatId(fromChatId) || !Array.isArray(receipts)) return
     const validReceipts = receipts.filter(r => validateMsgId(r?.msg_id) && Number.isFinite(r?.read_at) && r.read_at > 0)
     if (validReceipts.length === 0) return
+    validReceipts.forEach(receipt => confirmPendingMessage(receipt.msg_id))
     const receiptByID = new Map(validReceipts.map(r => [r.msg_id, r]))
     for (const chatId in messages.value) {
       if (chatId !== fromChatId) continue
@@ -1756,6 +1855,7 @@ function validateMsgId(msgId) {
     totalUnread,
     fileTransfers,
     sendMessage,
+    retryMessage,
     sendFile,
     validateFile,
     recallMessage,

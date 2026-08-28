@@ -143,10 +143,26 @@
               <span>{{ formatTime(msg.ts) }}</span>
               <div>
                 <q-icon v-if="msg.status === 'pending'" name="schedule" size="13px">
-                  <q-tooltip>Sending</q-tooltip>
+                  <q-tooltip>正在发送，等待服务器确认</q-tooltip>
                 </q-icon>
-                <q-icon v-else-if="msg.status === 'failed'" name="error_outline" size="14px" color="negative">
-                  <q-tooltip>Server not confirmed，Please check the network and try again</q-tooltip>
+                <q-icon
+                  v-else-if="msg.status === 'queued'"
+                  name="cloud_upload"
+                  size="14px"
+                  class="message-retry-icon"
+                  @click.stop="retryMsg(msg)"
+                >
+                  <q-tooltip>{{ messageFailureText(msg) }}</q-tooltip>
+                </q-icon>
+                <q-icon
+                  v-else-if="msg.status === 'failed'"
+                  name="error_outline"
+                  size="14px"
+                  color="negative"
+                  class="message-retry-icon"
+                  @click.stop="retryMsg(msg)"
+                >
+                  <q-tooltip>{{ messageFailureText(msg) }}</q-tooltip>
                 </q-icon>
                 <template v-else>
                   <span v-if="msg.read" class="read-status">✔✔</span>
@@ -162,6 +178,16 @@
             </div>
             <q-menu v-if="msg.status !== 'pending'" context-menu>
               <q-list dense style="min-width: 100px">
+                <q-item
+                  v-if="msg.type !== 'file' && (msg.status === 'queued' || msg.status === 'failed')"
+                  clickable
+                  v-close-popup
+                  @click="retryMsg(msg)"
+                  class="text-primary items-center q-gutter-xs"
+                >
+                  <q-icon name="refresh" size="sm" />
+                  <span>重新发送</span>
+                </q-item>
                 <q-item v-if="canRecall(msg)" clickable v-close-popup @click="recall(msg)" class="text-negative items-center q-gutter-xs">
                   <q-icon name="undo" size="sm" />
                   <span>Delete both sides</span>
@@ -414,6 +440,7 @@ const inputEl = ref(null)
 const fileInputEl = ref(null)
 const inputText = ref('')
 const sending = ref(false)
+const retryingMessageId = ref(null)
 const burnMode = ref(false)  //Burn after reading mode
 const voiceInputMode = ref(false)
 const morePanelOpen = ref(false)
@@ -1008,6 +1035,44 @@ async function sendMsg(event) {
   }
 }
 
+async function retryMsg(msg) {
+  if (retryingMessageId.value || !msg?.id) return
+  if (!friendPubKey.value) {
+    $q.notify({ type: 'warning', message: '无法获取对方公钥，请刷新后重试' })
+    return
+  }
+  retryingMessageId.value = msg.id
+  try {
+    const ok = await chatStore.retryMessage(friendChatId, friendPubKey.value, msg.id)
+    if (!ok) {
+      $q.notify({ type: 'warning', message: '无法加入发送队列，请稍后重试' })
+    } else if (msg.status === 'queued') {
+      $q.notify({ type: 'info', message: '已加入发送队列，网络恢复后自动发送' })
+    }
+  } catch (error) {
+    $q.notify({ type: 'negative', message: `重试失败：${error?.message || '未知错误'}` })
+  } finally {
+    retryingMessageId.value = null
+  }
+}
+
+function messageFailureText(msg) {
+  const reasons = {
+    invalid_recipient: '收件人无效，消息未发送',
+    invalid_payload: '加密消息格式无效，消息未发送',
+    not_friends: '对方已不是好友，消息未发送',
+    message_id_conflict: '消息编号冲突，请删除后重新发送',
+    service_unavailable: '消息服务暂不可用，将自动重试',
+    temporary_failure: '服务器暂时不可用，将自动重试',
+    client_error: '消息发送失败，点击重试',
+    rejected: '服务器拒绝了这条消息'
+  }
+  if (msg?.failureCode && reasons[msg.failureCode]) return reasons[msg.failureCode]
+  return msg?.status === 'queued'
+    ? '等待网络，恢复连接后自动发送；点击立即重试'
+    : '发送失败，点击重试'
+}
+
 const RECALL_LIMIT_MS = 144 * 60 * 60 * 1000 //Can be withdrawn within 144 hours (6 days)
 
 function canRecall(msg) {
@@ -1347,6 +1412,9 @@ function shouldCompact(msgs, idx) {
   font-size: 11px;
   opacity: 0.5;
   flex-shrink: 0;
+}
+.message-retry-icon {
+  cursor: pointer;
 }
 .voice-message {
   display: flex;
