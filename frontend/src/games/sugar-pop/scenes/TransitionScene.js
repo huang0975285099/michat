@@ -1,4 +1,5 @@
 import Scene from 'phaser/src/scene/Scene.js'
+import { t } from '../../../i18n/index.js'
 
 export function createTransitionScene(SceneBase) {
   return class TransitionScene extends SceneBase {
@@ -25,10 +26,10 @@ export function createTransitionScene(SceneBase) {
     const { width, height } = this.scale.gameSize
     this.root = this.add.container(0, 0).setDepth(900)
     this.glow = this.add.rectangle(width / 2, height / 2, width, height, 0xffc4df, 0.35)
-    this.title = this.add.text(width / 2, height / 2 - 34, 'Sweet Finish!', {
+    this.title = this.add.text(width / 2, height / 2 - 34, t('sugarPop.sweetFinish'), {
       fontFamily: 'Arial, sans-serif', fontSize: `${Math.max(28, Math.min(48, width * 0.1))}px`, fontStyle: 'bold', color: '#8a3978', stroke: '#ffffff', strokeThickness: 6,
     }).setOrigin(0.5)
-    this.counter = this.add.text(width / 2, height / 2 + 34, `${movesLeft} moves  •  +0`, {
+    this.counter = this.add.text(width / 2, height / 2 + 34, t('sugarPop.movesBonus', { moves: movesLeft, score: 0 }), {
       fontFamily: 'Arial, sans-serif', fontSize: '20px', fontStyle: 'bold', color: '#66315d',
     }).setOrigin(0.5)
     this.root.add([this.glow, this.title, this.counter])
@@ -42,10 +43,10 @@ export function createTransitionScene(SceneBase) {
         onUpdate: (tween) => {
           const spent = Math.min(safeMoves, Math.round(tween.getValue()))
           const score = safeMoves === 0 ? bonusScore : Math.round((spent / safeMoves) * bonusScore)
-          this.counter.setText(`${safeMoves - spent} moves  •  +${score}`)
+          this.counter.setText(t('sugarPop.movesBonus', { moves: safeMoves - spent, score }))
         },
         onComplete: () => {
-          this.counter.setText(`0 moves  •  +${bonusScore}`)
+          this.counter.setText(t('sugarPop.movesBonus', { moves: 0, score: bonusScore }))
           this.time.delayedCall(220, () => {
             this.root?.destroy(true)
             this.root = null

@@ -5,8 +5,8 @@
             class="text-center text-grey q-mt-xl"
         >
             <q-icon name="chat_bubble_outline" size="60px" class="q-mb-md" />
-            <div>No chat history yet</div>
-            <div class="text-caption">Go to your friends list and start chatting</div>
+            <div>{{ t("chats.empty") }}</div>
+            <div class="text-caption">{{ t("chats.emptyHint") }}</div>
         </div>
 
         <q-card v-else bordered>
@@ -24,7 +24,7 @@
                 <q-item-section>
                     <div class="row items-center q-gutter-xs">
                         <q-item-label>{{ chat.nickname }}</q-item-label>
-                        <q-badge v-if="chat.deregistered" color="grey-5" label="Logged out" style="font-size:10px" />
+                        <q-badge v-if="chat.deregistered" color="grey-5" :label="t('chats.loggedOut')" style="font-size:10px" />
                         <q-icon
                             v-if="chat.online"
                             name="circle"
@@ -59,7 +59,7 @@
                             class="text-negative items-center q-gutter-xs"
                         >
                             <q-icon name="delete" size="sm" />
-                            <span>Delete conversation</span>
+                            <span>{{ t("chats.delete") }}</span>
                         </q-item>
                     </q-list>
                 </q-menu>
@@ -77,11 +77,13 @@ import { useIdentityStore } from "src/stores/identity";
 import { friendApi } from "src/services/api";
 import { on, off } from "src/services/websocket";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
+import { useI18n } from "src/i18n";
 
 const $q = useQuasar();
 const router = useRouter();
 const chatStore = useChatStore();
 const identity = useIdentityStore();
+const { locale, t } = useI18n();
 const friends = ref([]);
 const friendMap = ref({}); //{ chatId: friend } for quick search
 const onlineMap = ref({}); // { chatId: boolean }
@@ -118,8 +120,8 @@ function handleStatus(payload) {
 
 function deleteChat() {
     $q.dialog({
-        title: "Delete conversation",
-        message: `delete with「${menuChat.value.nickname}」's chat history？This operation is irreversible。`,
+        title: t("chats.deleteTitle"),
+        message: t("chats.deleteMessage", { name: menuChat.value.nickname }),
         cancel: true,
         persistent: true,
     }).onOk(async () => {
@@ -152,7 +154,13 @@ const recentChats = computed(() => {
             // Only determine "logged out" after getFriends returns on this page to avoid mislabeling during loading.
             deregistered: friendsLoaded.value && !friend,
             pubkey: friend ? friend.public_key : identity.getFriendPubKey(chatId) || "",
-            lastMessage: last?.text || "Click to start chatting",
+            lastMessage: last?.decryptionFailed || last?.text === "[Decryption failed]"
+                ? t("chat.decryptionFailed")
+                : last?.kind === "voice"
+                    ? t("chats.voiceMessage")
+                    : last?.type === "file"
+                        ? t("chats.fileMessage", { name: last.filename || "" })
+                        : last?.text || t("chats.startChatting"),
             ts: last?.ts || 0,
             unread: unreadCount,
             online: !!onlineMap.value[chatId],
@@ -174,12 +182,12 @@ function formatTime(ts) {
     const d = new Date(ts);
     const now = new Date();
     if (d.toDateString() === now.toDateString()) {
-        return d.toLocaleTimeString("zh-CN", {
+        return d.toLocaleTimeString(locale.value, {
             hour: "2-digit",
             minute: "2-digit",
         });
     }
-    return d.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+    return d.toLocaleDateString(locale.value, { month: "numeric", day: "numeric" });
 }
 </script>
 

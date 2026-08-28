@@ -9,11 +9,11 @@ const VOICE_FORMATS = [
 ]
 
 export function chooseVoiceFormat(MediaRecorderClass = globalThis.MediaRecorder) {
-  if (!MediaRecorderClass) throw new Error('当前浏览器不支持语音录制')
+  if (!MediaRecorderClass) throw new Error(t('chat.micUnsupported'))
   const supported = VOICE_FORMATS.find(({ mimeType }) =>
     typeof MediaRecorderClass.isTypeSupported !== 'function' || MediaRecorderClass.isTypeSupported(mimeType)
   )
-  if (!supported) throw new Error('当前浏览器没有可用的语音编码格式')
+  if (!supported) throw new Error(t('chat.voiceCodecUnavailable'))
   return supported
 }
 
@@ -28,3 +28,4 @@ export function formatVoiceDuration(durationMs) {
   const seconds = String(totalSeconds % 60).padStart(2, '0')
   return `${minutes}:${seconds}`
 }
+import { t } from '../i18n/index.js'

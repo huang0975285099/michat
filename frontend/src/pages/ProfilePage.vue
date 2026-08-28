@@ -7,11 +7,8 @@
                     <q-icon name="arrow_upward" size="48px" color="white" />
                 </div>
                 <div class="wechat-guide-text">
-                    <div class="text-h6 q-mb-sm">Please use a browser to open</div>
-                    <div class="text-body2">
-                        Click on the upper right corner <strong>⋮</strong> menu<br />
-                        Choose「Open in browser」
-                    </div>
+                    <div class="text-h6 q-mb-sm">{{ t("profile.browserOnlyTitle") }}</div>
+                    <div class="text-body2">{{ t("profile.browserOnlyMessage") }}</div>
                 </div>
             </div>
         </div>
@@ -213,12 +210,12 @@
         <q-dialog v-model="showBackupDialog">
             <q-card style="min-width: 320px">
                 <q-card-section>
-                    <div class="text-h6">Private key backup</div>
+                    <div class="text-h6">{{ t("profile.backupTitle") }}</div>
                     <div class="text-caption text-orange q-mb-md">
-                        Please save the following content to a safe place。Losing your private key will permanently render your identity irrecoverable。
+                        {{ t("profile.backupDescription") }}
                     </div>
                     <div class="text-caption text-grey q-mb-xs">
-                        private key（Base64）
+                        {{ t("profile.privateKeyBase64") }}
                     </div>
                     <q-input
                         :model-value="privKey"
@@ -233,11 +230,11 @@
                 <q-card-actions align="right">
                     <q-btn
                         flat
-                        label="Copy private key"
+                        :label="t('profile.copyPrivateKey')"
                         color="primary"
                         @click="copyPrivKey"
                     />
-                    <q-btn flat label="close" v-close-popup />
+                    <q-btn flat :label="t('common.close')" v-close-popup />
                 </q-card-actions>
             </q-card>
         </q-dialog>
@@ -246,36 +243,35 @@
         <q-dialog v-model="showSetupDialog">
             <q-card style="min-width: 340px">
                 <q-card-section>
-                    <div class="text-h6">Set security code</div>
+                    <div class="text-h6">{{ t("profile.codeSetupTitle") }}</div>
                     <div class="text-caption text-grey q-mb-md">
-                        Please enter 6
-                        digit security code。Security codes are not stored anywhere，Please remember。
+                        {{ t("profile.codeSetupDescription") }}
                     </div>
 
-                    <div class="text-caption text-grey q-mb-xs">Security code</div>
+                    <div class="text-caption text-grey q-mb-xs">{{ t("profile.codeLabel") }}</div>
                     <q-input
                         v-model="setupCode1"
                         outlined
                         dense
                         maxlength="6"
                         inputmode="numeric"
-                        placeholder="6digits"
+                        :placeholder="t('profile.sixDigits')"
                         class="q-mb-sm"
                     />
 
-                    <div class="text-caption text-grey q-mb-xs">Enter again</div>
+                    <div class="text-caption text-grey q-mb-xs">{{ t("profile.codeAgain") }}</div>
                     <q-input
                         v-model="setupCode2"
                         outlined
                         dense
                         maxlength="6"
                         inputmode="numeric"
-                        placeholder="6digits"
+                        :placeholder="t('profile.sixDigits')"
                         class="q-mb-sm"
                     />
 
                     <div class="text-caption text-grey q-mb-xs">
-                        Automatically lock after timeout
+                        {{ t("profile.autoLockTitle") }}
                     </div>
                     <q-select
                         v-model="setupTimeout"
@@ -288,16 +284,15 @@
                     />
 
                     <div class="text-caption text-negative q-mb-sm">
-                        ⚠️ Forgot security code =
-                        Identity permanently lost。It is recommended to write it down on paper or use a password manager to back it up。
+                        {{ t("profile.codeWarning") }}
                     </div>
                 </q-card-section>
                 <q-card-actions align="right">
-                    <q-btn flat label="Cancel" v-close-popup />
+                    <q-btn flat :label="t('common.cancel')" v-close-popup />
                     <q-btn
                         unelevated
                         color="primary"
-                        label="Confirm settings"
+                        :label="t('profile.confirmSetup')"
                         :disable="!canSetup"
                         @click="doSetup"
                     />
@@ -309,10 +304,10 @@
         <q-dialog v-model="showLockSettings">
             <q-card style="min-width: 300px">
                 <q-card-section>
-                    <div class="text-h6">Security code settings</div>
+                    <div class="text-h6">{{ t("profile.codeSettingsTitle") }}</div>
 
                     <div class="q-mb-md">
-                        <div class="text-subtitle2 q-mb-xs">Automatically lock after timeout</div>
+                        <div class="text-subtitle2 q-mb-xs">{{ t("profile.autoLockTitle") }}</div>
                         <q-select
                             v-model="editTimeout"
                             :options="timeoutOptions"
@@ -326,13 +321,13 @@
                     <q-btn
                         outline
                         color="grey-7"
-                        label="Turn off security code"
+                        :label="t('profile.disableCode')"
                         class="full-width"
                         @click="showDisableConfirm = true"
                     />
                 </q-card-section>
                 <q-card-actions align="right">
-                    <q-btn flat label="close" v-close-popup />
+                    <q-btn flat :label="t('common.close')" v-close-popup />
                 </q-card-actions>
             </q-card>
         </q-dialog>
@@ -341,12 +336,12 @@
         <q-dialog v-model="showDisableConfirm">
             <q-card style="min-width: 300px">
                 <q-card-section>
-                    <div class="text-h6">Turn off security code</div>
+                    <div class="text-h6">{{ t("profile.disableCodeTitle") }}</div>
                     <div class="text-caption text-negative q-mb-md">
-                        After shutting down if your phone is lost，Message may be viewed by others。
+                        {{ t("profile.disableCodeWarning") }}
                     </div>
                     <div class="text-caption text-grey q-mb-xs">
-                        Enter security code to confirm
+                        {{ t("profile.enterCodeToConfirm") }}
                     </div>
                     <q-input
                         v-model="disableCode"
@@ -354,15 +349,15 @@
                         dense
                         maxlength="6"
                         inputmode="numeric"
-                        placeholder="6digits"
+                        :placeholder="t('profile.sixDigits')"
                     />
                 </q-card-section>
                 <q-card-actions align="right">
-                    <q-btn flat label="Cancel" v-close-popup />
+                    <q-btn flat :label="t('common.cancel')" v-close-popup />
                     <q-btn
                         unelevated
                         color="negative"
-                        label="Confirm close"
+                        :label="t('profile.confirmDisableCode')"
                         :disable="disableCode.length !== 6"
                         @click="doDisable"
                     />
@@ -374,25 +369,25 @@
         <q-dialog v-model="showNicknameDialog">
             <q-card style="min-width: 300px">
                 <q-card-section>
-                    <div class="text-h6">Modify nickname</div>
-                    <div class="text-caption text-grey q-mb-md">most 8 characters</div>
+                    <div class="text-h6">{{ t("profile.nicknameTitle") }}</div>
+                    <div class="text-caption text-grey q-mb-md">{{ t("profile.nicknameLimit") }}</div>
                     <q-input
                         v-model="newNickname"
                         outlined
                         dense
                         maxlength="8"
-                        placeholder="Please enter a new nickname"
+                        :placeholder="t('profile.nicknamePlaceholder')"
                         autofocus
                         counter
                         @keyup.enter="doUpdateNickname"
                     />
                 </q-card-section>
                 <q-card-actions align="right">
-                    <q-btn flat label="Cancel" v-close-popup />
+                    <q-btn flat :label="t('common.cancel')" v-close-popup />
                     <q-btn
                         unelevated
                         color="primary"
-                        label="Confirm"
+                        :label="t('common.confirm')"
                         :disable="!newNickname.trim() || newNickname.trim().length > 8"
                         :loading="updatingNickname"
                         @click="doUpdateNickname"
@@ -405,11 +400,11 @@
         <q-dialog v-model="showInviteDialog">
             <q-card style="min-width: 320px">
                 <q-card-section>
-                    <div class="text-h6">Invite friends</div>
+                    <div class="text-h6">{{ t("profile.inviteTitle") }}</div>
                     <div class="text-caption text-grey q-mb-md">
-                        Send this link to a friend，After your friend clicks the link to register, a friend application will be automatically sent to you.。
+                        {{ t("profile.inviteDescription") }}
                     </div>
-                    <div class="text-caption text-grey q-mb-xs">Invitation link</div>
+                    <div class="text-caption text-grey q-mb-xs">{{ t("profile.inviteLink") }}</div>
                     <q-input
                         :model-value="inviteLink"
                         readonly
@@ -419,16 +414,16 @@
                         rows="3"
                         class="q-mb-sm"
                     />
-                    <div class="text-caption text-grey">The link is valid for a long time</div>
+                    <div class="text-caption text-grey">{{ t("profile.inviteValidity") }}</div>
                 </q-card-section>
                 <q-card-actions align="right">
                     <q-btn
                         flat
-                        label="Copy link"
+                        :label="t('profile.copyLink')"
                         color="primary"
                         @click="copyInviteLink"
                     />
-                    <q-btn flat label="close" v-close-popup />
+                    <q-btn flat :label="t('common.close')" v-close-popup />
                 </q-card-actions>
             </q-card>
         </q-dialog>
@@ -437,18 +432,18 @@
         <q-dialog v-model="showMicDialog" @hide="stopMicTest">
             <q-card style="min-width: 340px">
                 <q-card-section>
-                    <div class="text-h6">Microphone detection</div>
+                    <div class="text-h6">{{ t("profile.micTitle") }}</div>
                 </q-card-section>
 
                 <q-card-section>
                     <div v-if="micStatus === 'idle'" class="text-center q-py-lg">
                         <q-icon name="mic" size="48px" color="grey-5" />
-                        <div class="text-grey q-mt-sm">Click the button below to start testing</div>
+                        <div class="text-grey q-mt-sm">{{ t("profile.startTestHint") }}</div>
                     </div>
 
                     <div v-else-if="micStatus === 'checking'" class="text-center q-py-lg">
                         <q-spinner color="primary" size="48px" />
-                        <div class="text-grey q-mt-sm">Requesting microphone permission...</div>
+                        <div class="text-grey q-mt-sm">{{ t("profile.requestingMic") }}</div>
                     </div>
 
                     <div v-else-if="micStatus === 'error'" class="text-center q-py-lg">
@@ -457,7 +452,7 @@
                         <q-btn
                             flat
                             color="primary"
-                            label="Try again"
+                            :label="t('profile.tryAgain')"
                             class="q-mt-sm"
                             @click="startMicTest"
                         />
@@ -466,10 +461,10 @@
                     <div v-else-if="micStatus === 'ok'">
                         <div class="row items-center q-mb-md">
                             <q-icon name="check_circle" color="positive" size="24px" class="q-mr-sm" />
-                            <span class="text-positive">Microphone is normal</span>
+                            <span class="text-positive">{{ t("profile.micNormal") }}</span>
                         </div>
 
-                        <div class="text-caption text-grey q-mb-xs">Volume</div>
+                        <div class="text-caption text-grey q-mb-xs">{{ t("profile.volume") }}</div>
                         <q-linear-progress
                             :value="micLevel"
                             color="teal"
@@ -483,7 +478,7 @@
                             </div>
                         </q-linear-progress>
 
-                        <div class="text-caption text-grey q-mb-xs">Select device</div>
+                        <div class="text-caption text-grey q-mb-xs">{{ t("profile.selectDevice") }}</div>
                         <q-select
                             v-model="selectedMicId"
                             :options="micDevices"
@@ -502,10 +497,10 @@
                         v-if="micStatus === 'idle'"
                         unelevated
                         color="primary"
-                        label="Start testing"
+                        :label="t('profile.startTesting')"
                         @click="startMicTest"
                     />
-                    <q-btn flat label="close" v-close-popup />
+                    <q-btn flat :label="t('common.close')" v-close-popup />
                 </q-card-actions>
             </q-card>
         </q-dialog>
@@ -514,18 +509,18 @@
         <q-dialog v-model="showCamDialog" @hide="stopCamTest">
             <q-card style="min-width: 340px">
                 <q-card-section>
-                    <div class="text-h6">Camera detection</div>
+                    <div class="text-h6">{{ t("profile.cameraTitle") }}</div>
                 </q-card-section>
 
                 <q-card-section>
                     <div v-if="camStatus === 'idle'" class="text-center q-py-lg">
                         <q-icon name="videocam" size="48px" color="grey-5" />
-                        <div class="text-grey q-mt-sm">Click the button below to start testing</div>
+                        <div class="text-grey q-mt-sm">{{ t("profile.startTestHint") }}</div>
                     </div>
 
                     <div v-else-if="camStatus === 'checking'" class="text-center q-py-lg">
                         <q-spinner color="primary" size="48px" />
-                        <div class="text-grey q-mt-sm">Requesting camera permission...</div>
+                        <div class="text-grey q-mt-sm">{{ t("profile.requestingCamera") }}</div>
                     </div>
 
                     <div v-else-if="camStatus === 'error'" class="text-center q-py-lg">
@@ -534,7 +529,7 @@
                         <q-btn
                             flat
                             color="primary"
-                            label="Try again"
+                            :label="t('profile.tryAgain')"
                             class="q-mt-sm"
                             @click="startCamTest"
                         />
@@ -543,7 +538,7 @@
                     <div v-show="camStatus === 'ok'">
                         <div class="row items-center q-mb-md">
                             <q-icon name="check_circle" color="positive" size="24px" class="q-mr-sm" />
-                            <span class="text-positive">The camera is normal</span>
+                            <span class="text-positive">{{ t("profile.cameraNormal") }}</span>
                         </div>
 
                         <video
@@ -554,7 +549,7 @@
                             muted
                         ></video>
 
-                        <div class="text-caption text-grey q-mb-xs">Select device</div>
+                        <div class="text-caption text-grey q-mb-xs">{{ t("profile.selectDevice") }}</div>
                         <q-select
                             v-model="selectedCamId"
                             :options="camDevices"
@@ -573,10 +568,10 @@
                         v-if="camStatus === 'idle'"
                         unelevated
                         color="primary"
-                        label="Start testing"
+                        :label="t('profile.startTesting')"
                         @click="startCamTest"
                     />
-                    <q-btn flat label="close" v-close-popup />
+                    <q-btn flat :label="t('common.close')" v-close-popup />
                 </q-card-actions>
             </q-card>
         </q-dialog>
@@ -691,10 +686,10 @@ async function doUpdateNickname() {
     updatingNickname.value = true;
     try {
         await identity.updateNickname(name);
-        $q.notify({ type: "positive", message: "Nickname has been updated" });
+        $q.notify({ type: "positive", message: t("profile.nicknameUpdated") });
         showNicknameDialog.value = false;
     } catch (e) {
-        $q.notify({ type: "negative", message: e.response?.data?.error || "Modification failed，Please try again" });
+        $q.notify({ type: "negative", message: e.response?.data?.error || t("profile.nicknameUpdateFailed") });
     } finally {
         updatingNickname.value = false;
     }
@@ -709,12 +704,12 @@ const showSetupDialog = ref(false);
 const setupCode1 = ref("");
 const setupCode2 = ref("");
 const setupTimeout = ref(1 / 6);
-const timeoutOptions = [
-    { label: "10 minutes", value: 1 / 6 },
-    { label: "30 minutes", value: 0.5 },
-    { label: "1 hours", value: 1 },
-    { label: "2 hours", value: 2 },
-];
+const timeoutOptions = computed(() => [
+    { label: t("profile.minutes", { count: 10 }), value: 1 / 6 },
+    { label: t("profile.minutes", { count: 30 }), value: 0.5 },
+    { label: t("profile.hours", { count: 1 }), value: 1 },
+    { label: t("profile.hours", { count: 2 }), value: 2 },
+]);
 
 function lockTimeoutLabel(value) {
     if (value < 1) return t("profile.minutes", { count: Math.round(value * 60) });
@@ -751,7 +746,7 @@ watch(showBackupDialog, async (open) => {
         try {
             privKey.value = await identity.exportKey();
         } catch {
-            privKey.value = "（Unable to read，Please unlock first）";
+            privKey.value = t("profile.keyReadFailed");
         }
     } else {
         privKey.value = "";
@@ -760,7 +755,7 @@ watch(showBackupDialog, async (open) => {
 
 function copyId() {
     navigator.clipboard.writeText(identity.chatId);
-    $q.notify({ type: "positive", message: "Chat ID Copied" });
+    $q.notify({ type: "positive", message: t("profile.chatIdCopied") });
 }
 
 function generateInviteLink() {
@@ -773,19 +768,19 @@ function generateInviteLink() {
 
 function copyInviteLink() {
     navigator.clipboard.writeText(inviteLink.value);
-    $q.notify({ type: "positive", message: "Invitation link copied" });
+    $q.notify({ type: "positive", message: t("profile.inviteCopied") });
 }
 
 function copyPrivKey() {
     navigator.clipboard.writeText(privKey.value);
-    $q.notify({ type: "positive", message: "Private key copied，Please keep it properly" });
+    $q.notify({ type: "positive", message: t("profile.privateKeyCopied") });
 }
 
 async function doSetup() {
     if (!canSetup.value) return;
     try {
         await identity.enableSecurityCode(setupCode1.value, setupTimeout.value);
-        $q.notify({ type: "positive", message: "Security code set successfully，please remember！" });
+        $q.notify({ type: "positive", message: t("profile.codeSetSuccess") });
         showSetupDialog.value = false;
         setupCode1.value = "";
         setupCode2.value = "";
@@ -803,7 +798,7 @@ async function doSetup() {
 async function doDisable() {
     try {
         await identity.disableSecCode(disableCode.value);
-        $q.notify({ type: "positive", message: "Security code is closed" });
+        $q.notify({ type: "positive", message: t("profile.codeDisabled") });
         showDisableConfirm.value = false;
         showLockSettings.value = false;
         disableCode.value = "";
@@ -834,15 +829,15 @@ function openMicDialog() {
 
 function micErrorMessage(e) {
     if (e.name === "NotFoundError" || e.name === "DevicesNotFoundError") {
-        return "Microphone device not found，Please check device connection";
+        return t("call.deviceNotFound", { device: t("call.deviceMic") });
     }
     if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
-        return "Microphone permission denied，Please allow microphone access in your browser settings";
+        return t("call.permissionDenied", { device: t("call.deviceMic") });
     }
     if (e.name === "NotReadableError") {
-        return "The microphone is occupied by another program，Please close and try again";
+        return t("call.deviceBusy", { device: t("call.deviceMic") });
     }
-    return "Unable to access microphone：" + (e.message || e.name);
+    return t("call.deviceAccessFailed", { device: t("call.deviceMic"), error: e.message || e.name });
 }
 
 async function startMicTest() {
@@ -892,7 +887,7 @@ async function enumerateMics() {
         micDevices.value = devices
             .filter((d) => d.kind === "audioinput")
             .map((d) => ({
-                label: d.label || "unknown device",
+                label: d.label || t("profile.unknownDevice"),
                 value: d.deviceId,
             }));
         if (!selectedMicId.value && micDevices.value.length > 0) {
@@ -948,15 +943,15 @@ function openCamDialog() {
 
 function camErrorMessage(e) {
     if (e.name === "NotFoundError" || e.name === "DevicesNotFoundError") {
-        return "Camera device not found，Please check device connection";
+        return t("call.deviceNotFound", { device: t("profile.cameraTitle") });
     }
     if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
-        return "Camera permission denied，Please allow camera access in your browser settings";
+        return t("call.permissionDenied", { device: t("profile.cameraTitle") });
     }
     if (e.name === "NotReadableError") {
-        return "The camera is occupied by other programs，Please close and try again";
+        return t("call.deviceBusy", { device: t("profile.cameraTitle") });
     }
-    return "Unable to access camera：" + (e.message || e.name);
+    return t("call.deviceAccessFailed", { device: t("profile.cameraTitle"), error: e.message || e.name });
 }
 
 async function startCamTest() {
@@ -990,7 +985,7 @@ async function enumerateCams() {
         camDevices.value = devices
             .filter((d) => d.kind === "videoinput")
             .map((d) => ({
-                label: d.label || "unknown device",
+                label: d.label || t("profile.unknownDevice"),
                 value: d.deviceId,
             }));
         if (!selectedCamId.value && camDevices.value.length > 0) {
@@ -1023,29 +1018,27 @@ function stopCamTest() {
 
 function confirmClear() {
     $q.dialog({
-        title: "Cancel account",
-        message:
-            "This will permanently delete your account、Friendships and all data，Unable to recover！Are you sure to continue?？",
+        title: t("lock.deleteTitle"),
+        message: t("lock.deleteMessage"),
         cancel: true,
         persistent: true,
-        ok: "Confirm logout",
+        ok: t("lock.deleteConfirm"),
         color: "negative",
     }).onOk(async () => {
         // Second confirmation
         $q.dialog({
-            title: "final confirmation",
-            message:
-                "This action is irreversible！Your identity will be permanently lost，Even if there is a backup of the private key, it cannot be restored！",
+            title: t("lock.finalTitle"),
+            message: t("lock.finalMessage"),
             cancel: true,
             persistent: true,
-            ok: "I'm sure I want to log out",
+            ok: t("lock.finalConfirm"),
             color: "negative",
         }).onOk(async () => {
             try {
                 await identity.clear();
                 router.replace("/#/init");
             } catch {
-                $q.notify({ type: "negative", message: "Account was not deleted. Your recovery key and local messages were retained." });
+                $q.notify({ type: "negative", message: t("lock.deleteFailed") });
             }
         });
     });

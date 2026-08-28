@@ -4,6 +4,7 @@ import { Notify } from 'quasar'
 import { send, on, off } from 'src/services/websocket'
 import { useIdentityStore } from 'src/stores/identity'
 import { ironFistAcceptCommand, ironFistReadyRoute } from './ironfist-invite-core.mjs'
+import { t } from 'src/i18n'
 
 function randomId() { return Math.random().toString(36).slice(2, 10) }
 function randomSeed() { return (Math.random() * 2 ** 31) >>> 0 }
@@ -46,7 +47,7 @@ export const useGameStore = defineStore('game', () => {
 
     _inviteTimer = setTimeout(() => {
       if (state.value === 'inviting') {
-        Notify.create({ type: 'warning', message: 'The other party did not respond to the invitation', timeout: 2000 })
+        Notify.create({ type: 'warning', message: t('system.inviteTimeout'), timeout: 2000 })
         reset()
       }
     }, 30_000)
@@ -132,7 +133,7 @@ export const useGameStore = defineStore('game', () => {
   function _onReject(payload) {
     if (state.value !== 'inviting') return
     clearTimeout(_inviteTimer)
-    const reason = payload.reason === 'busy' ? 'The other party is busy' : 'The other party declined the invitation'
+    const reason = payload.reason === 'busy' ? t('system.opponentBusy') : t('system.inviteDeclined')
     Notify.create({ type: 'warning', message: reason, timeout: 2000 })
     reset()
   }

@@ -6,7 +6,7 @@ const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 
 
 export default defineConfig(() => {
   return {
-    boot: ['pinia', 'chat-service'],
+    boot: ['pinia', 'i18n', 'chat-service'],
 
     css: ['app.scss'],
 

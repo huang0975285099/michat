@@ -30,14 +30,14 @@
             class="flex flex-center column full-h q-gutter-md q-pa-xl"
         >
             <q-spinner-dots color="purple" size="64px" />
-            <div class="text-h6">Wait for the other party to accept…</div>
+            <div class="text-h6">{{ t("ironFist.waitAccept") }}</div>
             <div class="text-caption text-grey-5">
                 {{ gameStore.opponentNickname }}
             </div>
             <q-btn
                 flat
                 color="negative"
-                label="Cancel invitation"
+                :label="t('ironFist.cancelInvite')"
                 @click="gameStore.cancelInvite()"
             />
         </div>
@@ -48,8 +48,8 @@
             class="flex flex-center column full-h q-gutter-md q-pa-xl"
         >
             <q-spinner-dots color="deep-orange" size="64px" />
-            <div class="text-h6">Reconnecting to match…</div>
-            <div class="text-caption text-grey-5">Restore game progress from server</div>
+            <div class="text-h6">{{ t("ironFist.reconnectingMatch") }}</div>
+            <div class="text-caption text-grey-5">{{ t("ironFist.restoreProgress") }}</div>
         </div>
 
         <!-- ── Battle ──────────────────────────────────────── -->
@@ -105,7 +105,7 @@
                             <span
                                 class="mh-round-tick mh-round-tick--me"
                             ></span>
-                            <div class="mh-round">ROUND {{ round }}</div>
+                            <div class="mh-round">{{ t("ironFist.round", { round }) }}</div>
                             <span
                                 class="mh-round-tick mh-round-tick--opp"
                             ></span>
@@ -305,12 +305,12 @@
             <div v-if="isWaitingReconnect" class="reconnect-overlay">
                 <div class="reconnect-card">
                     <q-spinner-dots color="deep-orange" size="56px" />
-                    <div class="text-h6 q-mt-md">Opponent network fluctuations</div>
+                    <div class="text-h6 q-mt-md">{{ t("ironFist.opponentNetwork") }}</div>
                     <div class="text-caption text-grey-5 q-mt-xs">
-                        Wait for opponent to reconnect · Remaining {{ reconnectCountdown }}s
+                        {{ t("ironFist.reconnectRemaining", { seconds: reconnectCountdown }) }}
                     </div>
                     <div class="text-caption text-grey-6 q-mt-md">
-                        The match must be decided by a winner，please be patient
+                        {{ t("ironFist.mustFinish") }}
                     </div>
                 </div>
             </div>
@@ -332,8 +332,7 @@
                         <div v-if="pveReward" class="pve-reward-badge">
                             <span class="pve-reward-amount">+500 {{ currency }}</span>
                             <span class="pve-reward-progress">
-                                today {{ pveReward.todayWins }} /
-                                {{ pveReward.todayMax }} field
+                                {{ t("ironFist.todayFields", { current: pveReward.todayWins, max: pveReward.todayMax }) }}
                             </span>
                         </div>
                         <!-- Additional rewards for reaching 10 games per day -->
@@ -341,14 +340,11 @@
                             v-if="pveReward && pveReward.bonusAwarded"
                             class="pve-bonus-badge"
                         >
-                            🎉 Daily attendance reward +{{
-                                pveReward.bonusAmount.toLocaleString()
-                            }}
-                            {{ currency }}
+                            {{ t("ironFist.attendanceReward", { amount: pveReward.bonusAmount.toLocaleString(), currency }) }}
                         </div>
                         <q-btn
                             color="purple"
-                            label="Return to lobby"
+                            :label="t('ironFist.returnLobby')"
                             unelevated
                             class="result-btn"
                             @click="backToLobby"
@@ -374,6 +370,7 @@ import IronFistAchievements from "./components/IronFistAchievements.vue";
 import IronFistPvpLobby from "./components/IronFistPvpLobby.vue";
 import HealthBar from "./components/HealthBar.vue";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
+import { useI18n } from "src/i18n";
 import { useRegion } from "./game/useRegion.js";
 import BattleArena from "./components/BattleArena3D.vue";
 import { IronFistGame } from "./game/IronFistGame.js";
@@ -382,12 +379,15 @@ import { requireAuthoritativeGameID } from "./game/mode-routing.mjs";
 import {
     ACTION_META,
     ACTIONS,
+    getActionMeta,
     ROUND_SECONDS,
     INITIAL_HP,
     RECONNECT_WINDOW_MS,
 } from "./game/GameConstants.js";
 
 defineOptions({ name: "IronFistPage" });
+
+const { t } = useI18n();
 
 // Duration of stay after settlement (ms): Automatically enter the next round/final result page after displaying the reveal line + damage.
 const ROUND_HOLD_MS = 2200;
@@ -403,12 +403,12 @@ const { currency } = useRegion();
 
 // Our nickname (if there is no nickname, it will fall back to chatId, and then fall back to "you") + avatar
 const myName = computed(
-    () => identityStore.nickname || identityStore.chatId || "you",
+    () => identityStore.nickname || identityStore.chatId || t("ironFist.you"),
 );
 const myEmoji = "🤖";
 
-const actionMeta = ACTION_META;
-const actionList = ACTIONS.map((k) => ({ key: k, ...ACTION_META[k] }));
+const actionMeta = computed(() => Object.fromEntries(ACTIONS.map((key) => [key, getActionMeta(key)])));
+const actionList = computed(() => ACTIONS.map((key) => ({ key, ...getActionMeta(key) })));
 
 const view = ref("lobby");
 const mode = ref("pve");
@@ -429,7 +429,7 @@ const meHit = ref(false);
 const oppHit = ref(false);
 let meHitTimer = null;
 let oppHitTimer = null;
-const opponentName = ref("opponent");
+const opponentName = ref(t("ironFist.opponent"));
 const opponentEmoji = ref("🤖");
 const opponentChatId = ref("");
 
@@ -456,12 +456,12 @@ const roundVerdict = computed(() => {
     if (!r) return { text: "", tone: "neutral" };
     const { playerDmg: p, opponentDmg: o } = r;
     if (p === 0 && o === 0)
-        return { text: "evenly matched · no one injured", tone: "neutral" };
-    if (o > 0 && p === 0) return { text: "✅ You overpowered your opponent", tone: "good" };
-    if (p > 0 && o === 0) return { text: "⚠ You are overwhelmed by your opponent", tone: "bad" };
-    if (o > p) return { text: "You have a slight advantage", tone: "good" };
-    if (p > o) return { text: "you are at a disadvantage", tone: "bad" };
-    return { text: "Lose-lose", tone: "neutral" };
+        return { text: t("ironFist.verdictEven"), tone: "neutral" };
+    if (o > 0 && p === 0) return { text: t("ironFist.verdictWin"), tone: "good" };
+    if (p > 0 && o === 0) return { text: t("ironFist.verdictLose"), tone: "bad" };
+    if (o > p) return { text: t("ironFist.verdictAdvantage"), tone: "good" };
+    if (p > o) return { text: t("ironFist.verdictDisadvantage"), tone: "bad" };
+    return { text: t("ironFist.verdictBoth"), tone: "neutral" };
 });
 
 // Move statistics (accumulated number of uses of each move, only used ones are displayed)
@@ -522,15 +522,15 @@ const cdStage = computed(() => {
 const phaseLabel = computed(() => {
     switch (phase.value) {
         case "deciding":
-            return myAction.value ? "Moved" : "Preparing for action";
+            return myAction.value ? t("ironFist.moved") : t("ironFist.preparing");
         case "locked":
-            return "waiting for opponent";
+            return t("ironFist.waitingOpponent");
         case "resolving":
-            return "Settling";
+            return t("ironFist.resolving");
         case "waiting_confirm":
-            return "round settlement";
+            return t("ironFist.roundSettlement");
         case "waiting_reconnect":
-            return "Opponent reconnects";
+            return t("ironFist.opponentReconnects");
         default:
             return "";
     }
@@ -553,22 +553,22 @@ const revealOpp = computed(() =>
 );
 const showReveal = computed(() => !!revealMy.value);
 
-const RESULT_MAP = {
-    win: ["🏆", "victory！"],
-    lose: ["💀", "failed…"],
-    draw: ["🤝", "draw"],
-    doubleLose: ["💥", "Both exhausted"],
-    aborted: ["📡", "Battle interrupted"],
-    error: ["⚠️", "An error occurred"],
-};
+const RESULT_MAP = computed(() => ({
+    win: ["🏆", t("ironFist.victory")],
+    lose: ["💀", t("ironFist.defeat")],
+    draw: ["🤝", t("ironFist.draw")],
+    doubleLose: ["💥", t("ironFist.bothExhausted")],
+    aborted: ["📡", t("ironFist.interrupted")],
+    error: ["⚠️", t("ironFist.error")],
+}));
 const resultEmoji = computed(
-    () => (RESULT_MAP[resultType.value] || ["🎮", ""])[0],
+    () => (RESULT_MAP.value[resultType.value] || ["🎮", ""])[0],
 );
 const resultText = computed(
-    () => (RESULT_MAP[resultType.value] || ["", "game over"])[1],
+    () => (RESULT_MAP.value[resultType.value] || ["", t("ironFist.gameOver")])[1],
 );
 const resultSub = computed(() => {
-    if (resultType.value === "aborted") return "The opponent did not respond for a long time，May have been disconnected";
+    if (resultType.value === "aborted") return t("ironFist.opponentTimeout");
     if (resultType.value === "error") return errorMsg.value;
     return "";
 });
@@ -630,7 +630,7 @@ function onPVPMatched({ roomId, gameId, opponent, tier, stake }) {
         room_id: String(roomId),
         game_id: gameId,
         opponent: opponent?.chat_id,
-        opponent_name: opponent?.nickname || opponent?.chat_id || "opponent",
+        opponent_name: opponent?.nickname || opponent?.chat_id || t("ironFist.opponent"),
         tier,
         stake: String(stake ?? 0),
     };
@@ -642,7 +642,7 @@ function onPVPMatched({ roomId, gameId, opponent, tier, stake }) {
 // ──Start the battle───────────────────────────────────────────
 async function startPve() {
     mode.value = "pve";
-    opponentName.value = "computer";
+    opponentName.value = t("ironFist.computer");
     opponentEmoji.value = "🤖";
     opponentChatId.value = "";
     resultType.value = ""; //Clear the result status of the previous round
@@ -655,13 +655,13 @@ async function startPve() {
     } catch (error) {
         teardown();
         view.value = "lobby";
-        Notify.create({ type: "negative", message: error?.response?.data?.error || "Unable to start server-authoritative PvE" });
+        Notify.create({ type: "negative", message: error?.response?.data?.error || t("ironFist.startPveFailed") });
     }
 }
 
 function startPractice() {
     mode.value = "practice";
-    opponentName.value = "practice bot";
+    opponentName.value = t("ironFist.practiceBot");
     opponentEmoji.value = "🎯";
     opponentChatId.value = "";
     resultType.value = "";
@@ -688,7 +688,7 @@ async function startPvp() {
         // At this time, the playing view has not been entered, and the result mask is not visible, so use Notify to explicitly prompt and return to the lobby.
         // (Pledged rooms will be refunded as a draw if matched by the backend overtime).
         Notify.create({
-            message: "Matching information exception（room_id Missing），Please return to the lobby and try again",
+            message: t("ironFist.matchInfoMissing"),
             color: "negative",
             textColor: "white",
             position: "top",
@@ -702,7 +702,7 @@ async function startPvp() {
     opponentName.value =
         route.query.opponent_name ||
         gameStore.opponentNickname ||
-        "opponent";
+        t("ironFist.opponent");
     opponentEmoji.value = "🥷";
     opponentChatId.value = route.query.opponent || gameStore.opponentId || "";
     resultType.value = ""; //Clear the result status of the previous round
@@ -730,7 +730,7 @@ async function startPvp() {
     } catch (error) {
         teardown();
         view.value = "lobby";
-        Notify.create({ type: "negative", message: error?.response?.data?.error || "Unable to restore authoritative match" });
+        Notify.create({ type: "negative", message: error?.response?.data?.error || t("ironFist.restoreFailed") });
     }
 }
 

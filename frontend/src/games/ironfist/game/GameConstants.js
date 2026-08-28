@@ -29,6 +29,20 @@ export const ACTION_META = {
   [ACTION.COUNTER]: { icon: '🔄', name: 'counterattack', hint: 'Restrain attacks' },
 }
 
+const ACTION_I18N_KEYS = {
+  [ACTION.ATTACK]: ['ironFist.actionAttack', 'ironFist.actionAttackHint'],
+  [ACTION.DEFEND]: ['ironFist.actionDefend', 'ironFist.actionDefendHint'],
+  [ACTION.CHARGE]: ['ironFist.actionCharge', 'ironFist.actionChargeHint'],
+  [ACTION.COUNTER]: ['ironFist.actionCounter', 'ironFist.actionCounterHint'],
+}
+
+export function getActionMeta(action) {
+  const meta = ACTION_META[action]
+  if (!meta) return null
+  const [nameKey, hintKey] = ACTION_I18N_KEYS[action]
+  return { ...meta, name: t(nameKey), hint: t(hintKey) }
+}
+
 // Numeric constant
 export const INITIAL_HP = 100
 export const BASE_DAMAGE = 12
@@ -93,3 +107,4 @@ export const DAMAGE_TABLE = {
     counter: { playerDmg: 8,  opponentDmg: 8  },
   },
 }
+import { t } from '../../../i18n/index.js'

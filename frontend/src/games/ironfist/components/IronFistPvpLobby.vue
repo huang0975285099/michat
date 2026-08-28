@@ -9,7 +9,7 @@
         color="white"
         @click="$emit('back')"
       />
-      <div class="text-h6 q-ml-sm">Match play</div>
+      <div class="text-h6 q-ml-sm">{{ t("ironFist.pvp") }}</div>
       <q-space />
       <q-chip dense color="amber-9" text-color="white" class="fist-chip">
         ⚡ {{ fistStore.balance.toLocaleString() }} {{ currency }}
@@ -20,7 +20,7 @@
       <!-- <q-icon name="groups" size="22px" class="pvp-banner-ic" /> -->
       <div class="pvp-banner-main">
         <div class="pvp-banner-title">
-          Number of people in the hall
+          {{ t("ironFist.hallCount") }}
           <span class="pvp-banner-count">{{ lobbyUsers.length }}</span>
         </div>
 
@@ -41,13 +41,13 @@
               {{ avatarLetter(u.nickname || u.chat_id) }}
             </q-avatar>
             <div class="lobby-user-name">{{ u.nickname || u.chat_id }}</div>
-            <div v-if="u.chat_id === myChatId" class="lobby-user-tag">me</div>
+            <div v-if="u.chat_id === myChatId" class="lobby-user-tag">{{ t("common.me") }}</div>
           </div>
         </div>
         <div v-else class="lobby-empty">
           <q-spinner-dots v-if="lobbyJoining" color="amber" size="22px" />
           <span class="q-ml-sm">{{
-            lobbyJoining ? "Joining lobby…" : "There are currently no other players in the lobby"
+            lobbyJoining ? t("ironFist.joiningLobby") : t("ironFist.noLobbyPlayers")
           }}</span>
         </div>
       </div>
@@ -76,21 +76,21 @@
             <div class="profile-stat-num">
               {{ (profileData?.fist_balance || 0).toLocaleString() }}
             </div>
-            <div class="profile-stat-label">{{ currency }} balance</div>
+            <div class="profile-stat-label">{{ t("ironFist.balance", { currency }) }}</div>
           </div>
           <div class="profile-stat">
             <div class="profile-stat-num">
               {{ profileData?.total_battles || 0 }}
             </div>
-            <div class="profile-stat-label">Total number of battles</div>
+            <div class="profile-stat-label">{{ t("ironFist.totalBattles") }}</div>
           </div>
         </q-card-section>
       </q-card>
     </q-dialog>
 
-    <div class="section-title">Select room category</div>
+    <div class="section-title">{{ t("ironFist.selectTier") }}</div>
     <div
-      v-for="t in PVP_TIERS"
+      v-for="t in localizedTiers"
       :key="t.key"
       class="tier-card"
       :class="`tier-card--${t.key}`"
@@ -105,7 +105,7 @@
         <div class="tier-stake-amount">
           {{ t.stake.toLocaleString() }}
         </div>
-        <div class="tier-stake-unit">{{ currency }} / bureau</div>
+        <div class="tier-stake-unit">{{ t("ironFist.perMatch", { currency }) }}</div>
       </div>
     </div>
 
@@ -115,27 +115,27 @@
         <div class="match-card">
           <template v-if="matchState === 'searching'">
             <q-spinner-dots color="amber" size="56px" />
-            <div class="match-title">Looking for an opponent…</div>
+            <div class="match-title">{{ t("ironFist.findingOpponent") }}</div>
             <div class="match-sub">
-              {{ matchTier?.name }} · pledge
+              {{ matchTier?.name }} · {{ t("ironFist.stake") }}
               {{ matchTier?.stake.toLocaleString() }} {{ currency }}
             </div>
             <q-btn
               flat
               color="grey-5"
-              label="Unmatch"
+              :label="t('ironFist.cancelMatch')"
               :disable="cancelling"
               @click="cancelMatch"
             />
           </template>
           <template v-else-if="matchState === 'error'">
             <div class="match-soon-emoji">⚠️</div>
-            <div class="match-title">{{ matchError || "Match failed" }}</div>
+            <div class="match-title">{{ matchError || t("ironFist.matchFailed") }}</div>
             <q-btn
               unelevated
               color="amber-8"
               text-color="dark"
-              label="Got it"
+              :label="t('common.gotIt')"
               @click="resetMatch"
             />
           </template>
@@ -146,7 +146,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useFistStore } from "src/stores/fist";
 import { useIdentityStore } from "src/stores/identity";
 import { useRegion } from "../game/useRegion.js";
@@ -159,12 +159,19 @@ import {
 import { ironfistApi } from "src/services/api.js";
 import { PVP_TIERS } from "../game/ironfistMeta";
 import { matchedQueuePayload } from "../game/pvp-match-recovery.mjs";
+import { useI18n } from "src/i18n";
 
 const emit = defineEmits(["back", "matched"]);
 
 const fistStore = useFistStore();
 const identityStore = useIdentityStore();
 const { currency } = useRegion();
+const { t } = useI18n();
+const localizedTiers = computed(() => PVP_TIERS.map((tier) => ({
+  ...tier,
+  name: t(`ironFist.tier${tier.key[0].toUpperCase()}${tier.key.slice(1)}`),
+  desc: t(`ironFist.tier${tier.key[0].toUpperCase()}${tier.key.slice(1)}Desc`),
+})));
 
 const matchState = ref("idle"); // idle | searching | error
 const matchTier = ref(null);
@@ -290,7 +297,7 @@ async function startMatch(tier) {
     clearTimeout(matchTimer);
     matchTimer = setTimeout(() => {
       if (matchState.value === "searching") {
-        matchError.value = "Match timeout，Please try again";
+        matchError.value = t("ironFist.matchTimeout");
         matchState.value = "error";
         clearTimeout(pollTimer);
         ironfistApi.cancelPVPQueue().catch(() => {});
@@ -303,11 +310,11 @@ async function startMatch(tier) {
     if (status === 402) {
       matchError.value = `${currency.value} Insufficient balance，Unable to pledge`;
     } else if (status === 400) {
-      matchError.value = msg || "Invalid gear";
+      matchError.value = msg || t("ironFist.invalidTier");
     } else if (status === 409) {
-      matchError.value = msg || "Already in a match，Please complete first or wait for settlement";
+      matchError.value = msg || t("ironFist.alreadyMatching");
     } else {
-      matchError.value = msg || "Match failed，Please try again later";
+      matchError.value = msg || t("ironFist.matchLater");
     }
     matchState.value = "error";
   }
@@ -347,7 +354,7 @@ async function cancelMatch() {
   } catch (e) {
     // Cancellation failure cannot silently fall back to idle: the backend may still hold matching rooms.
     // Users may still be matched even though they think they have been cancelled. Keep the error status and prompt to try again.
-    matchError.value = e?.response?.data?.error || "Cancellation failed，Please try again";
+    matchError.value = e?.response?.data?.error || t("ironFist.cancelFailed");
     matchState.value = "error";
     cancelling.value = false;
     return;

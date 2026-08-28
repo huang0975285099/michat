@@ -4,6 +4,7 @@
 // See docs/ironfist.md Section 13/22 (Decoupling logic and rendering + animation evolution).
 
 import Phaser from 'phaser'
+import { t as translate } from '../../../../i18n/index.js'
 import { Fighter, ensureFighterTextures, PAL_ME, PAL_OPP } from '../Fighter.js'
 
 // Attitude mapping consistent with the first issue of BattleArena
@@ -91,7 +92,7 @@ export default class BattleScene extends Phaser.Scene {
   }
 
   _dmgText(x, y, dmg, crit) {
-    const t = this.add.text(x, y - 18, (crit ? 'CRIT\n' : '') + '-' + dmg, {
+    const t = this.add.text(x, y - 18, (crit ? `${translate('ironFist.critical')}\n` : '') + '-' + dmg, {
       fontFamily: 'Arial, sans-serif', fontSize: crit ? '32px' : '24px', fontStyle: 'bold',
       color: crit ? '#ffd34d' : '#ff6060', stroke: '#000000', strokeThickness: 4, align: 'center',
     }).setOrigin(0.5).setDepth(50)
@@ -108,7 +109,7 @@ export default class BattleScene extends Phaser.Scene {
 
   _envWarn(dmg) {
     const w = this.scale.width, h = this.scale.height
-    const t = this.add.text(w * 0.5, h * 0.5, '⚠ environment -' + dmg, {
+    const t = this.add.text(w * 0.5, h * 0.5, translate('ironFist.environmentDamage', { damage: dmg }), {
       fontFamily: 'Arial, sans-serif', fontSize: '18px', fontStyle: 'bold',
       color: '#ff7a7a', stroke: '#000000', strokeThickness: 4,
     }).setOrigin(0.5).setDepth(50)

@@ -5,7 +5,16 @@ export function videoCallStatusText({
   peerName,
   remoteVideoOn,
   hasRemoteVideoTrack,
+  translate,
 }) {
+  if (translate) {
+    if (connectionStatus === 'reconnecting') return translate('call.reconnecting', { seconds: reconnectSeconds })
+    if (state === 'calling') return translate('call.calling', { name: peerName })
+    if (connectionStatus === 'connecting') return translate('call.connecting')
+    if (remoteVideoOn === false) return translate('call.peerVoiceOnly')
+    if (!hasRemoteVideoTrack) return translate('call.waitingVideo')
+    return ''
+  }
   if (connectionStatus === 'reconnecting') {
     return `Network outage，Recovering（${reconnectSeconds}seconds）`
   }

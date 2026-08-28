@@ -1,12 +1,15 @@
+import { t } from '../../../i18n/index.js'
+
 const BOOSTERS = [
-  { key: 'hammer', label: 'Hammer' },
-  { key: 'shuffle', label: 'Shuffle' },
-  { key: 'extraMoves', label: '+5 Moves' },
+  { key: 'hammer', labelKey: 'sugarPop.hammer' },
+  { key: 'shuffle', labelKey: 'sugarPop.shuffle' },
+  { key: 'extraMoves', labelKey: 'sugarPop.extraMoves' },
 ]
 
 export function getHudControls(boosters = {}, { extraMovesUsed = false, hammerSelecting = false, disabled = false } = {}) {
   return BOOSTERS.map((booster) => ({
     ...booster,
+    label: t(booster.labelKey),
     count: Math.max(0, Math.trunc(boosters[booster.key] || 0)),
     enabled: !disabled && (boosters[booster.key] || 0) > 0 && !(booster.key === 'extraMoves' && extraMovesUsed),
     active: booster.key === 'hammer' && hammerSelecting,
@@ -34,9 +37,9 @@ export function calculateHudLayout(width, height) {
 
 function targetLines(target = {}) {
   const lines = Object.entries(target.candies || {}).map(([id, count]) => `${id}: ${count}`)
-  if (typeof target.jelly === 'number') lines.push(`jelly: ${target.jelly}`)
-  if (typeof target.frosting === 'number') lines.push(`frosting: ${target.frosting}`)
-  return lines.length ? lines : ['Ready!']
+  if (typeof target.jelly === 'number') lines.push(`${t('sugarPop.jelly')}: ${target.jelly}`)
+  if (typeof target.frosting === 'number') lines.push(`${t('sugarPop.frosting')}: ${target.frosting}`)
+  return lines.length ? lines : [t('sugarPop.ready')]
 }
 
 export default class HudView {
@@ -51,7 +54,7 @@ export default class HudView {
       .setOrigin(1, 0)
     this.score = scene.add.text(0, 0, '', { fontFamily: 'Arial, sans-serif', fontSize: '16px', color: '#673064', fontStyle: 'bold' })
       .setOrigin(0.5, 0)
-    this.pause = scene.add.text(0, 0, 'Pause', { fontFamily: 'Arial, sans-serif', fontSize: '14px', color: '#673064', fontStyle: 'bold' })
+    this.pause = scene.add.text(0, 0, t('sugarPop.pause'), { fontFamily: 'Arial, sans-serif', fontSize: '14px', color: '#673064', fontStyle: 'bold' })
       .setOrigin(0.5)
       .setPadding(12, 7, 12, 7)
       .setBackgroundColor('#ffffff')
@@ -60,7 +63,7 @@ export default class HudView {
     this.boosterButtons = BOOSTERS.map((booster) => {
       const box = scene.add.rectangle(0, 0, 96, 48, 0xffffff, 0.75).setStrokeStyle(2, 0x9c5d98, 0.65)
         .setInteractive({ useHandCursor: true })
-      const text = scene.add.text(0, 0, booster.label, { fontFamily: 'Arial, sans-serif', fontSize: '13px', color: '#572c55', fontStyle: 'bold', align: 'center' }).setOrigin(0.5)
+      const text = scene.add.text(0, 0, t(booster.labelKey), { fontFamily: 'Arial, sans-serif', fontSize: '13px', color: '#572c55', fontStyle: 'bold', align: 'center' }).setOrigin(0.5)
       box.on('pointerup', () => this.onBooster?.(booster.key))
       return { ...booster, box, text }
     })
@@ -85,13 +88,13 @@ export default class HudView {
   }
 
   update({ levelId, movesLeft, score, target, boosters = {}, extraMovesUsed = false, hammerSelecting = false, disabled = false }) {
-    this.targets.setText(`Level ${levelId}\n${targetLines(target).join('  •  ')}`)
-    this.moves.setText(`Moves\n${movesLeft}`)
-    this.score.setText(`Score ${score}`)
+    this.targets.setText(`${t('sugarPop.level', { id: levelId })}\n${targetLines(target).join('  •  ')}`)
+    this.moves.setText(`${t('sugarPop.moves')}\n${movesLeft}`)
+    this.score.setText(t('sugarPop.score', { score }))
     const controls = getHudControls(boosters, { extraMovesUsed, hammerSelecting, disabled })
     this.boosterButtons.forEach((button, index) => {
       const control = controls[index]
-      button.text.setText(`${button.label}\n×${control.count}`)
+      button.text.setText(`${t(button.labelKey)}\n×${control.count}`)
       button.box.setFillStyle(control.active ? 0xffb7d7 : 0xffffff, control.enabled ? 0.9 : 0.45)
       button.box.setStrokeStyle(control.active ? 4 : 2, control.active ? 0xff4c9a : 0x9c5d98, control.enabled ? 0.9 : 0.35)
       button.text.setAlpha(control.enabled ? 1 : 0.45)

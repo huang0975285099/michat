@@ -19,9 +19,9 @@
                     color="orange"
                     class="q-mb-sm"
                 />
-                <div class="text-subtitle2 text-orange">Please get the invitation code</div>
+                <div class="text-subtitle2 text-orange">{{ t("init.needInvite") }}</div>
                 <div class="text-caption text-grey q-mb-md">
-                    Yunmi adopts invitation-based registration，Please get the invitation link from your friend
+                    {{ t("init.needInviteHint") }}
                 </div>
             </q-card-section>
         </q-card>
@@ -40,10 +40,10 @@
                     class="q-mb-sm"
                 />
                 <div class="text-subtitle2">
-                    from {{ inviterInfo.inviter_chat_id }} invitation
+                    {{ t("init.invitedBy", { id: inviterInfo.inviter_chat_id }) }}
                 </div>
                 <div class="text-caption text-grey">
-                    After registration, the other party will be automatically added as a friend.
+                    {{ t("init.autoFriend") }}
                 </div>
             </q-card-section>
         </q-card>
@@ -61,14 +61,14 @@
                     color="orange"
                     class="q-mb-sm"
                 />
-                <div class="text-subtitle2 text-orange">The invitation link has expired</div>
+                <div class="text-subtitle2 text-orange">{{ t("init.inviteExpired") }}</div>
                 <div class="text-caption text-grey q-mb-md">
-                    The invitation code has expired or is invalid，Please get a new invitation link
+                    {{ t("init.inviteExpiredHint") }}
                 </div>
                 <q-btn
                     outline
                     color="primary"
-                    label="Visit homepage"
+                    :label="t('init.home')"
                     @click="goHome"
                 />
             </q-card-section>
@@ -81,15 +81,15 @@
         >
             <q-card-section>
                 <div class="text-subtitle1 text-weight-medium q-mb-sm">
-                    Create new identity
+                    {{ t("init.createTitle") }}
                 </div>
                 <div class="text-caption text-grey q-mb-md">
-                    The system will generate a unique encrypted identity for you。The private key is only saved on this device，Be sure to back up。
+                    {{ t("init.createHint") }}
                 </div>
                 <q-btn
                     unelevated
                     color="primary"
-                    :label="inviterInfo ? 'Accept the invitation and create an identity' : 'Create new identity'"
+                    :label="inviterInfo ? t('init.acceptCreate') : t('init.createTitle')"
                     class="full-width"
                     :loading="creating"
                     @click="create"
@@ -99,7 +99,7 @@
 
         <!-- restore identity -->
         <q-expansion-item
-            label="Already have a private key？restore identity"
+            :label="t('init.restoreTitle')"
             class="q-mt-md"
             style="width: 100%; max-width: 400px"
             :default-opened="!!restorePrivKey || !inviteCode"
@@ -108,7 +108,7 @@
                 <q-card-section>
                     <q-input
                         v-model="restorePrivKey"
-                        label="private key（Base64）"
+                        :label="t('init.privateKey')"
                         type="textarea"
                         dense
                         outlined
@@ -116,12 +116,12 @@
                         rows="3"
                     />
                     <div class="text-caption text-grey q-mb-sm">
-                        Paste the private key to restore，No need Chat ID
+                        {{ t("init.restoreHint") }}
                     </div>
                     <q-btn
                         unelevated
                         color="secondary"
-                        label="restore identity"
+                        :label="t('init.restore')"
                         class="full-width"
                         :loading="restoring"
                         @click="restore"
@@ -146,11 +146,13 @@ import { identityApi, inviteApi } from "src/services/api";
 import { isNativeShell } from "src/services/platform";
 import { registerPushToken } from "src/boot/chat-service";
 import logoUrl from "src/assets/logo.png";
+import { useI18n } from "src/i18n";
 
 const $q = useQuasar();
 const router = useRouter();
 const route = useRoute();
 const identity = useIdentityStore();
+const { t } = useI18n();
 
 const creating = ref(false);
 const restoring = ref(false);
@@ -199,17 +201,17 @@ async function create() {
         const inviterChatId = await identity.initialize(inviteCode.value);
         $q.notify({
             type: "positive",
-            message: `Identity created successfully：${identity.nickname}`,
+            message: t("init.created", { name: identity.nickname }),
         });
         if (inviterChatId) {
             $q.notify({
                 type: "info",
-                message: `Already sent to ${inviterChatId} Send friend request`,
+                message: t("init.requestSent", { id: inviterChatId }),
             });
         }
         router.replace("/chats");
     } catch (e) {
-        $q.notify({ type: "negative", message: "Creation failed：" + e.message });
+        $q.notify({ type: "negative", message: t("init.createFailed", { error: e.message }) });
     } finally {
         creating.value = false;
     }
@@ -217,7 +219,7 @@ async function create() {
 
 async function restore() {
     if (!restorePrivKey.value) {
-        $q.notify({ type: "warning", message: "Please fill in the private key" });
+        $q.notify({ type: "warning", message: t("init.enterKey") });
         return;
     }
     restoring.value = true;
@@ -247,17 +249,17 @@ async function restore() {
             registerPushToken(); //Report the Aurora token after restoring your identity
             $q.notify({
                 type: "positive",
-                message: `Identity restored successfully：${data.nickname}`,
+                message: t("init.restored", { name: data.nickname }),
             });
             router.replace("/chats");
         } else {
-            $q.notify({ type: "warning", message: "Identity restored but server not ready" });
+            $q.notify({ type: "warning", message: t("init.restoredNotReady") });
         }
     } catch (e) {
-        const errMsg = e.response?.data?.error || "network error";
+        const errMsg = e.response?.data?.error || t("init.networkError");
         $q.notify({
             type: "negative",
-            message: "Recovery failed：" + errMsg,
+            message: t("init.restoreFailed", { error: errMsg }),
         });
     } finally {
         restoring.value = false;

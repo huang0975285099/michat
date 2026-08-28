@@ -1,6 +1,7 @@
 import Scene from 'phaser/src/scene/Scene.js'
 import { LEVELS } from '../game/levels.js'
 import { loadSave } from '../game/save.js'
+import { t } from '../../../i18n/index.js'
 
 export function canSelectLevel(levelId, save) {
   return Number.isInteger(levelId) && levelId >= 1 && levelId <= (save?.unlockedLevel || 1)
@@ -65,7 +66,7 @@ export function createMapScene(SceneBase) {
     path.strokePath()
     root.add(path)
 
-    root.add(this.add.text(width / 2, 28, 'SUGAR POP', {
+    root.add(this.add.text(width / 2, 28, t('games.sugarPop').toUpperCase(), {
       fontFamily: 'Arial, sans-serif',
       fontSize: `${Math.max(28, Math.min(48, width * 0.085))}px`,
       fontStyle: 'bold',
@@ -73,7 +74,7 @@ export function createMapScene(SceneBase) {
       stroke: '#ffffff',
       strokeThickness: 6,
     }).setOrigin(0.5, 0))
-    root.add(this.add.text(width / 2, 86, 'Candy Town Trail', {
+    root.add(this.add.text(width / 2, 86, t('sugarPop.trail'), {
       fontFamily: 'Arial, sans-serif', fontSize: '18px', color: '#6e426b', fontStyle: 'bold',
     }).setOrigin(0.5))
 
@@ -83,7 +84,7 @@ export function createMapScene(SceneBase) {
       const result = this.save.results[levelId]
       const circle = this.add.circle(0, 0, radius, unlocked ? 0xff6fae : 0x9a8ca0, 1)
         .setStrokeStyle(4, 0xffffff, 1)
-      const number = this.add.text(0, -2, unlocked ? String(levelId) : 'LOCK', {
+      const number = this.add.text(0, -2, unlocked ? String(levelId) : t('sugarPop.locked'), {
         fontFamily: 'Arial, sans-serif',
         fontSize: unlocked ? `${Math.round(radius * 0.86)}px` : `${Math.round(radius * 0.42)}px`,
         fontStyle: 'bold',

@@ -11,7 +11,7 @@
                 color="white"
                 @click="$emit('back')"
             />
-            <div class="text-h6 q-ml-sm">$FIST Token</div>
+            <div class="text-h6 q-ml-sm">{{ t("ironFist.tokenTitle") }}</div>
             <q-space />
             <q-chip dense color="amber-9" text-color="white" class="fist-chip">
                 ⚡ {{ fistStore.balance.toLocaleString() }} $FIST
@@ -23,22 +23,18 @@
             <div class="hero-glow"></div>
             <div class="hero-logo">⚡</div>
             <div class="hero-title">$FIST</div>
-            <div class="hero-sub">iron fist 3D Competitive Tokens</div>
-            <div class="hero-desc">
-                Deployed on <b>Solana</b> of SPL Token，Total hard cap
-                <b>10 billion</b>，No additional issuance is allowed。Rewards come from opponents rather than printing money，Destroy every core behavior embedded in——
-                <b>Extreme deflation、zero sum competition、Behavior driven destruction</b>。
-            </div>
+            <div class="hero-sub">{{ t("ironFist.tokenSubtitle") }}</div>
+            <div class="hero-desc">{{ t("ironFist.tokenDescription") }}</div>
             <div class="hero-tags">
                 <span class="htag">Solana</span>
                 <span class="htag">SPL Token</span>
-                <span class="htag">hard top 10 billion</span>
-                <span class="htag">deflationary rigidity</span>
+                <span class="htag">{{ t("ironFist.hardCapTag") }}</span>
+                <span class="htag">{{ t("ironFist.deflationTag") }}</span>
             </div>
         </div>
 
         <!-- ── Data dashboard ───────────────────────────────── -->
-        <div class="section-title">On-chain data dashboard</div>
+        <div class="section-title">{{ t("ironFist.chainDashboard") }}</div>
         <div class="stat-grid">
             <div
                 v-for="s in statCards"
@@ -52,12 +48,11 @@
             </div>
         </div>
         <div class="data-note">
-            Data basis $FIST economic model v1.0 Design draft。The real income and expenditure are based on Solana The account on the chain shall prevail.，TGE Can be found later
-            Solscan Real-time query。
+            {{ t("ironFist.chainDataNote") }}
         </div>
 
         <!-- ── Total distribution ───────────────────────────────── -->
-        <div class="section-title">Total allocation · 10 billion</div>
+        <div class="section-title">{{ t("ironFist.totalAllocation") }}</div>
         <div class="alloc-list">
             <div v-for="a in allocation" :key="a.name" class="alloc-row">
                 <div class="alloc-head">
@@ -76,23 +71,23 @@
         </div>
 
         <!-- ──PvE Reward Mechanism──────────────────────────── -->
-        <div class="section-title">PvE Reward mechanism</div>
+        <div class="section-title">{{ t("ironFist.pveRewardMechanism") }}</div>
         <div class="info-card">
             <div class="formula">
-                Rewards for each win = Global reward pool for the day ÷ Total number of wins on all platforms for the day
+                {{ t("ironFist.pveRewardFormula") }}
             </div>
             <div class="info-desc">
-                Fixed total pool distributed based on wins——The more people there are, the smaller the venue will be.，natural dilution、prevent inflation。
+                {{ t("ironFist.pveRewardDesc") }}
             </div>
             <div class="chip-row">
-                <span class="pill">cold start period 50 million / day</span>
-                <span class="pill">daily before 10 field count</span>
-                <span class="pill pill--gold">Early players forever +20%</span>
+                <span class="pill">{{ t("ironFist.coldStartReward") }}</span>
+                <span class="pill">{{ t("ironFist.dailyFirstTen") }}</span>
+                <span class="pill pill--gold">{{ t("ironFist.earlyPlayerBonus") }}</span>
             </div>
         </div>
 
         <!-- ── PvP three levels of pledge ─────────────────────────────── -->
-        <div class="section-title">PvP Pledge Battle · zero sum</div>
+        <div class="section-title">{{ t("ironFist.pvpStakeBattle") }}</div>
         <div class="tier-list">
             <div
                 v-for="t in tiers"
@@ -104,22 +99,21 @@
                 <div class="tier-info">
                     <div class="tier-name">{{ t.name }}</div>
                     <div class="tier-sub">
-                        Admission {{ t.stake.toLocaleString() }} · Winner gets it
-                        {{ t.win.toLocaleString() }}
+                        {{ translate("ironFist.stakeAdmission", { stake: t.stake.toLocaleString(), win: t.win.toLocaleString() }) }}
                     </div>
                 </div>
                 <div class="tier-burn">
                     <div class="tier-burn-num">🔥 {{ t.burn }}</div>
-                    <div class="tier-burn-lb">destroy / bureau</div>
+                    <div class="tier-burn-lb">{{ translate("ironFist.burnPerMatch") }}</div>
                 </div>
             </div>
         </div>
         <div class="info-desc info-desc--pad">
-            All prize pools come from both parties’ entries，The platform does not issue additional shares。5% Half of the handling fee will be permanently destroyed、Half goes to the treasury。
+            {{ t("ironFist.pvpStakeDesc") }}
         </div>
 
         <!-- ── Deflationary destruction ────────────────────────────────── -->
-        <div class="section-title">Deflation and destruction touchpoints</div>
+        <div class="section-title">{{ t("ironFist.burnTouchpoints") }}</div>
         <div class="burn-grid">
             <div v-for="b in burns" :key="b.name" class="burn-card">
                 <div class="burn-ic">{{ b.icon }}</div>
@@ -129,44 +123,42 @@
         </div>
 
         <!-- ── Pledge veFIST ─────────────────────────────── -->
-        <div class="section-title">pledge veFIST · income + governance</div>
+        <div class="section-title">{{ t("ironFist.veFistTitle") }}</div>
         <div class="info-card">
             <div class="info-desc">
-                pledge $FIST and choose a lock-in period to cast a non-transferable veFIST，Enjoy pledge dividends and DAO
-                governance rights。The longer it is locked, the higher the magnification。
+                {{ t("ironFist.veFistDesc") }}
             </div>
             <div class="ve-list">
                 <div v-for="v in veRates" :key="v.lock" class="ve-row">
                     <span class="ve-lock">{{ v.lock }}</span>
-                    <span class="ve-rate">1 $FIST = {{ v.rate }} veFIST</span>
+                    <span class="ve-rate">{{ t("ironFist.veRate", { rate: v.rate }) }}</span>
                 </div>
             </div>
             <div class="chip-row">
-                <span class="pill">fixed pool 5000 million · 36 monthly linear</span>
-                <span class="pill">Treasury handling fee 40% dividend</span>
+                <span class="pill">{{ t("ironFist.vePool") }}</span>
+                <span class="pill">{{ t("ironFist.treasuryDividend") }}</span>
             </div>
         </div>
 
         <!-- ──Treasury───────────────────────────────────── -->
-        <div class="section-title">DAO treasury</div>
+        <div class="section-title">{{ t("ironFist.daoTreasury") }}</div>
         <div class="info-card treasury-card">
             <div class="treasury-top">
-                <div class="treasury-amount">2.00 billion</div>
-                <div class="treasury-lb">$FIST · Accounting for the total 20%</div>
+                <div class="treasury-amount">{{ t("ironFist.twoBillion") }}</div>
+                <div class="treasury-lb">{{ t("ironFist.treasuryShare") }}</div>
             </div>
             <div class="info-desc">
-                for operations、ecological cooperation、DAO Proposal Execution and Repurchase Reserve。Revenue comes from PvP
-                Handling fee 50%、SOL casting NFT income, etc.。
+                {{ t("ironFist.treasuryDesc") }}
             </div>
             <div class="chip-row">
-                <span class="pill">Public address on the chain</span>
-                <span class="pill">Large withdrawals require 3/5 Multiple signatures + 48h time lock</span>
-                <span class="pill">≥100 million expenditures DAO approve</span>
+                <span class="pill">{{ t("ironFist.publicAddress") }}</span>
+                <span class="pill">{{ t("ironFist.multisig") }}</span>
+                <span class="pill">{{ t("ironFist.largeExpense") }}</span>
             </div>
         </div>
 
         <!-- ── Roadmap ─────────────────────────────────── -->
-        <div class="section-title">8–12 Monthly Sprint Roadmap</div>
+        <div class="section-title">{{ t("ironFist.roadmapTitle") }}</div>
         <div class="road-list">
             <div v-for="(r, i) in roadmap" :key="r.stage" class="road-row">
                 <div class="road-line">
@@ -182,8 +174,7 @@
 
         <!-- Disclaimer -->
         <div class="disclaimer">
-            This page is based on《$FIST Game Token Economics Design Instructions v1.0》Organize，Design discussion paper，The final parameters are
-            TGE The official release and on-chain contract shall prevail.，Does not constitute any investment advice。
+            {{ t("ironFist.tokenDisclaimer") }}
         </div>
     </div>
 </template>
@@ -192,32 +183,35 @@
 import { computed } from "vue";
 import { useFistStore } from "src/stores/fist";
 import { PVP_TIERS } from "../game/ironfistMeta";
+import { useI18n } from "src/i18n";
 
 defineEmits(["back"]);
 
 const fistStore = useFistStore();
+const { t } = useI18n();
+const translate = t;
 
 // Data dashboard (static white paper data)
-const statCards = [
-    { label: "total supply", value: "10 billion", hint: "hard cap · No additional issuance is allowed", tone: "gold" },
-    { label: "PvE daily emissions", value: "50 million", hint: "cold start period / day", tone: "purple" },
-    { label: "DAO treasury", value: "2 billion", hint: "Accounting for the total 20%", tone: "blue" },
-    { label: "Pledge dividend pool", value: "5000 million", hint: "36 monthly linear release", tone: "green" },
-    { label: "PvP handling fee", value: "5%", hint: "Half are permanently destroyed", tone: "red" },
-    { label: "Net circulation in the first year", value: "~38%", hint: "No. 12 month node", tone: "teal" },
-];
+const statCards = computed(() => [
+    { label: t("ironFist.totalSupply"), value: t("ironFist.tenBillion"), hint: t("ironFist.noIssuance"), tone: "gold" },
+    { label: t("ironFist.pveDailyEmission"), value: t("ironFist.fiftyMillion"), hint: t("ironFist.coldStartPerDay"), tone: "purple" },
+    { label: t("ironFist.daoTreasury"), value: t("ironFist.twoBillionShort"), hint: t("ironFist.twentyPercent"), tone: "blue" },
+    { label: t("ironFist.stakingPool"), value: t("ironFist.fiveHundredMillion"), hint: t("ironFist.thirtySixMonths"), tone: "green" },
+    { label: t("ironFist.pvpFee"), value: "5%", hint: t("ironFist.halfBurned"), tone: "red" },
+    { label: t("ironFist.firstYearCirculation"), value: "~38%", hint: t("ironFist.monthTwelve"), tone: "teal" },
+]);
 
 // Total allocation
-const allocation = [
-    { name: "PvE Ecological reward pool", pct: 28, use: "Daily victory rewards，Decreasing release", color: "#a855f7" },
-    { name: "DAO treasury", pct: 20, use: "Operation / cooperation / repurchase reserve", color: "#3b82f6" },
-    { name: "team", pct: 15, use: "2 Annual lockup + 3 annual linear", color: "#64748b" },
-    { name: "Invite / community growth", pct: 12, use: "Fission and airdrop during sprint period", color: "#ec4899" },
-    { name: "initial liquidity", pct: 8, use: "DEX market making (Raydium/Orca)", color: "#14b8a6" },
-    { name: "early investors", pct: 7, use: "6 Monthly lockup + 18 monthly linear", color: "#f97316" },
-    { name: "Pledge dividend pool", pct: 5, use: "Special pledge rewards", color: "#22c55e" },
-    { name: "NFT ecological reserve", pct: 5, use: "Season motivation / whitelist", color: "#eab308" },
-];
+const allocation = computed(() => [
+    { name: t("ironFist.allocPve"), pct: 28, use: t("ironFist.allocPveUse"), color: "#a855f7" },
+    { name: t("ironFist.daoTreasury"), pct: 20, use: t("ironFist.allocTreasuryUse"), color: "#3b82f6" },
+    { name: t("ironFist.allocTeam"), pct: 15, use: t("ironFist.allocTeamUse"), color: "#64748b" },
+    { name: t("ironFist.allocGrowth"), pct: 12, use: t("ironFist.allocGrowthUse"), color: "#ec4899" },
+    { name: t("ironFist.allocLiquidity"), pct: 8, use: t("ironFist.allocLiquidityUse"), color: "#14b8a6" },
+    { name: t("ironFist.allocInvestors"), pct: 7, use: t("ironFist.allocInvestorsUse"), color: "#f97316" },
+    { name: t("ironFist.stakingPool"), pct: 5, use: t("ironFist.allocStakingUse"), color: "#22c55e" },
+    { name: t("ironFist.allocNft"), pct: 5, use: t("ironFist.allocNftUse"), color: "#eab308" },
+]);
 
 // PvP three levels: reuse the level definitions in the App, supplement and destroy/obtain (5% handling fee, 50% of which is destroyed)
 const tiers = computed(() =>
@@ -225,6 +219,7 @@ const tiers = computed(() =>
         const fee = t.stake * 2 * 0.05;
         return {
             ...t,
+            name: translate(`ironFist.tier${t.key[0].toUpperCase()}${t.key.slice(1)}`),
             burn: fee / 2,
             win: t.stake * 2 - fee,
         };
@@ -232,30 +227,30 @@ const tiers = computed(() =>
 );
 
 // Destroy contact
-const burns = [
-    { icon: "⚔️", name: "PvP handling fee", rule: "Handling fee 50% permanently destroyed" },
-    { icon: "🥊", name: "NFT casting", rule: "$FIST pay 100% destroy" },
-    { icon: "🎨", name: "skin purchase", rule: "All quarterly skins are destroyed" },
-    { icon: "💱", name: "Secondary royalties", rule: "5% Half of the royalties are destroyed" },
-    { icon: "🏆", name: "Tournament Admission", rule: "Admission fee 15% destroy" },
-    { icon: "🗳️", name: "DAO proposal", rule: "Can initiate destruction motion" },
-];
+const burns = computed(() => [
+    { icon: "⚔️", name: t("ironFist.burnPvp"), rule: t("ironFist.burnPvpRule") },
+    { icon: "🥊", name: t("ironFist.burnNft"), rule: t("ironFist.burnNftRule") },
+    { icon: "🎨", name: t("ironFist.burnSkin"), rule: t("ironFist.burnSkinRule") },
+    { icon: "💱", name: t("ironFist.burnRoyalty"), rule: t("ironFist.burnRoyaltyRule") },
+    { icon: "🏆", name: t("ironFist.burnTournament"), rule: t("ironFist.burnTournamentRule") },
+    { icon: "🗳️", name: t("ironFist.burnDao"), rule: t("ironFist.burnDaoRule") },
+]);
 
 // veFIST lock magnification
-const veRates = [
-    { lock: "Lock 1 months", rate: "0.25" },
-    { lock: "Lock 6 months", rate: "0.5" },
-    { lock: "Lock 1 year", rate: "1.0" },
-    { lock: "Lock 4 year", rate: "4.0" },
-];
+const veRates = computed(() => [
+    { lock: t("ironFist.lockOneMonth"), rate: "0.25" },
+    { lock: t("ironFist.lockSixMonths"), rate: "0.5" },
+    { lock: t("ironFist.lockOneYear"), rate: "1.0" },
+    { lock: t("ironFist.lockFourYears"), rate: "4.0" },
+]);
 
 // roadmap
-const roadmap = [
-    { stage: "cold start · 1–2 month", text: "TGE + Liquidity deployment + Invite fission to start" },
-    { stage: "growth · 3–5 month", text: "NFT Genesis On sale + Weekly Championship is online" },
-    { stage: "break out · 6–9 month", text: "PvP Ranking + DAO Go online + Pledge dividends" },
-    { stage: "Transition · 10–12 month", text: "Community takes over operations，Project side reduces intervention" },
-];
+const roadmap = computed(() => [
+    { stage: t("ironFist.roadCold"), text: t("ironFist.roadColdText") },
+    { stage: t("ironFist.roadGrowth"), text: t("ironFist.roadGrowthText") },
+    { stage: t("ironFist.roadBreakout"), text: t("ironFist.roadBreakoutText") },
+    { stage: t("ironFist.roadTransition"), text: t("ironFist.roadTransitionText") },
+]);
 </script>
 
 <style scoped>

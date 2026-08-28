@@ -16,14 +16,14 @@
             :color="muted ? 'negative' : 'white'"
             @click="toggleMute"
         >
-            <q-tooltip>{{ muted ? 'Unmute' : 'mute' }}</q-tooltip>
+            <q-tooltip>{{ muted ? t("call.unmute") : t("call.mute") }}</q-tooltip>
         </q-btn>
         <q-btn
             flat round dense size="sm"
             icon="call_end" color="negative"
             @click="callStore.hangup()"
         >
-            <q-tooltip>Hang up</q-tooltip>
+            <q-tooltip>{{ t("call.hangup") }}</q-tooltip>
         </q-btn>
     </div>
 </template>
@@ -31,8 +31,10 @@
 <script setup>
 import { ref, computed, watch, onUnmounted } from "vue";
 import { useCallStore } from "src/stores/call";
+import { useI18n } from "src/i18n";
 
 const callStore = useCallStore();
+const { t } = useI18n();
 const audioEl = ref(null);
 const muted = ref(false);
 const duration = ref(0);
@@ -41,12 +43,12 @@ let timer = null;
 const statusText = computed(() => {
     const name = callStore.peerNickname || callStore.peerId;
     if (callStore.connectionStatus === "reconnecting") {
-        return `Network outage，Recovering（${callStore.reconnectSeconds}seconds）`;
+        return t("call.reconnecting", { seconds: callStore.reconnectSeconds });
     }
     switch (callStore.state) {
-        case "calling": return `Calling ${name}...`;
-        case "ringing": return `incoming call：${name}`;
-        case "active":  return callStore.connectionStatus === "connected" ? name : "Establishing secure connection...";
+        case "calling": return t("call.calling", { name });
+        case "ringing": return t("call.incoming", { name });
+        case "active":  return callStore.connectionStatus === "connected" ? name : t("call.connecting");
         default:        return "";
     }
 });

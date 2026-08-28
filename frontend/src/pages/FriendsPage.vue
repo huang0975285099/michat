@@ -5,7 +5,7 @@
             :model-value="searchId"
             outlined
             dense
-            placeholder="Enter the other party Chat ID（Such as 1234-ABCD）"
+            :placeholder="t('friends.searchPlaceholder')"
             class="q-mb-md"
             maxlength="9"
             @update:model-value="searchId = ($event || '').toUpperCase()"
@@ -42,7 +42,7 @@
                         unelevated
                         size="sm"
                         color="primary"
-                        label="Add friends"
+                        :label="t('friends.add')"
                         :loading="sendingReq"
                         @click="sendRequest"
                     />
@@ -53,7 +53,7 @@
         <!-- friend request -->
         <div v-if="requests.length > 0" class="q-mb-md">
             <div class="text-subtitle2 q-mb-sm text-grey">
-                Pending applications ({{ requests.length }})
+                {{ t("friends.pending", { count: requests.length }) }}
             </div>
             <q-card>
                 <q-item v-for="req in requests" :key="req.id" class="q-py-sm">
@@ -75,14 +75,14 @@
                                 size="sm"
                                 unelevated
                                 color="positive"
-                                label="accept"
+                                :label="t('common.accept')"
                                 @click="handle(req.id, true)"
                             />
                             <q-btn
                                 size="sm"
                                 unelevated
                                 color="negative"
-                                label="reject"
+                                :label="t('common.reject')"
                                 @click="handle(req.id, false)"
                             />
                         </div>
@@ -94,7 +94,7 @@
         <!-- Application I sent -->
         <div v-if="outgoing.length > 0" class="q-mb-md">
             <div class="text-subtitle2 q-mb-sm text-grey">
-                Applying ({{ outgoing.length }})
+                {{ t("friends.applying", { count: outgoing.length }) }}
             </div>
             <q-card>
                 <q-item v-for="req in outgoing" :key="req.id" class="q-py-sm">
@@ -117,14 +117,14 @@
                             flat
                             dense
                             color="negative"
-                            label="Cancel"
+                            :label="t('common.cancel')"
                             :loading="cancelingId === req.id"
                             @click="cancel(req.id)"
                         />
                         <q-badge
                             v-else
                             color="negative"
-                            label="Rejected"
+                            :label="t('friends.rejected')"
                         />
                     </q-item-section>
                 </q-item>
@@ -133,7 +133,7 @@
 
         <!-- friends list -->
         <div class="text-subtitle2 q-mb-sm text-grey">
-            friends ({{ friends.length }})
+            {{ t("friends.list", { count: friends.length }) }}
         </div>
         <q-card v-if="friends.length > 0" bordered>
             <q-item
@@ -164,7 +164,7 @@
             </q-item>
         </q-card>
         <div v-else class="text-center text-grey q-mt-lg">
-            No friends yet，Search Chat ID add
+            {{ t("friends.empty") }}
         </div>
     </q-page>
 </template>
@@ -177,11 +177,13 @@ import { userApi, friendApi } from "src/services/api";
 import { on, off } from "src/services/websocket";
 import { useIdentityStore } from "src/stores/identity";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
+import { useI18n } from "src/i18n";
 
 const $q = useQuasar();
 const router = useRouter();
 const route = useRoute();
 const identityStore = useIdentityStore();
+const { locale, t } = useI18n();
 
 const searchId = ref("");
 const searchResult = ref(null);
@@ -208,19 +210,19 @@ const sortedFriends = computed(() => {
 
 // Format last online time
 function formatLastSeen(lastSeen, online) {
-    if (online) return "online";
-    if (!lastSeen) return "never online";
+    if (online) return t("common.online");
+    if (!lastSeen) return t("friends.neverOnline");
     const date = new Date(lastSeen);
     const now = new Date();
     const diffMs = now - date;
     const diffMins = Math.floor(diffMs / 60000);
     const diffHours = Math.floor(diffMs / 3600000);
     const diffDays = Math.floor(diffMs / 86400000);
-    if (diffMins < 1) return "just now";
-    if (diffMins < 60) return `${diffMins} minutes ago`;
-    if (diffHours < 24) return `${diffHours} hours ago`;
-    if (diffDays < 7) return `${diffDays} days ago`;
-    return date.toLocaleDateString("zh-CN");
+    if (diffMins < 1) return t("friends.justNow");
+    if (diffMins < 60) return t("friends.minutesAgo", { count: diffMins });
+    if (diffHours < 24) return t("friends.hoursAgo", { count: diffHours });
+    if (diffDays < 7) return t("friends.daysAgo", { count: diffDays });
+    return date.toLocaleDateString(locale.value);
 }
 
 async function loadData() {
@@ -241,7 +243,7 @@ async function search() {
     if (searchId.value.length !== 9) {
         $q.notify({
             type: "warning",
-            message: "Chat ID must be 9 Bit（Such as 1234-ABCD）",
+            message: t("friends.invalidId"),
         });
         return;
     }
@@ -251,7 +253,7 @@ async function search() {
         const { data } = await userApi.search(searchId.value);
         searchResult.value = data;
     } catch {
-        $q.notify({ type: "negative", message: "The user was not found" });
+        $q.notify({ type: "negative", message: t("friends.notFound") });
     } finally {
         searching.value = false;
     }
@@ -261,12 +263,12 @@ async function sendRequest() {
     sendingReq.value = true;
     try {
         await friendApi.sendRequest(searchResult.value.chat_id);
-        $q.notify({ type: "positive", message: "Friend request has been sent" });
+        $q.notify({ type: "positive", message: t("friends.requestSent") });
         searchResult.value = null;
         searchId.value = "";
         loadData(); //Refresh application list
     } catch (e) {
-        const msg = e.response?.data?.error || "Sending failed";
+        const msg = e.response?.data?.error || t("friends.sendFailed");
         $q.notify({ type: "negative", message: msg });
     } finally {
         sendingReq.value = false;
@@ -277,10 +279,10 @@ async function cancel(reqId) {
     cancelingId.value = reqId;
     try {
         await friendApi.cancelRequest(reqId);
-        $q.notify({ type: "positive", message: "Friend request has been canceled" });
+        $q.notify({ type: "positive", message: t("friends.requestCanceled") });
         loadData();
     } catch {
-        $q.notify({ type: "negative", message: "Undo failed，Please try again" });
+        $q.notify({ type: "negative", message: t("friends.cancelFailed") });
     } finally {
         cancelingId.value = null;
     }
@@ -290,7 +292,7 @@ async function handle(reqId, accept) {
     await friendApi.handleRequest(reqId, accept);
     $q.notify({
         type: "positive",
-        message: accept ? "Friend request accepted" : "Rejected",
+        message: accept ? t("friends.requestAccepted") : t("friends.requestRejected"),
     });
     loadData();
 }
@@ -304,19 +306,19 @@ function openChat(friend) {
 // Receive friend requests in real time
 function onFriendRequest() {
     loadData();
-    $q.notify({ type: "info", message: "Received new friend request" });
+    $q.notify({ type: "info", message: t("friends.newRequest") });
 }
 
 // Receive a friend request in real time and be accepted (the other party agrees)
 function onFriendAccepted() {
     loadData();
-    $q.notify({ type: "positive", message: "Friend request has been accepted" });
+    $q.notify({ type: "positive", message: t("friends.requestAccepted") });
 }
 
 // Receive a friend request that was rejected in real time
 function onFriendRejected() {
     loadData();
-    $q.notify({ type: "warning", message: "Friend request was rejected" });
+    $q.notify({ type: "warning", message: t("friends.requestRejected") });
 }
 
 // Receive real-time changes in friends’ online status

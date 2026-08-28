@@ -1,54 +1,56 @@
+import { t } from '../../../i18n/index.js'
+
 const OVERLAY_KINDS = ['pause', 'win', 'lose', 'recover-save']
 
 function rewardText(rewards = {}) {
   const labels = [
-    ['hammer', 'Hammer'],
-    ['shuffle', 'Shuffle'],
-    ['extraMoves', '+5 Moves'],
+    ['hammer', t('sugarPop.hammer')],
+    ['shuffle', t('sugarPop.shuffle')],
+    ['extraMoves', t('sugarPop.extraMoves')],
   ]
   const earned = labels.filter(([key]) => rewards[key] > 0).map(([key, label]) => `${label} ×${rewards[key]}`)
-  return earned.length ? `Rewards: ${earned.join('  •  ')}` : 'No new booster rewards'
+  return earned.length ? t('sugarPop.rewards', { rewards: earned.join('  •  ') }) : t('sugarPop.noRewards')
 }
 
 export function createOverlayModel(kind, payload = {}) {
   if (!OVERLAY_KINDS.includes(kind)) throw new RangeError(`Unsupported Sugar Pop overlay: ${kind}`)
   if (kind === 'pause') {
     return {
-      title: 'Paused',
-      body: 'Take a breather. Your board is waiting.',
+      title: t('sugarPop.paused'),
+      body: t('sugarPop.pausedBody'),
       actions: [
-        { key: 'resume', label: 'Resume', primary: true },
-        { key: 'retry', label: 'Retry' },
-        { key: 'map', label: 'Map' },
+        { key: 'resume', label: t('sugarPop.resume'), primary: true },
+        { key: 'retry', label: t('common.retry') },
+        { key: 'map', label: t('sugarPop.map') },
       ],
     }
   }
   if (kind === 'win') {
     const actions = []
-    if (payload.hasNextLevel) actions.push({ key: 'next', label: 'Next Level', primary: true })
-    actions.push({ key: 'retry', label: 'Play Again', primary: !payload.hasNextLevel })
-    actions.push({ key: 'map', label: 'Map' })
+    if (payload.hasNextLevel) actions.push({ key: 'next', label: t('sugarPop.next'), primary: true })
+    actions.push({ key: 'retry', label: t('sugarPop.playAgain'), primary: !payload.hasNextLevel })
+    actions.push({ key: 'map', label: t('sugarPop.map') })
     return {
-      title: 'Sugar Sweet!',
-      body: `${'★'.repeat(payload.stars || 0)}${'☆'.repeat(3 - (payload.stars || 0))}\nScore ${payload.score || 0}\n${rewardText(payload.rewards)}`,
+      title: t('sugarPop.win'),
+      body: `${'★'.repeat(payload.stars || 0)}${'☆'.repeat(3 - (payload.stars || 0))}\n${t('sugarPop.score', { score: payload.score || 0 })}\n${rewardText(payload.rewards)}`,
       actions,
     }
   }
   if (kind === 'lose') {
     const actions = []
-    if (payload.canUseExtraMoves) actions.push({ key: 'extraMoves', label: 'Use +5 Moves', primary: true })
-    actions.push({ key: 'retry', label: 'Retry', primary: !payload.canUseExtraMoves })
-    actions.push({ key: 'map', label: 'Map' })
+    if (payload.canUseExtraMoves) actions.push({ key: 'extraMoves', label: t('sugarPop.useExtraMoves'), primary: true })
+    actions.push({ key: 'retry', label: t('common.retry'), primary: !payload.canUseExtraMoves })
+    actions.push({ key: 'map', label: t('sugarPop.map') })
     return {
-      title: 'Out of Moves',
-      body: 'The targets are still on the board.',
+      title: t('sugarPop.outOfMoves'),
+      body: t('sugarPop.targetsRemain'),
       actions,
     }
   }
   return {
-    title: 'Save Recovered',
-    body: 'Your saved data could not be read, so Sugar Pop started fresh.',
-    actions: [{ key: 'recover', label: 'Continue', primary: true }],
+    title: t('sugarPop.saveRecovered'),
+    body: t('sugarPop.saveRecoveredBody'),
+    actions: [{ key: 'recover', label: t('sugarPop.continue'), primary: true }],
   }
 }
 

@@ -628,7 +628,7 @@ export const useChatStore = defineStore('chat', () => {
           return { ...m, text: decryptedText, status: restoreOutgoingStatus(m) }
         } catch (e) {
           console.warn('[chat] decrypt message failed:', m.id, e)
-          return { ...m, text: '[Decryption failed]' }
+          return { ...m, text: null, decryptionFailed: true }
         }
       }))
 
@@ -697,7 +697,7 @@ export const useChatStore = defineStore('chat', () => {
           }
         } catch (e) {
           console.warn('[chat] decrypt message failed:', m.id, e)
-          grouped[cid].push({ ...m, text: '[Decryption failed]' })
+          grouped[cid].push({ ...m, text: null, decryptionFailed: true })
         }
       }
 

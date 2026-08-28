@@ -8,21 +8,21 @@
         
       </div>
       <q-icon name="circle" :color="friendOnline ? 'positive' : 'grey-4'" size="12px">
-        <q-tooltip>{{ friendOnline ? 'online' : 'Offline' }}</q-tooltip>
+        <q-tooltip>{{ friendOnline ? t("common.online") : t("common.offline") }}</q-tooltip>
       </q-icon>
       <q-btn
         flat round dense icon="call" color="grey-7"
         :disable="callStore.state !== 'idle'"
         @click="callStore.startCall(friendChatId, friendNickname, 'audio')"
       >
-        <q-tooltip>voice call</q-tooltip>
+        <q-tooltip>{{ t("call.voice") }}</q-tooltip>
       </q-btn>
       <q-btn
         flat round dense icon="videocam" color="grey-7"
         :disable="callStore.state !== 'idle'"
         @click="callStore.startCall(friendChatId, friendNickname, 'video')"
       >
-        <q-tooltip>video call</q-tooltip>
+        <q-tooltip>{{ t("call.video") }}</q-tooltip>
       </q-btn>
       <!-- <q-btn flat round dense icon="more_vert">
         <q-menu anchor="bottom right" self="top right">
@@ -78,18 +78,18 @@
                   <div class="file-size">{{ formatFileSize(msg.filesize) }}</div>
                 </div>
                 <a v-if="msg.objectUrl" :href="msg.objectUrl" :download="msg.filename" class="file-dl" @click.stop>⬇️</a>
-                <span v-else class="file-expired">Expired</span>
+                <span v-else class="file-expired">{{ t("chat.expired") }}</span>
               </div>
             </template>
             <!-- Ordinary text message -->
             <template v-else>
-              <div>{{ msg.text }}</div>
+              <div>{{ msg.decryptionFailed || msg.text === '[Decryption failed]' ? t("chat.decryptionFailed") : msg.text }}</div>
             </template>
             <div class="text-caption q-mt-xs text-grey row items-center q-gutter-xs">
               <span>{{ formatTime(msg.ts) }}</span>
               <q-icon v-if="msg.burnAfterRead" name="local_fire_department" size="14px" color="orange">
                 <q-tooltip v-if="msg.burnAt">{{ formatBurnCountdown(msg.burnAt) }}</q-tooltip>
-                <q-tooltip v-else>After reading2Automatically delete after hours</q-tooltip>
+                <q-tooltip v-else>{{ t("chat.burnAfterRead") }}</q-tooltip>
               </q-icon>
             </div>
             <!-- <q-menu context-menu v-if="msg.type !== 'file'">
@@ -132,18 +132,18 @@
                   <div class="file-size">{{ formatFileSize(msg.filesize) }}</div>
                 </div>
                 <a v-if="msg.objectUrl" :href="msg.objectUrl" :download="msg.filename" class="file-dl" @click.stop>⬇️</a>
-                <span v-else class="file-expired">Expired</span>
+                <span v-else class="file-expired">{{ t("chat.expired") }}</span>
               </div>
             </template>
             <!-- Ordinary text message -->
             <template v-else>
-              <div>{{ msg.text }}</div>
+              <div>{{ msg.decryptionFailed || msg.text === '[Decryption failed]' ? t("chat.decryptionFailed") : msg.text }}</div>
             </template>
             <div class="text-caption q-mt-xs text-blue-2 row items-center q-gutter-xs">
               <span>{{ formatTime(msg.ts) }}</span>
               <div>
                 <q-icon v-if="msg.status === 'pending'" name="schedule" size="13px">
-                  <q-tooltip>正在发送，等待服务器确认</q-tooltip>
+                  <q-tooltip>{{ t("chat.sending") }}</q-tooltip>
                 </q-icon>
                 <q-icon
                   v-else-if="msg.status === 'queued'"
@@ -167,13 +167,13 @@
                 <template v-else>
                   <span v-if="msg.read" class="read-status">✔✔</span>
                   <span v-else class="read-status">✔</span>
-                  <q-tooltip v-if="msg.read">The other party has read</q-tooltip>
-                  <q-tooltip v-else>Server has received，The other party has not read</q-tooltip>
+                  <q-tooltip v-if="msg.read">{{ t("chat.read") }}</q-tooltip>
+                  <q-tooltip v-else>{{ t("chat.delivered") }}</q-tooltip>
                 </template>
               </div>
               <q-icon v-if="msg.burnAfterRead" name="local_fire_department" size="14px" color="orange">
                 <q-tooltip v-if="msg.burnAt">{{ formatBurnCountdown(msg.burnAt) }}</q-tooltip>
-                <q-tooltip v-else>The other party has not read：After the other party reads2Automatically delete after hours</q-tooltip>
+                <q-tooltip v-else>{{ t("chat.burnUnread") }}</q-tooltip>
               </q-icon>
             </div>
             <q-menu v-if="msg.status !== 'pending'" context-menu>
@@ -186,15 +186,15 @@
                   class="text-primary items-center q-gutter-xs"
                 >
                   <q-icon name="refresh" size="sm" />
-                  <span>重新发送</span>
+                  <span>{{ t("chat.resend") }}</span>
                 </q-item>
                 <q-item v-if="canRecall(msg)" clickable v-close-popup @click="recall(msg)" class="text-negative items-center q-gutter-xs">
                   <q-icon name="undo" size="sm" />
-                  <span>Delete both sides</span>
+                  <span>{{ t("chat.deleteBoth") }}</span>
                 </q-item>
                 <q-item v-else clickable v-close-popup @click="deleteMsg(msg)" class="text-negative items-center q-gutter-xs">
                   <q-icon name="delete" size="sm" />
-                  <span>Delete for me</span>
+                  <span>{{ t("chat.deleteMine") }}</span>
                 </q-item>
               </q-list>
             </q-menu>
@@ -218,7 +218,7 @@
         />
       </div>
       <span class="text-caption text-grey-7">
-        {{ activeTransfer.status === 'error' ? 'failed' : activeTransfer.status === 'done' ? 'Complete' : activeTransfer.progress + '%' }}
+        {{ activeTransfer.status === 'error' ? t("chat.failed") : activeTransfer.status === 'done' ? t("chat.complete") : activeTransfer.progress + '%' }}
       </span>
       <q-icon v-if="activeTransfer.status === 'error'" name="error_outline" color="negative" size="18px" />
       <q-icon v-else-if="activeTransfer.status === 'done'" name="check_circle_outline" color="positive" size="18px" />
@@ -227,7 +227,7 @@
     <div v-if="voicePreparing || voiceRecording" class="voice-record-overlay" :class="{ cancelling: voiceCancelling }">
       <div class="voice-record-card">
         <q-icon :name="voiceCancelling ? 'delete_outline' : 'mic'" size="34px" />
-        <div class="voice-record-time">{{ voicePreparing ? '正在启用麦克风…' : formatVoiceDuration(voiceDurationMs) }}</div>
+        <div class="voice-record-time">{{ voicePreparing ? t("chat.micPreparing") : formatVoiceDuration(voiceDurationMs) }}</div>
         <div v-if="!voicePreparing" class="voice-levels" aria-hidden="true">
           <span
             v-for="index in 15"
@@ -235,15 +235,15 @@
             :style="{ height: voiceBarHeight(index) + 'px' }"
           />
         </div>
-        <div class="voice-record-hint">{{ voiceCancelling ? '松开取消' : '松开发送，上滑取消' }}</div>
+        <div class="voice-record-hint">{{ voiceCancelling ? t("chat.releaseCancel") : t("chat.releaseSend") }}</div>
       </div>
     </div>
 
     <!-- Burn-after-read status: only takes up space when enabled -->
     <div v-if="burnMode" class="burn-mode-status">
       <q-icon name="local_fire_department" size="17px" />
-      <span>阅后即焚已开启 · 对方阅读 2 小时后删除</span>
-      <q-btn flat round dense icon="close" size="sm" aria-label="关闭阅后即焚" @click="burnMode = false" />
+      <span>{{ t("chat.burnEnabled") }}</span>
+      <q-btn flat round dense icon="close" size="sm" :aria-label="t('chat.closeBurn')" @click="burnMode = false" />
     </div>
 
     <!-- Compact dynamic input bar -->
@@ -265,10 +265,10 @@
         :icon="voiceInputMode ? 'keyboard' : 'mic_none'"
         color="grey-7"
         :disable="voicePreparing || voiceRecording"
-        :aria-label="voiceInputMode ? '切换到文字输入' : '切换到语音输入'"
+        :aria-label="voiceInputMode ? t('chat.textMode') : t('chat.voiceMode')"
         @click="toggleVoiceInputMode"
       >
-        <q-tooltip>{{ voiceInputMode ? '切换到文字输入' : '切换到语音输入' }}</q-tooltip>
+        <q-tooltip>{{ voiceInputMode ? t("chat.textMode") : t("chat.voiceMode") }}</q-tooltip>
       </q-btn>
 
       <button
@@ -280,7 +280,7 @@
         @pointerdown.prevent="beginVoiceGesture"
         @contextmenu.prevent
       >
-        {{ voicePreparing ? '正在启用麦克风…' : voiceRecording ? '松开发送，上滑取消' : '按住说话' }}
+        {{ voicePreparing ? t("chat.micPreparing") : voiceRecording ? t("chat.releaseSend") : t("chat.holdToTalk") }}
       </button>
 
       <q-input
@@ -290,14 +290,14 @@
         outlined
         dense
         rounded
-        placeholder="输入消息…"
+        :placeholder="t('chat.inputPlaceholder')"
         class="composer-input"
         @keyup.enter="sendMsg"
         @focus="morePanelOpen = false"
         :disable="sending || voiceSending || voiceRecording"
       />
 
-      <q-btn v-if="!voiceInputMode" round flat dense icon="sentiment_satisfied_alt" color="grey-7" aria-label="选择表情">
+      <q-btn v-if="!voiceInputMode" round flat dense icon="sentiment_satisfied_alt" color="grey-7" :aria-label="t('chat.emoji')">
         <q-menu anchor="top right" self="bottom right" :offset="[0, 8]" max-height="260px">
           <div style="width: 288px">
             <q-tabs v-model="emojiTab" dense align="justify" class="bg-grey-2 text-grey-8" indicator-color="primary" style="font-size:18px">
@@ -323,7 +323,7 @@
         :color="burnMode ? 'orange' : 'primary'"
         icon="send"
         :loading="sending || voiceSending"
-        aria-label="发送消息"
+        :aria-label="t('chat.send')"
         @click="sendMsg"
       />
       <q-btn
@@ -334,7 +334,7 @@
         :icon="morePanelOpen ? 'close' : 'add'"
         color="grey-7"
         :disable="sending || voiceSending || voicePreparing || voiceRecording || isTransferring"
-        aria-label="更多功能"
+        :aria-label="t('chat.more')"
         @click="toggleMorePanel"
       />
     </div>
@@ -348,8 +348,8 @@
           @click="openFilePicker"
         >
           <span class="composer-more-icon"><q-icon name="attach_file" size="26px" /></span>
-          <span>文件</span>
-          <small>最大 100MB</small>
+          <span>{{ t("chat.file") }}</span>
+          <small>{{ t("chat.maxFileSize") }}</small>
         </button>
         <button
           type="button"
@@ -358,8 +358,8 @@
           @click="toggleBurnMode"
         >
           <span class="composer-more-icon"><q-icon name="local_fire_department" size="26px" /></span>
-          <span>{{ burnMode ? '关闭阅后即焚' : '阅后即焚' }}</span>
-          <small>阅读 2 小时后删除</small>
+          <span>{{ burnMode ? t("chat.closeBurn") : t("chat.burn") }}</span>
+          <small>{{ t("chat.burnDeleteHint") }}</small>
         </button>
       </div>
     </q-slide-transition>
@@ -390,6 +390,7 @@ import {
   formatVoiceDuration,
 } from 'src/services/voice-recorder.mjs'
 import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
+import { useI18n } from 'src/i18n'
 
 // ── File utility functions ─────────────────────────────────────────────
 
@@ -426,12 +427,13 @@ const route = useRoute()
 const chatStore = useChatStore()
 const identityStore = useIdentityStore()
 const callStore = useCallStore()
+const { locale, t } = useI18n()
 
 // chatId format verification: NNNN-AAAA (4 digits - 4 uppercase letters)
 const CHAT_ID_PATTERN = /^\d{4}-[A-Z]{4}$/
 const friendChatId = route.params.chatId
 if (!CHAT_ID_PATTERN.test(friendChatId)) {
-  $q.notify({ type: 'negative', message: 'Invalid chat ID' })
+  $q.notify({ type: 'negative', message: t('chat.invalidId') })
   throw new Error('Invalid chatId format')
 }
 const virtualScrollEl = ref(null)
@@ -536,11 +538,11 @@ function removeVoicePointerListeners() {
 async function beginVoiceGesture(event) {
   if (voicePreparing.value || voiceRecording.value || voiceStopping) return
   if (!friendPubKey.value) {
-    $q.notify({ type: 'warning', message: '无法获取对方公钥，请刷新后重试' })
+    $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
     return
   }
   if (!navigator.mediaDevices?.getUserMedia) {
-    $q.notify({ type: 'warning', message: '当前环境不支持麦克风录音' })
+    $q.notify({ type: 'warning', message: t('chat.micUnsupported') })
     return
   }
 
@@ -596,7 +598,7 @@ async function beginVoiceGesture(event) {
     const denied = error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError'
     $q.notify({
       type: 'warning',
-      message: denied ? '麦克风权限未开启，请在系统设置中允许后重试' : `录音启动失败：${error?.message || '未知错误'}`
+      message: denied ? t('chat.micDenied') : t('chat.recordStartFailed', { error: error?.message || t('chat.unknownError') })
     })
   }
 }
@@ -675,11 +677,11 @@ async function finishVoiceRecording(cancelled) {
     })
 
     if (cancelled) {
-      $q.notify({ type: 'info', message: '已取消录音' })
+      $q.notify({ type: 'info', message: t('chat.recordingCanceled') })
       return
     }
     if (durationMs < MIN_VOICE_DURATION_MS || blob.size === 0) {
-      $q.notify({ type: 'warning', message: '说话时间太短' })
+      $q.notify({ type: 'warning', message: t('chat.recordingTooShort') })
       return
     }
 
@@ -697,7 +699,7 @@ async function finishVoiceRecording(cancelled) {
       { kind: 'voice', durationMs: Math.round(durationMs) }
     )
   } catch (error) {
-    $q.notify({ type: 'negative', message: `语音发送失败：${error?.message || '未知错误'}` })
+    $q.notify({ type: 'negative', message: t('chat.voiceSendFailed', { error: error?.message || t('chat.unknownError') }) })
   } finally {
     mediaRecorder = null
     voiceChunks = []
@@ -724,11 +726,11 @@ function toggleVoicePlayback(msg) {
   voicePlayer.addEventListener('ended', () => { playingVoiceId.value = null }, { once: true })
   voicePlayer.addEventListener('error', () => {
     playingVoiceId.value = null
-    $q.notify({ type: 'warning', message: '语音无法播放' })
+    $q.notify({ type: 'warning', message: t('chat.voiceUnavailable') })
   }, { once: true })
   voicePlayer.play().catch(() => {
     playingVoiceId.value = null
-    $q.notify({ type: 'warning', message: '语音播放失败' })
+    $q.notify({ type: 'warning', message: t('chat.voicePlaybackFailed') })
   })
 }
 
@@ -942,7 +944,7 @@ async function fetchFriendInfo() {
       friendOnline.value = !!friend.online
     }
   } catch {
-    $q.notify({ type: 'warning', message: 'Unable to obtain the counterparty public key' })
+    $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
   }
 }
 
@@ -982,23 +984,23 @@ function onFileSelected(e) {
   }
 
   $q.dialog({
-    title: 'Send files',
-    message: `OK to send「${file.name}」（${formatFileSize(file.size)}）？\n\nPlease ensure that the network of both parties is stable。If due to network interruption，Need to resend。`,
-    cancel: { label: 'Cancel', flat: true },
-    ok: { label: 'send', color: 'primary' },
+    title: t('chat.sendFileTitle'),
+    message: t('chat.sendFileMessage', { name: file.name, size: formatFileSize(file.size) }),
+    cancel: { label: t('common.cancel'), flat: true },
+    ok: { label: t('chat.send'), color: 'primary' },
     persistent: true
   }).onOk(() => doSendFile(file))
 }
 
 async function doSendFile(file) {
   if (!friendPubKey.value) {
-    $q.notify({ type: 'warning', message: 'Unable to obtain the counterparty public key. Please refresh and try again' })
+    $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
     return
   }
   try {
     await chatStore.sendFile(friendChatId, friendPubKey.value, file, burnMode.value)
   } catch (e) {
-    $q.notify({ type: 'negative', message: 'File sending failed：' + e.message })
+    $q.notify({ type: 'negative', message: t('chat.fileSendFailed', { error: e.message }) })
   }
 }
 
@@ -1012,11 +1014,11 @@ async function sendMsg(event) {
   if (!text) return
   // Security Check: Message Length Limit
   if (text.length > MAX_MESSAGE_LENGTH) {
-    $q.notify({ type: 'warning', message: `Message too long，most ${MAX_MESSAGE_LENGTH} character` })
+    $q.notify({ type: 'warning', message: t('chat.messageTooLong', { count: MAX_MESSAGE_LENGTH }) })
     return
   }
   if (!friendPubKey.value) {
-    $q.notify({ type: 'warning', message: 'Unable to obtain the counterparty public key. Please refresh and try again' })
+    $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
     return
   }
   sending.value = true
@@ -1024,11 +1026,11 @@ async function sendMsg(event) {
   try {
     const ok = await chatStore.sendMessage(friendChatId, friendPubKey.value, text, burnMode.value)
     if (!ok) {
-      $q.notify({ type: 'warning', message: 'Message sending failed，Please check the network' })
+      $q.notify({ type: 'warning', message: t('chat.messageSendFailed') })
       inputText.value = text
     }
   } catch (e) {
-    $q.notify({ type: 'negative', message: 'Message sending failed：' + e.message })
+    $q.notify({ type: 'negative', message: t('chat.messageSendError', { error: e.message }) })
     inputText.value = text
   } finally {
     sending.value = false
@@ -1038,19 +1040,19 @@ async function sendMsg(event) {
 async function retryMsg(msg) {
   if (retryingMessageId.value || !msg?.id) return
   if (!friendPubKey.value) {
-    $q.notify({ type: 'warning', message: '无法获取对方公钥，请刷新后重试' })
+    $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
     return
   }
   retryingMessageId.value = msg.id
   try {
     const ok = await chatStore.retryMessage(friendChatId, friendPubKey.value, msg.id)
     if (!ok) {
-      $q.notify({ type: 'warning', message: '无法加入发送队列，请稍后重试' })
+      $q.notify({ type: 'warning', message: t('chat.queueFailed') })
     } else if (msg.status === 'queued') {
-      $q.notify({ type: 'info', message: '已加入发送队列，网络恢复后自动发送' })
+      $q.notify({ type: 'info', message: t('chat.queued') })
     }
   } catch (error) {
-    $q.notify({ type: 'negative', message: `重试失败：${error?.message || '未知错误'}` })
+    $q.notify({ type: 'negative', message: t('chat.retryFailed', { error: error?.message || t('chat.unknownError') }) })
   } finally {
     retryingMessageId.value = null
   }
@@ -1058,19 +1060,19 @@ async function retryMsg(msg) {
 
 function messageFailureText(msg) {
   const reasons = {
-    invalid_recipient: '收件人无效，消息未发送',
-    invalid_payload: '加密消息格式无效，消息未发送',
-    not_friends: '对方已不是好友，消息未发送',
-    message_id_conflict: '消息编号冲突，请删除后重新发送',
-    service_unavailable: '消息服务暂不可用，将自动重试',
-    temporary_failure: '服务器暂时不可用，将自动重试',
-    client_error: '消息发送失败，点击重试',
-    rejected: '服务器拒绝了这条消息'
+    invalid_recipient: t('chat.reasonInvalidRecipient'),
+    invalid_payload: t('chat.reasonInvalidPayload'),
+    not_friends: t('chat.reasonNotFriends'),
+    message_id_conflict: t('chat.reasonIdConflict'),
+    service_unavailable: t('chat.reasonServiceUnavailable'),
+    temporary_failure: t('chat.reasonTemporaryFailure'),
+    client_error: t('chat.reasonClientError'),
+    rejected: t('chat.reasonRejected')
   }
   if (msg?.failureCode && reasons[msg.failureCode]) return reasons[msg.failureCode]
   return msg?.status === 'queued'
-    ? '等待网络，恢复连接后自动发送；点击立即重试'
-    : '发送失败，点击重试'
+    ? t('chat.waitingNetwork')
+    : t('chat.failedRetry')
 }
 
 const RECALL_LIMIT_MS = 144 * 60 * 60 * 1000 //Can be withdrawn within 144 hours (6 days)
@@ -1089,13 +1091,13 @@ function deleteMsg(msg) {
 
 function clearHistory() {
   $q.dialog({
-    title: 'Clear chat history',
-    message: `Make sure to clear the「${friendNickname.value}」All chat history of？This operation is irreversible。`,
+    title: t('chat.clearTitle'),
+    message: t('chat.clearMessage', { name: friendNickname.value }),
     cancel: true,
     persistent: true
   }).onOk(async () => {
     await chatStore.clearChatMessages(friendChatId)
-    $q.notify({ type: 'positive', message: 'Chat history has been cleared' })
+    $q.notify({ type: 'positive', message: t('chat.historyCleared') })
   })
 }
 
@@ -1174,7 +1176,7 @@ function isNearBottom() {
 }
 
 function formatTime(ts) {
-  return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  return new Date(ts).toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit' })
 }
 
 /**
@@ -1183,13 +1185,13 @@ function formatTime(ts) {
 function formatBurnCountdown(burnAt) {
   // Rely on responsive now to automatically refresh the countdown with the timer (do not change to Date.now())
   const remaining = burnAt - now.value
-  if (remaining <= 0) return 'About to be deleted'
+  if (remaining <= 0) return t('chat.deletingSoon')
   const hours = Math.floor(remaining / (60 * 60 * 1000))
   const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000))
   if (hours > 0) {
-    return hours + 'hours' + minutes + 'Automatically delete after minutes'
+    return t('chat.deleteInHours', { hours, minutes })
   }
-  return minutes + 'Automatically delete after minutes'
+  return t('chat.deleteInMinutes', { minutes })
 }
 
 /**

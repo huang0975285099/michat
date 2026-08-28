@@ -15,7 +15,7 @@
                     {{ identity.nickname }}
                 </div>
             </div>
-            <div class="text-caption text-grey-7 q-mb-md q-mt-md">Enter security code to unlock</div>
+            <div class="text-caption text-grey-7 q-mb-md q-mt-md">{{ t("lock.enterCode") }}</div>
 
             <!-- 6-digit PIN entry -->
             <div class="pin-row q-mb-lg">
@@ -42,9 +42,9 @@
 
             <!-- Error message -->
             <div v-if="showError" class="text-negative text-center q-mb-md">
-                <div>Security code error</div>
+                <div>{{ t("lock.codeError") }}</div>
                 <div class="text-caption">
-                    Remaining {{ remainingAttempts }} opportunity
+                    {{ t("lock.attemptsLeft", { count: remainingAttempts }) }}
                 </div>
             </div>
 
@@ -52,7 +52,7 @@
             <div v-if="isCoolingDown" class="text-orange text-center q-mb-md">
                 <q-icon name="lock_clock" size="sm" />
                 <span class="q-ml-xs"
-                    >Too many errors，please {{ cooldownSeconds }} Try again in seconds</span
+                    >{{ t("lock.cooldown", { seconds: cooldownSeconds }) }}</span
                 >
             </div>
 
@@ -61,7 +61,7 @@
                 v-if="!isCoolingDown"
                 unelevated
                 color="primary"
-                label="Unlock"
+                :label="t('lock.unlock')"
                 class="full-width"
                 :disable="pinCode.length !== 6 || isUnlocking"
                 :loading="isUnlocking"
@@ -70,9 +70,9 @@
 
             <!-- bottom -->
             <div class="text-caption text-grey-7 text-center q-mt-lg">
-                Forgot security code？
+                {{ t("lock.forgotCode") }}
                 <span class="text-negative cursor-pointer" @click="confirmReset"
-                    >Cancel account</span
+                    >{{ t("lock.deleteAccount") }}</span
                 >
             </div>
         </div>
@@ -85,10 +85,12 @@ import { useQuasar } from "quasar";
 import { useRouter } from "vue-router";
 import { useIdentityStore } from "src/stores/identity";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
+import { useI18n } from "src/i18n";
 
 const $q = useQuasar();
 const router = useRouter();
 const identity = useIdentityStore();
+const { t } = useI18n();
 
 const show = computed(() => identity.isLocked);
 const pinValues = ref(["", "", "", "", "", ""]);
@@ -202,29 +204,27 @@ async function tryUnlock() {
 // Confirm logout (when you forget your password)
 function confirmReset() {
     $q.dialog({
-        title: "Cancel account",
-        message:
-            "This will permanently delete your account、Friendships and all data，Unable to recover！Are you sure to continue?？",
+        title: t("lock.deleteTitle"),
+        message: t("lock.deleteMessage"),
         cancel: true,
         persistent: true,
-        ok: "Confirm logout",
+        ok: t("lock.deleteConfirm"),
         color: "negative",
     }).onOk(() => {
         // Second confirmation
         $q.dialog({
-            title: "final confirmation",
-            message:
-                "This action is irreversible！Your identity will be permanently lost，Even if there is a backup of the private key, it cannot be restored！",
+            title: t("lock.finalTitle"),
+            message: t("lock.finalMessage"),
             cancel: true,
             persistent: true,
-            ok: "I'm sure I want to log out",
+            ok: t("lock.finalConfirm"),
             color: "negative",
         }).onOk(async () => {
             try {
                 await identity.clear();
                 router.replace("/#/init");
             } catch {
-                $q.notify({ type: "negative", message: "Account was not deleted. Your recovery key and local messages were retained." });
+                $q.notify({ type: "negative", message: t("lock.deleteFailed") });
             }
         });
     });

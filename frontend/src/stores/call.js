@@ -4,19 +4,20 @@ import { Notify } from 'quasar'
 import { send, on, off, wsConnected } from 'src/services/websocket'
 import { callApi } from 'src/services/api'
 import { acquireCallMedia } from './call-media.mjs'
+import { t } from 'src/i18n'
 
 function deviceErrorMessage(e, video) {
-  const noun = video ? 'camera/Microphone' : 'Microphone'
+  const noun = t(video ? 'call.deviceCameraMic' : 'call.deviceMic')
   if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError') {
-    return `not found${noun}Equipment，Please check device connection`
+    return t('call.deviceNotFound', { device: noun })
   }
   if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
-    return `${noun}Permission denied，Please allow access in your browser settings`
+    return t('call.permissionDenied', { device: noun })
   }
   if (e.name === 'NotReadableError') {
-    return `${noun}occupied by other programs，Please close and try again`
+    return t('call.deviceBusy', { device: noun })
   }
-  return `Unable to access${noun}：` + (e.message || e.name)
+  return t('call.deviceAccessFailed', { device: noun, error: e.message || e.name })
 }
 
 // Video constraints: limit resolution to control bandwidth, 1:1 calls are sufficient
@@ -105,7 +106,7 @@ export const useCallStore = defineStore('call', () => {
       connectTimer = null
       if (isCurrentSession(callId, targetPeerId) && connectionStatus.value !== 'connected') {
         hangup()
-        Notify.create({ type: 'negative', message: 'Unable to establish media connection，Please check the network and try again', timeout: 3000 })
+        Notify.create({ type: 'negative', message: t('call.mediaConnectFailed'), timeout: 3000 })
       }
     }, CONNECT_TIMEOUT_MS)
   }
@@ -119,9 +120,9 @@ export const useCallStore = defineStore('call', () => {
           localStream.value.removeTrack(track)
           localVideoOn.value = false
           sendMediaState()
-          Notify.create({ type: 'warning', message: 'Camera disconnected; continuing with voice', timeout: 3000 })
+          Notify.create({ type: 'warning', message: t('call.cameraDisconnected'), timeout: 3000 })
         } else {
-          Notify.create({ type: 'negative', message: 'MicrophoneDisconnected，The call has ended', timeout: 3000 })
+          Notify.create({ type: 'negative', message: t('call.microphoneDisconnected'), timeout: 3000 })
           hangup()
         }
       }
@@ -177,7 +178,7 @@ export const useCallStore = defineStore('call', () => {
       if (remaining <= 0) {
         clearRecoveryState()
         hangup()
-        Notify.create({ type: 'negative', message: 'Network outage，The call has ended', timeout: 3000 })
+        Notify.create({ type: 'negative', message: t('call.networkEnded'), timeout: 3000 })
         return
       }
       attemptIceRestart(callId, targetPeerId)
@@ -248,7 +249,7 @@ export const useCallStore = defineStore('call', () => {
       localStream.value = stream
       localVideoOn.value = stream.getVideoTracks().some(track => track.readyState !== 'ended')
       if (videoError) {
-        Notify.create({ type: 'warning', message: 'Camera unavailable; continuing with voice', timeout: 3000 })
+        Notify.create({ type: 'warning', message: t('call.cameraUnavailable'), timeout: 3000 })
       }
       bindTrackEndHandlers(stream, callId, chatId)
       const iceConfig = await getTurnConfig()
@@ -279,7 +280,7 @@ export const useCallStore = defineStore('call', () => {
       callingTimer = setTimeout(() => {
         if (state.value === 'calling' && currentCallId === callId) {
           hangup()
-          Notify.create({ type: 'warning', message: 'call timeout，The other party did not answer' })
+          Notify.create({ type: 'warning', message: t('call.timeout') })
         }
       }, CALL_TIMEOUT_MS)
     } catch (e) {
@@ -339,7 +340,7 @@ export const useCallStore = defineStore('call', () => {
       localStream.value = stream
       localVideoOn.value = stream.getVideoTracks().some(track => track.readyState !== 'ended')
       if (videoError) {
-        Notify.create({ type: 'warning', message: 'Camera unavailable; continuing with voice', timeout: 3000 })
+        Notify.create({ type: 'warning', message: t('call.cameraUnavailable'), timeout: 3000 })
       }
       bindTrackEndHandlers(stream, callId, fromId)
       const iceConfig = await getTurnConfig()
@@ -459,7 +460,7 @@ export const useCallStore = defineStore('call', () => {
       console.warn('[call] enable camera:', e)
       if (attempt === cameraAttemptGeneration && isCurrentSession(callId, targetPeerId)) {
         localVideoOn.value = false
-        Notify.create({ type: 'warning', message: 'Unable to start camera; continuing with voice', timeout: 3000 })
+        Notify.create({ type: 'warning', message: t('call.cameraStartFailed'), timeout: 3000 })
       }
     } finally {
       if (attempt === cameraAttemptGeneration) cameraStarting.value = false
@@ -470,7 +471,7 @@ export const useCallStore = defineStore('call', () => {
   async function switchCamera() {
     if (!isVideo() || !localStream.value || !pc || cameraStarting.value) return
     if (connectionStatus.value === 'reconnecting') {
-      Notify.create({ type: 'warning', message: 'Reconnecting, please try again later', timeout: 2000 })
+      Notify.create({ type: 'warning', message: t('call.waitReconnect'), timeout: 2000 })
       return
     }
     const attempt = ++cameraAttemptGeneration
@@ -518,7 +519,7 @@ export const useCallStore = defineStore('call', () => {
       tmp?.getTracks().forEach(t => t.stop())
       console.warn('[call] switchCamera:', e)
       if (attempt === cameraAttemptGeneration && isCurrentSession(callId, targetPeerId)) {
-        Notify.create({ type: 'warning', message: 'Failed to switch camera' })
+        Notify.create({ type: 'warning', message: t('call.switchFailed') })
       }
     } finally {
       if (attempt === cameraAttemptGeneration) cameraStarting.value = false
@@ -588,7 +589,7 @@ export const useCallStore = defineStore('call', () => {
     } catch (e) {
       console.error('[call] apply answer:', e)
       if (pc === connection && isCurrentSession(payload.call_id, payload.from)) {
-        Notify.create({ type: 'negative', message: 'Unable to establish call connection，Please try again' })
+        Notify.create({ type: 'negative', message: t('call.connectionFailed') })
         hangup()
       }
     }
@@ -662,7 +663,7 @@ export const useCallStore = defineStore('call', () => {
   function onCallHangup(payload) {
     if (!payload || !isCurrentSession(payload.call_id, payload.from)) return
     if (state.value === 'active') {
-      Notify.create({ type: 'info', message: 'The call has ended', timeout: 2000 })
+      Notify.create({ type: 'info', message: t('call.ended'), timeout: 2000 })
     }
     cleanup()
   }
@@ -672,15 +673,15 @@ export const useCallStore = defineStore('call', () => {
     const reason = payload?.reason
     let message
     if (reason === 'busy') {
-      message = 'The other party is on the call，Please try again later'
+      message = t('call.peerBusy')
     } else if (reason === 'device_error') {
-      message = 'The other device cannot answer the call (microphone or permission issue)'
+      message = t('call.peerDeviceError')
     } else if (reason === 'timeout') {
-      message = 'The other party did not answer'
+      message = t('call.peerNoAnswer')
     } else if (reason === 'glare') {
-      message = 'Processing calls initiated by both parties at the same time'
+      message = t('call.glare')
     } else {
-      message = 'The other party has declined the call'
+      message = t('call.declined')
     }
     Notify.create({ type: 'warning', message })
     cleanup()

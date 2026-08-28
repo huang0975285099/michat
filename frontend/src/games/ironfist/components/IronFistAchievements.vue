@@ -9,7 +9,7 @@
                 color="white"
                 @click="$emit('back')"
             />
-            <div class="text-h6 q-ml-sm">🏅 my achievements</div>
+            <div class="text-h6 q-ml-sm">{{ t("ironFist.achievementTitle") }}</div>
         </div>
 
         <div v-if="loading && !stats" class="text-center q-py-xl">
@@ -18,7 +18,7 @@
         <template v-else-if="stats">
             <div class="ach-grid">
                 <div
-                    v-for="a in ACHIEVEMENTS"
+                    v-for="a in localizedAchievements"
                     :key="a.code"
                     class="ach-item"
                     :class="{ 'ach-item--locked': !unlockedSet.has(a.code) }"
@@ -39,7 +39,7 @@
                 </div>
             </div>
             <div class="text-caption text-grey-6 q-mt-md text-center">
-                Unlocked {{ stats.achievements.length }} / {{ ACHIEVEMENTS.length }}
+                {{ t("ironFist.achievementProgress", { unlocked: stats.achievements.length, total: ACHIEVEMENTS.length }) }}
             </div>
         </template>
     </div>
@@ -50,8 +50,22 @@ import { ref, computed, onMounted } from "vue";
 import { Notify } from "quasar";
 import { ironfistApi } from "src/services/api";
 import { ACHIEVEMENTS } from "../game/ironfistMeta";
+import { useI18n } from "src/i18n";
 
 defineEmits(["back"]);
+const { t } = useI18n();
+const achievementKeys = {
+    first_battle: ["achievementFirstName", "achievementFirstDesc"],
+    hundred_battles: ["achievementHundredName", "achievementHundredDesc"],
+    win_streak_5: ["achievementStreakName", "achievementStreakDesc"],
+    counter_master: ["achievementCounterName", "achievementCounterDesc"],
+    low_hp_comeback: ["achievementComebackName", "achievementComebackDesc"],
+    high_hp_win: ["achievementHighHpName", "achievementHighHpDesc"],
+};
+const localizedAchievements = computed(() => ACHIEVEMENTS.map((achievement) => {
+    const [nameKey, descKey] = achievementKeys[achievement.code];
+    return { ...achievement, name: t(`ironFist.${nameKey}`), desc: t(`ironFist.${descKey}`) };
+}));
 
 const stats = ref(null);
 const loading = ref(false);
@@ -64,7 +78,7 @@ onMounted(async () => {
         stats.value = data;
     } catch {
         Notify.create({
-            message: "Achievement data loading failed",
+            message: t("ironFist.loadAchievementsFailed"),
             color: "negative",
             textColor: "white",
             position: "top",

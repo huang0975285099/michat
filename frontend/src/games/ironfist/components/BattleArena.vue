@@ -29,7 +29,7 @@
       <div v-if="oppHit" class="impact" :class="{ 'impact--crit': oppCrit }" />
       <transition name="float">
         <div v-if="oppDmg" class="dmg-float dmg-float--opp" :class="{ 'dmg-float--crit': oppCrit }">
-          <span v-if="oppCrit" class="dmg-crit-tag">CRIT</span>-{{ oppDmg }}
+          <span v-if="oppCrit" class="dmg-crit-tag">{{ t("ironFist.critical") }}</span>-{{ oppDmg }}
         </div>
       </transition>
     </div>
@@ -45,7 +45,7 @@
       <div v-if="playerHit" class="impact" :class="{ 'impact--crit': playerCrit }" />
       <transition name="float">
         <div v-if="playerDmg" class="dmg-float dmg-float--player" :class="{ 'dmg-float--crit': playerCrit }">
-          <span v-if="playerCrit" class="dmg-crit-tag">CRIT</span>-{{ playerDmg }}
+          <span v-if="playerCrit" class="dmg-crit-tag">{{ t("ironFist.critical") }}</span>-{{ playerDmg }}
         </div>
       </transition>
     </div>
@@ -57,6 +57,9 @@
 </template>
 
 <script setup>
+import { useI18n } from "src/i18n";
+
+const { t } = useI18n();
 import { ref, watch } from 'vue'
 
 const props = defineProps({

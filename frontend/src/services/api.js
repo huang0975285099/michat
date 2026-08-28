@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { Notify } from 'quasar'
+import { t } from 'src/i18n'
 
 const isDev = process.env.DEV
 
@@ -21,7 +22,7 @@ api.interceptors.response.use(
   (err) => {
     if (err.response?.status === 401 && localStorage.getItem('session_token')) {
       localStorage.removeItem('session_token')
-      Notify.create({ type: 'warning', message: 'You are already logged in on another device，The current session has expired' })
+      Notify.create({ type: 'warning', message: t('system.sessionExpired') })
       // Delay the jump and let notify display first
       setTimeout(() => { window.location.href = '/#/init' }, 1500)
     }

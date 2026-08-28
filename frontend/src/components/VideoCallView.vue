@@ -39,7 +39,7 @@
             />
             <div v-if="!callStore.localVideoOn" class="local-camera-off column flex-center">
                 <q-icon name="videocam_off" color="white" size="24px" />
-                <span>Voice only</span>
+                <span>{{ t("call.voiceOnly") }}</span>
             </div>
         </div>
 
@@ -52,7 +52,7 @@
                 :text-color="muted ? 'white' : 'black'"
                 @click="toggleMute"
             >
-                <q-tooltip>{{ muted ? 'Unmute' : 'mute' }}</q-tooltip>
+                <q-tooltip>{{ muted ? t("call.unmute") : t("call.mute") }}</q-tooltip>
             </q-btn>
             <q-btn
                 round size="lg"
@@ -63,20 +63,20 @@
                 :disable="callStore.cameraStarting"
                 @click="toggleCamera"
             >
-                <q-tooltip>{{ callStore.localVideoOn ? 'Turn off camera' : 'Turn on camera' }}</q-tooltip>
+                <q-tooltip>{{ callStore.localVideoOn ? t("call.cameraOff") : t("call.cameraOn") }}</q-tooltip>
             </q-btn>
             <q-btn
                 round size="lg" icon="flip_camera_ios" color="white" text-color="black"
                 :disable="!callStore.localVideoOn || callStore.cameraStarting"
                 @click="callStore.switchCamera()"
             >
-                <q-tooltip>Switch camera</q-tooltip>
+                <q-tooltip>{{ t("call.switchCamera") }}</q-tooltip>
             </q-btn>
             <q-btn
                 round size="lg" icon="call_end" color="negative"
                 @click="callStore.hangup()"
             >
-                <q-tooltip>Hang up</q-tooltip>
+                <q-tooltip>{{ t("call.hangup") }}</q-tooltip>
             </q-btn>
         </div>
     </div>
@@ -86,8 +86,10 @@
 import { ref, computed, watch, onUnmounted, nextTick } from "vue";
 import { useCallStore } from "src/stores/call";
 import { videoCallStatusText } from "./video-call-status.mjs";
+import { useI18n } from "src/i18n";
 
 const callStore = useCallStore();
+const { t } = useI18n();
 const remoteEl = ref(null);
 const localEl = ref(null);
 const muted = ref(false);
@@ -112,6 +114,7 @@ const statusText = computed(() => videoCallStatusText({
     peerName: peerName.value,
     remoteVideoOn: callStore.remoteVideoOn,
     hasRemoteVideoTrack: hasRemoteVideoTrack.value,
+    translate: t,
 }));
 const showPlaceholder = computed(() => statusText.value !== "");
 

@@ -9,7 +9,7 @@
                 color="white"
                 @click="$emit('back')"
             />
-            <div class="text-h6 q-ml-sm">Battle record</div>
+            <div class="text-h6 q-ml-sm">{{ t("ironFist.recordTitle") }}</div>
         </div>
 
         <div v-if="statsLoading && !stats" class="text-center q-py-xl">
@@ -19,39 +19,39 @@
             <!-- Record overview -->
             <div class="rec-total">
                 <div class="rec-total-num">{{ stats.total_battles }}</div>
-                <div class="rec-total-label">Total number of battles🔥 </div>
+                <div class="rec-total-label">{{ t("ironFist.totalBattles") }} 🔥</div>
                 <div class="rec-streak">
                     current {{ stats.current_win_streak }} winning streak，highest {{ stats.max_win_streak }} winning streak
                 </div>
             </div>
 
             <div class="rec-mode">
-                <div class="rec-mode-title">🤖 Man-machine battle PvE</div>
+                <div class="rec-mode-title">🤖 {{ t("ironFist.pveMode") }}</div>
                 <div class="rec-wld">
-                    <span class="rec-w">{{ stats.pve_wins }} win</span>
-                    <span class="rec-l">{{ stats.pve_losses }} Negative</span>
-                    <span class="rec-d">{{ stats.pve_draws }} flat</span>
+                    <span class="rec-w">{{ t("ironFist.wins", { count: stats.pve_wins }) }}</span>
+                    <span class="rec-l">{{ t("ironFist.losses", { count: stats.pve_losses }) }}</span>
+                    <span class="rec-d">{{ t("ironFist.draws", { count: stats.pve_draws }) }}</span>
                 </div>
             </div>
             <div class="rec-mode">
-                <div class="rec-mode-title">⚔️ Match play PvP</div>
+                <div class="rec-mode-title">⚔️ {{ t("ironFist.pvpMode") }}</div>
                 <div class="rec-wld">
-                    <span class="rec-w">{{ stats.pvp_wins }} win</span>
-                    <span class="rec-l">{{ stats.pvp_losses }} Negative</span>
-                    <span class="rec-d">{{ stats.pvp_draws }} flat</span>
+                    <span class="rec-w">{{ t("ironFist.wins", { count: stats.pvp_wins }) }}</span>
+                    <span class="rec-l">{{ t("ironFist.losses", { count: stats.pvp_losses }) }}</span>
+                    <span class="rec-d">{{ t("ironFist.draws", { count: stats.pvp_draws }) }}</span>
                 </div>
             </div>
             <div class="rec-mode">
-                <div class="rec-mode-title">👥 Friends vs. friends</div>
+                <div class="rec-mode-title">👥 {{ t("ironFist.friendMode") }}</div>
                 <div class="rec-wld">
-                    <span class="rec-w">{{ stats.friend_wins }} win</span>
-                    <span class="rec-l">{{ stats.friend_losses }} Negative</span>
-                    <span class="rec-d">{{ stats.friend_draws }} flat</span>
+                    <span class="rec-w">{{ t("ironFist.wins", { count: stats.friend_wins }) }}</span>
+                    <span class="rec-l">{{ t("ironFist.losses", { count: stats.friend_losses }) }}</span>
+                    <span class="rec-d">{{ t("ironFist.draws", { count: stats.friend_draws }) }}</span>
                 </div>
             </div>
 
             <!-- Game-by-game details -->
-            <div class="section-title">Game-by-game details</div>
+            <div class="section-title">{{ t("ironFist.gameDetails") }}</div>
             <div
                 v-if="matchesLoading && !matches.length"
                 class="text-center q-py-lg"
@@ -59,7 +59,7 @@
                 <q-spinner-dots color="amber-8" size="32px" />
             </div>
             <div v-else-if="!matches.length" class="empty-hint">
-                No battle record yet，Let’s play in human-computer mode
+                {{ t("ironFist.noRecords") }}
             </div>
             <template v-else>
                 <div v-for="m in matches" :key="m.id" class="ml-card">
@@ -77,16 +77,15 @@
                             <div class="ml-line1">
                                 {{
                                     m.mode === "pve"
-                                        ? "man-machine PvE"
+                                        ? t("ironFist.pveMode")
                                         : m.mode === "friend"
-                                          ? "Friends vs. friends"
-                                          : "match PvP"
+                                          ? t("ironFist.friendMode")
+                                          : t("ironFist.pvpMode")
                                 }}
-                                · {{ m.opponent_name || "opponent" }}
+                                · {{ m.opponent_name || t("ironFist.opponent") }}
                             </div>
                             <div class="ml-line2">
-                                {{ m.rounds }} round · Finale HP {{ m.player_hp }} :
-                                {{ m.opponent_hp }}
+                                {{ t("ironFist.roundsHp", { rounds: m.rounds, player: m.player_hp, opponent: m.opponent_hp }) }}
                             </div>
                         </div>
                         <div class="ml-tail">
@@ -144,10 +143,10 @@
                         flat
                         dense
                         color="amber-7"
-                        label="load more"
+                        :label="t('common.loadMore')"
                         @click="loadMatches()"
                     />
-                    <div v-else class="text-caption text-grey-6">no more</div>
+                    <div v-else class="text-caption text-grey-6">{{ t("common.noMore") }}</div>
                 </div>
             </template>
         </template>
@@ -159,9 +158,11 @@ import { ref, onMounted } from "vue";
 import { Notify } from "quasar";
 import { ironfistApi } from "src/services/api";
 import { MATCH_RESULT_META, fmtTime } from "../game/ironfistMeta";
-import { ACTION_META } from "../game/GameConstants.js";
+import { ACTION_META, getActionMeta } from "../game/GameConstants.js";
+import { useI18n } from "src/i18n";
 
 defineEmits(["back"]);
+const { t } = useI18n();
 
 const PAGE = 20;
 const stats = ref(null);
@@ -172,13 +173,15 @@ const matchesHasMore = ref(true);
 const expandedId = ref(null);
 
 function resultMeta(m) {
-    return MATCH_RESULT_META[m.result] || { text: m.result, icon: "🎮", tone: "draw" };
+    const meta = MATCH_RESULT_META[m.result] || { text: m.result, icon: "🎮", tone: "draw" };
+    const keys = { win: "victory", lose: "defeat", draw: "draw", doubleLose: "bothExhausted" };
+    return { ...meta, text: keys[m.result] ? t(`ironFist.${keys[m.result]}`) : meta.text };
 }
 function moveIcon(k) {
     return ACTION_META[k]?.icon ?? "?";
 }
 function moveName(k) {
-    return ACTION_META[k]?.name ?? k;
+    return getActionMeta(k)?.name ?? k;
 }
 function toggle(m) {
     if (!m.detail || !m.detail.length) return;
@@ -208,7 +211,7 @@ onMounted(async () => {
         stats.value = data;
     } catch {
         Notify.create({
-            message: "Failed to load performance data",
+            message: t("ironFist.loadRecordsFailed"),
             color: "negative",
             textColor: "white",
             position: "top",

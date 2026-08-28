@@ -3,7 +3,7 @@
     <div v-if="!bare" class="hb-info">
       <span class="hb-name">{{ name }}</span>
       <transition name="charge-pop">
-        <span v-if="charged" class="hb-charge" title="Already charged">⚡</span>
+        <span v-if="charged" class="hb-charge" :title="t('ironFist.charged')">⚡</span>
       </transition>
       <!-- Additional content such as records of moves are arranged together with the names to save vertical space. -->
       <slot />
@@ -80,6 +80,9 @@
 </template>
 
 <script setup>
+import { useI18n } from "src/i18n";
+
+const { t } = useI18n();
 import { computed, ref, watch, useId, onUnmounted } from 'vue'
 
 const props = defineProps({

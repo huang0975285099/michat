@@ -19,7 +19,7 @@
                     unelevated
                     color="primary"
                     size="lg"
-                    :label="identity.isReady ? 'enter' : 'Get invitation code'"
+                    :label="identity.isReady ? t('home.enter') : t('home.getInvite')"
                     class="hero-btn"
                     @click="
                         identity.isReady
@@ -319,23 +319,23 @@
         <q-dialog v-model="showInviteDialog">
             <q-card style="min-width: 320px">
                 <q-card-section>
-                    <div class="text-h6">Get invitation code</div>
+                    <div class="text-h6">{{ t("home.inviteTitle") }}</div>
                     <div class="text-body2 text-grey q-mb-md">
-                        Yunmi adopts invitation-based registration，Please get the invitation link from an existing user。
+                        {{ t("home.inviteHint") }}
                     </div>
                     <div class="text-caption text-grey q-mb-md">
-                        Already have an account？
+                        {{ t("home.haveAccount") }}
                         <q-btn
                             flat
                             dense
                             color="primary"
-                            label="restore identity"
+                            :label="t('init.restore')"
                             @click="goToInit"
                         />
                     </div>
                 </q-card-section>
                 <q-card-actions align="right">
-                    <q-btn flat label="close" v-close-popup />
+                    <q-btn flat :label="t('common.close')" v-close-popup />
                 </q-card-actions>
             </q-card>
         </q-dialog>
@@ -346,8 +346,10 @@
 import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useIdentityStore } from "src/stores/identity";
+import { useI18n } from "src/i18n";
 
 const router = useRouter();
+const { t } = useI18n();
 const identity = useIdentityStore();
 const showInviteDialog = ref(false);
 const showIosDialog = ref(false);
