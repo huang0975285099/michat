@@ -51,7 +51,7 @@ services:
       TURN_SECRET: ${TURN_SECRET:?TURN_SECRET is required}
       JPUSH_APP_KEY: ${JPUSH_APP_KEY:-}
       JPUSH_MASTER_SECRET: ${JPUSH_MASTER_SECRET:-}
-      APP_LATEST_VERSION: "1.1.3"
+      APP_LATEST_VERSION: "1.1.4"
       APP_MIN_VERSION: "1.0.0"
       APP_UPDATE_URL: "https://m.yzs88.com:8088"
       APP_WINDOWS_UPDATE_URL: "https://m.yzs88.com:8088/download/yunChat.exe"

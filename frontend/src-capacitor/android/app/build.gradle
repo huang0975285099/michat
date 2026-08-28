@@ -13,8 +13,8 @@ android {
         applicationId "com.yzs88.e2eechat"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 4
-        versionName "1.1.3"
+        versionCode 5
+        versionName "1.1.4"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         // Jiguang Push AppKey — fill in the AppKey obtained from the Jiguang console
         manifestPlaceholders = [
