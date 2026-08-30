@@ -386,7 +386,13 @@ function syncServerClock(serverTime) {
 // Using server authentication time + monotonic clock advancement, modifying the device time while the page is open will not extend the time it disappears after reading.
 // It is degraded to the local time before the authentication is completed.
 export function getServerNow() {
-  if (!serverClock) return Date.now()
+  return getCalibratedServerNow() ?? Date.now()
+}
+
+// Security-sensitive UI (such as screenshot watermarks) must not silently use
+// the modifiable device wall clock before server calibration completes.
+export function getCalibratedServerNow() {
+  if (!serverClock) return null
   return serverClock.epochMs + (performance.now() - serverClock.monotonicMs)
 }
 

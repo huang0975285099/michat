@@ -23,6 +23,7 @@
     "test:version": "node --test src/services/version-compare.test.mjs",
     "test:update": "node --test src/services/native-update.test.mjs",
     "test:chat-preferences": "node --test src/services/chat-preferences.test.mjs",
+    "test:chat-watermark": "node --test src/services/chat-watermark.test.mjs",
     "test:file-metadata": "node --test src/services/file-metadata.test.mjs",
     "test:file-download": "node --test src/services/file-download.test.mjs",
     "test:voice": "node --test src/services/voice-recorder.test.mjs",

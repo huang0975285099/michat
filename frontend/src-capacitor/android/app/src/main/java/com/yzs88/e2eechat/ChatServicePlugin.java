@@ -2,6 +2,7 @@ package com.yzs88.e2eechat;
 
 import android.content.Context;
 import android.os.Build;
+import android.view.WindowManager;
 
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -88,5 +89,24 @@ public class ChatServicePlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("granted", true);
         call.resolve(result);
+    }
+
+    /** Prevent screenshots and non-secure display mirroring while a sensitive page is visible. */
+    @PluginMethod
+    public void setSecureScreen(PluginCall call) {
+        if (getActivity() == null) {
+            call.reject("Activity is unavailable");
+            return;
+        }
+
+        final boolean secure = Boolean.TRUE.equals(call.getBoolean("secure", true));
+        getActivity().runOnUiThread(() -> {
+            if (secure) {
+                getActivity().getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            } else {
+                getActivity().getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            }
+            call.resolve();
+        });
     }
 }

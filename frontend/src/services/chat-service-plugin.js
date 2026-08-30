@@ -11,8 +11,17 @@ const ChatService = registerPlugin('ChatService', {
     setForeground: async () => {},
     getPendingNotification: async () => ({}),
     requestNotificationPermission: async () => ({ granted: true }),
+    setSecureScreen: async () => ({}),
     addListener: (_event, _cb) => ({ remove: () => {} }),
   }),
 })
+
+export async function setSecureScreen(secure) {
+  try {
+    await ChatService.setSecureScreen({ secure: Boolean(secure) })
+  } catch (error) {
+    console.warn('[privacy] failed to update secure-screen state', error)
+  }
+}
 
 export { ChatService }

@@ -776,7 +776,7 @@ export const useChatStore = defineStore('chat', () => {
       id: msgId,
       from: 'me',
       text,
-      ts: Date.now(),
+      ts: getServerNow(),
       mine: true,
       read: false,
       status: 'pending',
@@ -1572,7 +1572,7 @@ function validateMsgId(msgId) {
         ephemeralPubKey: ephemeral_pub_key,
         iv,
         burnAfterRead: payload.burn_after_read || false,
-        ts: (typeof payload.ts === 'number' && payload.ts > 0) ? payload.ts : Date.now(),  //Server timestamp, unified on both ends
+        ts: (typeof payload.ts === 'number' && payload.ts > 0) ? payload.ts : getServerNow(),  //Server timestamp, unified on both ends
         timer: null
       }
       // Start the stall watchdog to avoid being permanently stuck in transmission due to the loss of a certain block.

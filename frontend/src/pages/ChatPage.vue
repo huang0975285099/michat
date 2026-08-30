@@ -37,14 +37,22 @@
     </div>
 
     <!-- Message list (virtual scrolling: only render messages within the viewport, long history remains smooth) -->
-    <q-virtual-scroll
-      ref="virtualScrollEl"
-      :items="messages"
-      :virtual-scroll-item-size="60"
-      class="col q-pa-md"
-      :style="{ minHeight: 0, overflowAnchor: 'none', opacity: scrolled ? 1 : 0, transition: 'opacity 0.08s' }"
-      v-slot="{ item: msg, index: idx }"
-    >
+    <div class="chat-message-area col">
+      <div
+        class="chat-watermark"
+        :class="{ 'chat-watermark-burn': burnMode }"
+        aria-hidden="true"
+      >
+        <span v-for="index in 48" :key="index">{{ watermarkText }}</span>
+      </div>
+      <q-virtual-scroll
+        ref="virtualScrollEl"
+        :items="messages"
+        :virtual-scroll-item-size="60"
+        class="chat-message-scroll q-pa-md"
+        :style="{ overflowAnchor: 'none', opacity: scrolled ? 1 : 0, transition: 'opacity 0.08s' }"
+        v-slot="{ item: msg, index: idx }"
+      >
       <div
         :key="msg.id"
         class="row items-end"
@@ -243,7 +251,8 @@
           <div v-else class="avatar-placeholder" />
         </template>
       </div>
-    </q-virtual-scroll>
+      </q-virtual-scroll>
+    </div>
 
     <!-- File transfer progress bar (displayed when there is a transfer in progress) -->
     <div v-if="activeTransfer" class="q-px-md q-py-xs bg-blue-1 row items-center q-gutter-sm" style="border-top: 1px solid #bbdefb">
@@ -422,7 +431,7 @@ import { useChatStore } from 'src/stores/chat'
 import { useIdentityStore } from 'src/stores/identity'
 import { useCallStore } from 'src/stores/call'
 import { friendApi } from 'src/services/api'
-import { on, off, getServerNow } from 'src/services/websocket'
+import { on, off, getServerNow, getCalibratedServerNow } from 'src/services/websocket'
 import {
   MAX_VOICE_DURATION_MS,
   MIN_VOICE_DURATION_MS,
@@ -433,6 +442,8 @@ import {
 import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
 import { useI18n } from 'src/i18n'
 import { loadBurnMode, saveBurnMode } from 'src/services/chat-preferences.mjs'
+import { createChatWatermark } from 'src/services/chat-watermark.mjs'
+import { setSecureScreen } from 'src/services/chat-service-plugin'
 import { saveObjectUrlWithTauri, triggerBrowserDownload } from 'src/services/file-download.mjs'
 import { isTauri } from 'src/services/platform.js'
 
@@ -495,6 +506,8 @@ const hasInputText = computed(() => inputText.value.trim().length > 0)
 const scrolled = ref(false)
 // The server calibration time is refreshed every minute, and the driver displays a countdown that burns after reading.
 const now = ref(getServerNow())
+const watermarkNow = ref(getCalibratedServerNow())
+const watermarkText = computed(() => createChatWatermark(identityStore.chatId, watermarkNow.value))
 let nowTimer = null
 let nudgeTimer = null
 let heightResizeObserver = null
@@ -982,6 +995,10 @@ function handleVoiceVisibilityChange() {
 }
 
 onMounted(async () => {
+  // Android uses the native FLAG_SECURE only while the chat page is visible.
+  // H5 and desktop builds use a no-op implementation and retain the traceable watermark.
+  setSecureScreen(true)
+
   // Register status listeners first to avoid missing status change events during asynchronous waiting.
   stopStatus = onStatusUpdate((chatId, online) => {
     if (chatId === friendChatId) {
@@ -1040,9 +1057,8 @@ onMounted(async () => {
   // The scheduled deletion check for disappearing after reading has been moved to the MainLayout application-level life cycle.
   // Ensure that the countdown continues after the user leaves the chat page and is deleted on time.
 
-  // The responsive time is refreshed every minute, and the driver countdown display decreases.
-  now.value = getServerNow()
-  nowTimer = setInterval(() => { now.value = getServerNow() }, 60000)
+  // Align refreshes to the server's minute boundary. The watermark never falls back to device wall-clock time.
+  refreshServerTime()
 
   // The following are asynchronous operations that do not affect the layout of the first screen and do not block scrolling:
   // Obtaining friend information, marking read, and synchronizing read receipts—these network requests take a long time.
@@ -1054,8 +1070,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  setSecureScreen(false)
   stopStatus && stopStatus()
-  if (nowTimer) { clearInterval(nowTimer); nowTimer = null }
+  if (nowTimer) { clearTimeout(nowTimer); nowTimer = null }
   if (nudgeTimer) { clearInterval(nudgeTimer); nudgeTimer = null }
   cancelRafNudge()
   if (heightResizeObserver) { heightResizeObserver.disconnect(); heightResizeObserver = null }
@@ -1274,6 +1291,14 @@ function updatePageHeight() {
   if (isNearBottom()) nudgeToBottom()
 }
 
+function refreshServerTime() {
+  now.value = getServerNow()
+  watermarkNow.value = getCalibratedServerNow()
+  const clock = watermarkNow.value ?? now.value
+  const delayToNextMinute = 60000 - (Math.floor(clock) % 60000) + 50
+  nowTimer = setTimeout(refreshServerTime, delayToNextMinute)
+}
+
 // Cancel the ongoing rAF nudge loop (used for cleanup when components are unloaded)
 function cancelRafNudge() {
   if (rafNudgeId !== null) {
@@ -1362,6 +1387,64 @@ function shouldCompact(msgs, idx) {
 </script>
 
 <style scoped>
+.chat-message-area {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+}
+.chat-message-scroll {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
+.chat-watermark {
+  position: absolute;
+  z-index: 2;
+  inset: -18%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-auto-rows: 92px;
+  align-items: center;
+  justify-items: center;
+  overflow: hidden;
+  transform: rotate(-18deg);
+  transform-origin: center;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.chat-watermark span {
+  color: #1565c0;
+  opacity: 0.075;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.25px;
+  white-space: nowrap;
+}
+.chat-watermark-burn span {
+  color: #e65100;
+  opacity: 0.16;
+  font-weight: 700;
+}
+@media (max-width: 420px) {
+  .chat-watermark {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    grid-auto-rows: 82px;
+  }
+  .chat-watermark span {
+    font-size: 11px;
+  }
+}
+@media (min-width: 760px) {
+  .chat-watermark {
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    grid-auto-rows: 104px;
+  }
+}
 .avatar-placeholder {
   width: 28px;
   flex-shrink: 0;
