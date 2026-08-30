@@ -76,8 +76,28 @@
                 <div class="file-meta">
                   <div class="file-name">{{ msg.filename }}</div>
                   <div class="file-size">{{ formatFileSize(msg.filesize) }}</div>
+                  <div v-if="fileDownloadState(msg)" class="file-download-status">
+                    <q-linear-progress
+                      v-if="isFileDownloading(msg)"
+                      :value="fileDownloadProgress(msg) / 100"
+                      rounded
+                      color="primary"
+                      class="file-download-progress"
+                    />
+                    <span>{{ fileDownloadStatusText(msg) }}</span>
+                  </div>
                 </div>
-                <a v-if="msg.objectUrl" :href="msg.objectUrl" :download="msg.filename" class="file-dl" @click.stop>⬇️</a>
+                <button
+                  v-if="msg.objectUrl"
+                  type="button"
+                  class="file-dl"
+                  :class="{ complete: fileDownloadState(msg)?.status === 'done' }"
+                  :disabled="isFileDownloading(msg)"
+                  @click.stop="downloadFile(msg)"
+                >
+                  <q-icon :name="fileDownloadIcon(msg)" size="20px" />
+                  <q-tooltip>{{ fileDownloadTooltip(msg) }}</q-tooltip>
+                </button>
                 <span v-else class="file-expired">{{ t("chat.expired") }}</span>
               </div>
             </template>
@@ -130,8 +150,28 @@
                 <div class="file-meta">
                   <div class="file-name">{{ msg.filename }}</div>
                   <div class="file-size">{{ formatFileSize(msg.filesize) }}</div>
+                  <div v-if="fileDownloadState(msg)" class="file-download-status">
+                    <q-linear-progress
+                      v-if="isFileDownloading(msg)"
+                      :value="fileDownloadProgress(msg) / 100"
+                      rounded
+                      color="white"
+                      class="file-download-progress"
+                    />
+                    <span>{{ fileDownloadStatusText(msg) }}</span>
+                  </div>
                 </div>
-                <a v-if="msg.objectUrl" :href="msg.objectUrl" :download="msg.filename" class="file-dl" @click.stop>⬇️</a>
+                <button
+                  v-if="msg.objectUrl"
+                  type="button"
+                  class="file-dl file-dl-mine"
+                  :class="{ complete: fileDownloadState(msg)?.status === 'done' }"
+                  :disabled="isFileDownloading(msg)"
+                  @click.stop="downloadFile(msg)"
+                >
+                  <q-icon :name="fileDownloadIcon(msg)" size="20px" />
+                  <q-tooltip>{{ fileDownloadTooltip(msg) }}</q-tooltip>
+                </button>
                 <span v-else class="file-expired">{{ t("chat.expired") }}</span>
               </div>
             </template>
@@ -212,13 +252,14 @@
         <div class="text-caption text-grey-8 ellipsis" style="max-width: 200px">{{ activeTransfer.filename }}</div>
         <q-linear-progress
           :value="activeTransfer.progress / 100"
+          :indeterminate="activeTransfer.status === 'processing'"
           :color="activeTransfer.status === 'error' ? 'negative' : 'primary'"
           rounded
           style="height: 4px"
         />
       </div>
       <span class="text-caption text-grey-7">
-        {{ activeTransfer.status === 'error' ? t("chat.failed") : activeTransfer.status === 'done' ? t("chat.complete") : activeTransfer.progress + '%' }}
+        {{ activeTransfer.status === 'error' ? t("chat.failed") : activeTransfer.status === 'processing' ? t("chat.processingFile") : activeTransfer.progress + '%' }}
       </span>
       <q-icon v-if="activeTransfer.status === 'error'" name="error_outline" color="negative" size="18px" />
       <q-icon v-else-if="activeTransfer.status === 'done'" name="check_circle_outline" color="positive" size="18px" />
@@ -392,6 +433,8 @@ import {
 import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
 import { useI18n } from 'src/i18n'
 import { loadBurnMode, saveBurnMode } from 'src/services/chat-preferences.mjs'
+import { saveObjectUrlWithTauri, triggerBrowserDownload } from 'src/services/file-download.mjs'
+import { isTauri } from 'src/services/platform.js'
 
 // ── File utility functions ─────────────────────────────────────────────
 
@@ -464,6 +507,8 @@ const voiceSending = ref(false)
 const voiceDurationMs = ref(0)
 const voiceLevel = ref(0)
 const playingVoiceId = ref(null)
+const fileDownloads = ref({})
+const downloadResetTimers = new Set()
 
 let voiceStream = null
 let mediaRecorder = null
@@ -487,6 +532,109 @@ const allowedFileTypes = [
   '.doc,.docx,.xls,.xlsx,.ppt,.pptx,.pdf',
   '.zip,.rar,.7z,.tar,.gz,.apk'
 ].join(',')
+
+// ── File saving ─────────────────────────────────────────────────
+
+function fileDownloadState(msg) {
+  return fileDownloads.value[msg.id] || null
+}
+
+function setFileDownloadState(msgId, state) {
+  fileDownloads.value = { ...fileDownloads.value, [msgId]: state }
+}
+
+function clearFileDownloadState(msgId) {
+  const next = { ...fileDownloads.value }
+  delete next[msgId]
+  fileDownloads.value = next
+}
+
+function isFileDownloading(msg) {
+  return fileDownloadState(msg)?.status === 'downloading'
+}
+
+function fileDownloadProgress(msg) {
+  return fileDownloadState(msg)?.progress || 0
+}
+
+function fileDownloadStatusText(msg) {
+  const state = fileDownloadState(msg)
+  if (state?.status === 'done') return t('chat.fileSaved')
+  return t('chat.savingFileProgress', { progress: state?.progress || 0 })
+}
+
+function fileDownloadIcon(msg) {
+  const state = fileDownloadState(msg)
+  if (state?.status === 'downloading') return 'hourglass_top'
+  if (state?.status === 'done') return 'check_circle'
+  return 'download'
+}
+
+function fileDownloadTooltip(msg) {
+  const state = fileDownloadState(msg)
+  if (state?.status === 'done') return t('chat.fileSavedAt', { path: state.path })
+  if (state?.status === 'downloading') return t('chat.savingFileProgress', { progress: state.progress || 0 })
+  return t('chat.downloadFile')
+}
+
+async function downloadFile(msg) {
+  if (!msg?.objectUrl || isFileDownloading(msg)) return
+
+  const existing = fileDownloadState(msg)
+  if (existing?.status === 'done') {
+    $q.notify({
+      type: 'positive',
+      message: t('chat.fileAlreadySaved', { name: msg.filename }),
+      caption: existing.path,
+    })
+    return
+  }
+
+  setFileDownloadState(msg.id, { status: 'downloading', progress: 0 })
+  try {
+    if (isTauri()) {
+      const result = await saveObjectUrlWithTauri({
+        objectUrl: msg.objectUrl,
+        filename: msg.filename,
+        totalBytes: msg.filesize,
+        dialogTitle: t('chat.saveFileTitle'),
+        onProgress: progress => setFileDownloadState(msg.id, { status: 'downloading', progress }),
+      })
+      if (result.canceled) {
+        clearFileDownloadState(msg.id)
+        return
+      }
+      setFileDownloadState(msg.id, { status: 'done', progress: 100, path: result.path })
+      $q.notify({
+        type: 'positive',
+        icon: 'download_done',
+        message: t('chat.fileDownloadComplete', { name: msg.filename }),
+        caption: t('chat.fileSavedAt', { path: result.path }),
+        timeout: 5000,
+      })
+      return
+    }
+
+    triggerBrowserDownload(msg.objectUrl, msg.filename)
+    $q.notify({
+      type: 'info',
+      icon: 'download',
+      message: t('chat.fileDownloadStarted', { name: msg.filename }),
+      timeout: 3000,
+    })
+    const timer = setTimeout(() => {
+      clearFileDownloadState(msg.id)
+      downloadResetTimers.delete(timer)
+    }, 2500)
+    downloadResetTimers.add(timer)
+  } catch (error) {
+    clearFileDownloadState(msg.id)
+    $q.notify({
+      type: 'negative',
+      message: t('chat.fileDownloadFailed', { error: error?.message || t('chat.unknownError') }),
+    })
+  }
+}
 
 // ── Voice recording and playback ───────────────────────────────────
 
@@ -744,7 +892,7 @@ const activeTransfer = computed(() => {
   const transfers = Object.values(chatStore.fileTransfers)
   return transfers.find(t =>
     (t.toChatId === friendChatId || t.fromChatId === friendChatId) &&
-    (t.status === 'pending' || t.status === 'transferring')
+    (t.status === 'pending' || t.status === 'transferring' || t.status === 'processing')
   ) || transfers.find(t =>
     (t.toChatId === friendChatId || t.fromChatId === friendChatId) &&
     t.status === 'error' && Date.now() - (t.errorAt || 0) < 5000
@@ -754,7 +902,7 @@ const activeTransfer = computed(() => {
 const isTransferring = computed(() =>
   Object.values(chatStore.fileTransfers).some(t =>
     (t.toChatId === friendChatId || t.fromChatId === friendChatId) &&
-    (t.status === 'pending' || t.status === 'transferring')
+    (t.status === 'pending' || t.status === 'transferring' || t.status === 'processing')
   )
 )
 
@@ -918,6 +1066,8 @@ onUnmounted(() => {
   if (voiceRecording.value) finishVoiceRecording(true)
   else stopVoiceCaptureResources()
   if (voicePlayer) { voicePlayer.pause(); voicePlayer = null }
+  for (const timer of downloadResetTimers) clearTimeout(timer)
+  downloadResetTimers.clear()
 })
 
 // Only monitor changes in the number of messages (new/deleted) to avoid deep traversal of the entire array.
@@ -1411,9 +1561,40 @@ function shouldCompact(msgs, idx) {
   margin-top: 2px;
 }
 .file-dl {
-  font-size: 18px;
-  text-decoration: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(25, 118, 210, 0.12);
+  color: #1565c0;
   flex-shrink: 0;
+  cursor: pointer;
+}
+.file-dl-mine {
+  background: rgba(255,255,255,0.2);
+  color: white;
+}
+.file-dl.complete {
+  color: #2e7d32;
+  background: rgba(76, 175, 80, 0.15);
+}
+.file-dl:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+.file-download-status {
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.2;
+  opacity: 0.78;
+}
+.file-download-progress {
+  height: 3px;
+  margin-bottom: 3px;
 }
 .file-expired {
   font-size: 11px;

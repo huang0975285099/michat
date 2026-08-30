@@ -991,18 +991,23 @@ export const useChatStore = defineStore('chat', () => {
    * Assemble and decrypt received file data blocks
    */
   async function assembleAndDecrypt(transfer) {
-    if (transfer.status === 'done' || transfer.status === 'error') return
+    if (transfer.status === 'processing' || transfer.status === 'done' || transfer.status === 'error') return
     if (transfer.receivedCount < transfer.totalChunks) return
     if (transfer.chunks.some(c => !c)) return
 
-    transfer.status = 'done'
+    transfer.status = 'processing'
+    transfer.progress = 95
     clearReceiveWatchdog(transfer.id)
     try {
-      let totalBytes = 0
-      const bufs = transfer.chunks.map(c => { const b = new Uint8Array(b64ToBuf(c)); totalBytes += b.length; return b })
-      const combined = new Uint8Array(totalBytes)
+      const combined = new Uint8Array(transfer.filesize + AES_GCM_TAG_SIZE)
       let offset = 0
-      for (const b of bufs) { combined.set(b, offset); offset += b.length }
+      for (let i = 0; i < transfer.chunks.length; i++) {
+        const chunk = new Uint8Array(b64ToBuf(transfer.chunks[i]))
+        combined.set(chunk, offset)
+        offset += chunk.length
+        transfer.chunks[i] = null
+      }
+      if (offset !== combined.byteLength) throw new Error('The encrypted file size does not match the declared size')
 
       const plainBuf = await decryptFile({
         ephemeralPubKey: transfer.ephemeralPubKey,
@@ -1039,6 +1044,8 @@ export const useChatStore = defineStore('chat', () => {
         console.warn('[chat] file message not persisted:', transfer.msgId)
       }
       // Notify the sending end: All has been collected and decrypted successfully, and a timestamp is returned for unified display by the sending end.
+      transfer.progress = 100
+      transfer.status = 'done'
       send('file_done', { to: transfer.fromChatId, transfer_id: transfer.id, ts: transfer.ts })
       scheduleTransferCleanup(transfer.id, 1000)
     } catch (e) {

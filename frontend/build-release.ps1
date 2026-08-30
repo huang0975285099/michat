@@ -148,6 +148,7 @@ try {
             'test:chat-preferences',
             'test:version',
             'test:file-metadata',
+            'test:file-download',
             'test:voice',
             'test:call',
             'test:ironfist',

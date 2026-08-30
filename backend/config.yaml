@@ -29,7 +29,7 @@ jpush:
 
 # Version information (the production environment is overwritten with the environment variables of docker-compose: APP_LATEST_VERSION, etc.)
 version:
-  latest: "1.1.4"
+  latest: "1.1.5"
   min_supported: "1.0.0"
   url: "https://m.yzs88.com:8088"
   windows: "https://m.yzs88.com:8088/download/yunChat.exe"

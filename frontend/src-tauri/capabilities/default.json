@@ -10,6 +10,10 @@
     "core:window:allow-unminimize",
     "core:window:allow-set-focus",
     "core:window:allow-request-user-attention",
+    "dialog:allow-save",
+    "fs:allow-open",
+    "fs:allow-write",
+    "fs:allow-remove",
     "notification:default",
     "opener:default"
   ]

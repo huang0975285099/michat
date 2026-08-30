@@ -1,6 +1,6 @@
 {
   "name": "e2eeyunmi",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "private": true,
   "type": "module",
   "scripts": {
@@ -24,6 +24,7 @@
     "test:update": "node --test src/services/native-update.test.mjs",
     "test:chat-preferences": "node --test src/services/chat-preferences.test.mjs",
     "test:file-metadata": "node --test src/services/file-metadata.test.mjs",
+    "test:file-download": "node --test src/services/file-download.test.mjs",
     "test:voice": "node --test src/services/voice-recorder.test.mjs",
     "test:i18n": "node --test src/i18n/index.test.mjs"
   },
@@ -36,6 +37,8 @@
     "@capacitor/core": "^8.3.1",
     "@quasar/extras": "^1.16.12",
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
+    "@tauri-apps/plugin-fs": "^2.5.1",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "2.5.0",
     "axios": "^1.7.9",
