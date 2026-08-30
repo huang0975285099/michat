@@ -156,7 +156,8 @@ func (h *WSHandler) Serve(c *gin.Context) {
 	}
 
 	var authPayload struct {
-		Token string `json:"token"`
+		Token         string `json:"token"`
+		ReliableInbox bool   `json:"reliable_inbox"`
 	}
 	if err := json.Unmarshal(msg.Payload, &authPayload); err != nil || authPayload.Token == "" {
 		writeAuthResult(conn, false, "missing token")
@@ -182,8 +183,9 @@ func (h *WSHandler) Serve(c *gin.Context) {
 	writeAuthResult(conn, true, "")
 
 	client := &ws.Client{
-		ChatID: chatID,
-		UserID: user.ID,
+		ChatID:        chatID,
+		UserID:        user.ID,
+		ReliableInbox: authPayload.ReliableInbox,
 	}
 	ws.InitClient(client, conn, make(chan []byte, 256))
 
@@ -197,19 +199,20 @@ func (h *WSHandler) Serve(c *gin.Context) {
 
 func writeAuthResult(conn *websocket.Conn, success bool, reason string) {
 	type payload struct {
-		Success     bool   `json:"success"`
-		Reason      string `json:"reason,omitempty"`
-		ServerTime  int64  `json:"server_time"`
-		ReadAck     bool   `json:"read_ack"`
-		MessageSync bool   `json:"message_sync"`
-		HealthCheck bool   `json:"health_check"`
+		Success       bool   `json:"success"`
+		Reason        string `json:"reason,omitempty"`
+		ServerTime    int64  `json:"server_time"`
+		ReadAck       bool   `json:"read_ack"`
+		MessageSync   bool   `json:"message_sync"`
+		HealthCheck   bool   `json:"health_check"`
+		ReliableInbox bool   `json:"reliable_inbox"`
 	}
 	type envelope struct {
 		Type    string  `json:"type"`
 		Payload payload `json:"payload"`
 	}
 	data, _ := json.Marshal(envelope{Type: "auth_result", Payload: payload{
-		Success: success, Reason: reason, ServerTime: time.Now().UnixMilli(), ReadAck: true, MessageSync: true, HealthCheck: true,
+		Success: success, Reason: reason, ServerTime: time.Now().UnixMilli(), ReadAck: true, MessageSync: true, HealthCheck: true, ReliableInbox: true,
 	}})
 	conn.WriteMessage(websocket.TextMessage, data)
 }

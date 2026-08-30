@@ -64,11 +64,14 @@ var usersIsAdminSQL string
 //go:embed 021_ironfist_authority.sql
 var ironfistAuthoritySQL string
 
+//go:embed 022_reliable_message_inbox.sql
+var reliableMessageInboxSQL string
+
 // AutoMigrate automatically executes table creation SQL, idempotent (IF NOT EXISTS).
 // MySQL 1060 (column already exists), 1061 (index already exists) and 1091 (key to be deleted no longer exists)
 // Considered completed and silently skipped.
 func AutoMigrate(db *sql.DB) error {
-	migrations := []string{initSQL, messageReadsSQL, deviceTokensSQL, fistTokenSQL, ironfistStatsSQL, ironfistMatchesSQL, ironfistFriendModeSQL, ironfistPvpMatchmakingSQL, ironfistMatchPvpRoomSQL, ironfistPvpReportsSQL, fistTxPvpRefundSQL, ironfistPveRewardClaimSQL, ironfistPointsLedgerFixSQL, messageDeliveriesSQL, messageReadTombstonesSQL, dropSlgTablesSQL, usersIsAdminSQL, ironfistAuthoritySQL}
+	migrations := []string{initSQL, messageReadsSQL, deviceTokensSQL, fistTokenSQL, ironfistStatsSQL, ironfistMatchesSQL, ironfistFriendModeSQL, ironfistPvpMatchmakingSQL, ironfistMatchPvpRoomSQL, ironfistPvpReportsSQL, fistTxPvpRefundSQL, ironfistPveRewardClaimSQL, messageDeliveriesSQL, messageReadTombstonesSQL, dropSlgTablesSQL, usersIsAdminSQL, ironfistAuthoritySQL, reliableMessageInboxSQL}
 	for _, sql := range migrations {
 		for _, stmt := range splitStatements(sql) {
 			if _, err := db.Exec(stmt); err != nil {

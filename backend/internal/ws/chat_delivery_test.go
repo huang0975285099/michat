@@ -15,15 +15,24 @@ const (
 )
 
 type fakeMessageReadStore struct {
-	delivery   service.MessageDelivery
-	created    bool
-	acceptErr  error
-	deliveries []service.MessageDelivery
-	queryErr   error
-	deleted    bool
+	delivery       service.MessageDelivery
+	created        bool
+	acceptErr      error
+	deliveries     []service.MessageDelivery
+	queryErr       error
+	deleted        bool
+	pending        []service.PendingEncryptedMessage
+	recalls        []service.PendingRecall
+	applied        []string
+	recallApplied  []string
+	recalled       bool
+	recallNotFound bool
 }
 
 func (f *fakeMessageReadStore) AcceptMessage(context.Context, string, string, string) (service.MessageDelivery, bool, error) {
+	return f.delivery, f.created, f.acceptErr
+}
+func (f *fakeMessageReadStore) AcceptEncryptedMessage(context.Context, string, string, string, json.RawMessage) (service.MessageDelivery, bool, error) {
 	return f.delivery, f.created, f.acceptErr
 }
 func (f *fakeMessageReadStore) GetMessageDeliveries(context.Context, string, []string) ([]service.MessageDelivery, error) {
@@ -41,6 +50,24 @@ func (*fakeMessageReadStore) GetReadReceiptsForSender(context.Context, string) (
 	return nil, nil
 }
 func (*fakeMessageReadStore) MarkReadReceiptsApplied(context.Context, []string, string, string) error {
+	return nil
+}
+func (f *fakeMessageReadStore) GetPendingEncryptedMessages(context.Context, string, int) ([]service.PendingEncryptedMessage, error) {
+	return f.pending, nil
+}
+func (f *fakeMessageReadStore) MarkEncryptedMessagesApplied(_ context.Context, ids []string, _, _ string) error {
+	f.applied = append(f.applied, ids...)
+	return nil
+}
+func (f *fakeMessageReadStore) RecallMessage(context.Context, string, string, string) (service.MessageDelivery, bool, error) {
+	f.recalled = true
+	return f.delivery, !f.recallNotFound, f.acceptErr
+}
+func (f *fakeMessageReadStore) GetPendingRecalls(context.Context, string, int) ([]service.PendingRecall, error) {
+	return f.recalls, nil
+}
+func (f *fakeMessageReadStore) MarkRecallsApplied(_ context.Context, ids []string, _, _ string) error {
+	f.recallApplied = append(f.recallApplied, ids...)
 	return nil
 }
 
@@ -78,7 +105,7 @@ func readChatAck(t *testing.T, client *Client) ChatAckPayload {
 }
 
 func TestChatMessageFirstAcceptanceForwardsOnce(t *testing.T) {
-	recipient := &Client{ChatID: testPeerChatID, send: make(chan []byte, 1)}
+	recipient := &Client{ChatID: testPeerChatID, ReliableInbox: true, send: make(chan []byte, 1)}
 	sender := &Client{ChatID: testCallerChatID, UserID: 7, send: make(chan []byte, 1)}
 	store := &fakeMessageReadStore{
 		delivery: service.MessageDelivery{MsgID: testMessageID, MsgFrom: testCallerChatID, MsgTo: testPeerChatID, SentAt: 1234000},
@@ -104,7 +131,7 @@ func TestChatMessageFirstAcceptanceForwardsOnce(t *testing.T) {
 }
 
 func TestChatMessageDuplicateIsAcknowledgedWithoutForwarding(t *testing.T) {
-	recipient := &Client{ChatID: testPeerChatID, send: make(chan []byte, 1)}
+	recipient := &Client{ChatID: testPeerChatID, ReliableInbox: true, send: make(chan []byte, 1)}
 	sender := &Client{ChatID: testCallerChatID, UserID: 7, send: make(chan []byte, 1)}
 	store := &fakeMessageReadStore{
 		delivery: service.MessageDelivery{MsgID: testMessageID, MsgFrom: testCallerChatID, MsgTo: testPeerChatID, SentAt: 1234000},
@@ -129,7 +156,7 @@ func TestChatMessageDuplicateIsAcknowledgedWithoutForwarding(t *testing.T) {
 	}
 }
 
-func TestChatMessageDoesNotAcknowledgeWhenOfflineStorageFails(t *testing.T) {
+func TestChatMessageOfflineIsAcknowledgedAfterDatabasePersistence(t *testing.T) {
 	sender := &Client{ChatID: testCallerChatID, UserID: 7, send: make(chan []byte, 1)}
 	store := &fakeMessageReadStore{
 		delivery: service.MessageDelivery{MsgID: testMessageID, MsgFrom: testCallerChatID, MsgTo: testPeerChatID, SentAt: 1234000},
@@ -144,11 +171,111 @@ func TestChatMessageDoesNotAcknowledgeWhenOfflineStorageFails(t *testing.T) {
 	hub.handleChatMessage(sender, validChatPayload(testMessageID))
 
 	ack := readChatAck(t, sender)
+	if ack.Status != "accepted" || ack.Timestamp != 1234000 {
+		t.Fatalf("unexpected persistent acceptance ACK: %+v", ack)
+	}
+}
+
+func TestPersistentInboxReplaysWithoutDeletingBeforeClientAck(t *testing.T) {
+	envelope, _ := json.Marshal(storedEncryptedEnvelope{
+		EphemeralPubKey: "key", IV: "iv", Ciphertext: "ciphertext", BurnAfterRead: true,
+	})
+	store := &fakeMessageReadStore{
+		pending: []service.PendingEncryptedMessage{{
+			MessageDelivery: service.MessageDelivery{MsgID: testMessageID, MsgFrom: testCallerChatID, MsgTo: testPeerChatID, SentAt: 1234000},
+			Envelope:        envelope,
+		}},
+		recalls: []service.PendingRecall{{MsgID: testMessageID2, MsgFrom: testCallerChatID, RecalledAt: 1235000}},
+	}
+	client := &Client{ChatID: testPeerChatID, ReliableInbox: true, send: make(chan []byte, 2), closed: make(chan struct{})}
+	hub := &Hub{messageReadSvc: store}
+
+	hub.FlushPersistentInbox(client)
+
+	var types []string
+	for i := 0; i < 2; i++ {
+		var message Message
+		if err := json.Unmarshal(<-client.send, &message); err != nil {
+			t.Fatal(err)
+		}
+		types = append(types, message.Type)
+	}
+	if types[0] != "message" || types[1] != "recall" {
+		t.Fatalf("unexpected replay order: %v", types)
+	}
+	if len(store.applied) != 0 || len(store.recallApplied) != 0 {
+		t.Fatal("replay cleared inbox before client ACK")
+	}
+
+	messageAck, _ := json.Marshal(receivedAckPayload{From: testCallerChatID, MsgID: []string{testMessageID}})
+	hub.handleMessageReceivedAck(client, messageAck)
+	recallAck, _ := json.Marshal(receivedAckPayload{From: testCallerChatID, MsgID: []string{testMessageID2}})
+	hub.handleRecallReceivedAck(client, recallAck)
+	if len(store.applied) != 1 || store.applied[0] != testMessageID ||
+		len(store.recallApplied) != 1 || store.recallApplied[0] != testMessageID2 {
+		t.Fatalf("client ACKs not applied: messages=%v recalls=%v", store.applied, store.recallApplied)
+	}
+}
+
+func TestPersistentInboxKeepsLegacyClientUpgradeCompatible(t *testing.T) {
+	envelope, _ := json.Marshal(storedEncryptedEnvelope{
+		EphemeralPubKey: "key", IV: "iv", Ciphertext: "ciphertext",
+	})
+	store := &fakeMessageReadStore{pending: []service.PendingEncryptedMessage{{
+		MessageDelivery: service.MessageDelivery{MsgID: testMessageID, MsgFrom: testCallerChatID, MsgTo: testPeerChatID, SentAt: 1234000},
+		Envelope:        envelope,
+	}}}
+	client := &Client{ChatID: testPeerChatID, send: make(chan []byte, 1), closed: make(chan struct{})}
+	hub := &Hub{messageReadSvc: store}
+
+	hub.FlushPersistentInbox(client)
+
+	if len(client.send) != 1 {
+		t.Fatal("legacy client did not receive its queued ciphertext")
+	}
+	if len(store.applied) != 1 || store.applied[0] != testMessageID {
+		t.Fatalf("legacy delivery was not cleared after enqueue: %v", store.applied)
+	}
+}
+
+func TestRecallPersistsForOfflineRecipient(t *testing.T) {
+	sender := &Client{ChatID: testCallerChatID, UserID: 7, send: make(chan []byte, 1)}
+	store := &fakeMessageReadStore{delivery: service.MessageDelivery{
+		MsgID: testMessageID, MsgFrom: testCallerChatID, MsgTo: testPeerChatID,
+	}}
+	hub := &Hub{clients: map[string]*Client{}, friendSvc: fakeFriendChecker{friends: true}, messageReadSvc: store}
+	payload, _ := json.Marshal(RecallPayload{To: testPeerChatID, MsgID: testMessageID})
+
+	hub.handleRecall(sender, payload)
+
+	if !store.recalled {
+		t.Fatal("offline recall was not persisted")
+	}
+	var response Message
+	if err := json.Unmarshal(<-sender.send, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Type != "recall_ack" {
+		t.Fatalf("response type = %q, want recall_ack", response.Type)
+	}
+}
+
+func TestChatMessageDoesNotAcknowledgeWhenPersistentStorageFails(t *testing.T) {
+	sender := &Client{ChatID: testCallerChatID, UserID: 7, send: make(chan []byte, 1)}
+	store := &fakeMessageReadStore{
+		acceptErr: errors.New("database unavailable"),
+	}
+	hub := &Hub{
+		clients:        map[string]*Client{},
+		friendSvc:      fakeFriendChecker{friends: true},
+		messageReadSvc: store,
+	}
+
+	hub.handleChatMessage(sender, validChatPayload(testMessageID))
+
+	ack := readChatAck(t, sender)
 	if ack.Status != "retry" || ack.Code != "temporary_failure" || !ack.Retryable {
 		t.Fatalf("unexpected storage failure ACK: %+v", ack)
-	}
-	if !store.deleted {
-		t.Fatal("undelivered attribution was not rolled back")
 	}
 }
 

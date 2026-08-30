@@ -1,9 +1,11 @@
 package migrations
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -11,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/go-sql-driver/mysql"
+
+	"e2eechat/internal/service"
 )
 
 var authorityTestDatabasePattern = regexp.MustCompile(`^michat_authority_test_[0-9a-f]{16}$`)
@@ -53,6 +57,50 @@ func TestAuthorityMigrationCreatesConstraints(t *testing.T) {
 	assertForeignKey(t, db, "ironfist_game_actions", "ironfist_games", "CASCADE")
 	assertForeignKey(t, db, "ironfist_game_rounds", "ironfist_games", "CASCADE")
 	assertForeignKey(t, db, "ironfist_active_pve", "ironfist_games", "CASCADE")
+	for _, column := range []string{"encrypted_envelope", "envelope_size", "recipient_applied_at", "recalled_at", "recall_applied_at"} {
+		assertColumnExists(t, db, "message_deliveries", column)
+	}
+	assertReliableInboxRoundTrip(t, db)
+}
+
+func assertReliableInboxRoundTrip(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO users (chat_id, nickname, public_key, is_ready) VALUES
+		('1000-AAAA', 'sender', 'sender-key', 1), ('2000-BBBB', 'recipient', 'recipient-key', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	svc := service.NewMessageReadService(db)
+	ctx := context.Background()
+	envelope := json.RawMessage(`{"ephemeral_pub_key":"key","iv":"iv","ciphertext":"ciphertext","burn_after_read":false}`)
+	delivery, created, err := svc.AcceptEncryptedMessage(ctx, "abc123-1-abcdef", "1000-AAAA", "2000-BBBB", envelope)
+	if err != nil || !created || delivery.SentAt <= 0 {
+		t.Fatalf("accept encrypted message: delivery=%+v created=%v err=%v", delivery, created, err)
+	}
+	pending, err := svc.GetPendingEncryptedMessages(ctx, "2000-BBBB", 10)
+	if err != nil || len(pending) != 1 || string(pending[0].Envelope) != string(envelope) {
+		t.Fatalf("load encrypted inbox: pending=%+v err=%v", pending, err)
+	}
+	if err = svc.MarkEncryptedMessagesApplied(ctx, []string{delivery.MsgID}, "1000-AAAA", "2000-BBBB"); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = svc.GetPendingEncryptedMessages(ctx, "2000-BBBB", 10)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("ciphertext was not cleared after ACK: pending=%+v err=%v", pending, err)
+	}
+	if _, found, recallErr := svc.RecallMessage(ctx, delivery.MsgID, "1000-AAAA", "2000-BBBB"); recallErr != nil || !found {
+		t.Fatalf("persist recall: found=%v err=%v", found, recallErr)
+	}
+	recalls, err := svc.GetPendingRecalls(ctx, "2000-BBBB", 10)
+	if err != nil || len(recalls) != 1 || recalls[0].MsgID != delivery.MsgID {
+		t.Fatalf("load recall inbox: recalls=%+v err=%v", recalls, err)
+	}
+	if err = svc.MarkRecallsApplied(ctx, []string{delivery.MsgID}, "1000-AAAA", "2000-BBBB"); err != nil {
+		t.Fatal(err)
+	}
+	recalls, err = svc.GetPendingRecalls(ctx, "2000-BBBB", 10)
+	if err != nil || len(recalls) != 0 {
+		t.Fatalf("recall was not cleared after ACK: recalls=%+v err=%v", recalls, err)
+	}
 }
 
 func openIsolatedAuthorityTestDatabase(t *testing.T, dsn string) *sql.DB {
@@ -121,6 +169,18 @@ func assertTableExists(t *testing.T, db *sql.DB, table string) {
 	}
 	if count != 1 {
 		t.Fatalf("table %s does not exist", table)
+	}
+}
+
+func assertColumnExists(t *testing.T, db *sql.DB, table, column string) {
+	t.Helper()
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`, table, column).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("column %s.%s does not exist", table, column)
 	}
 }
 

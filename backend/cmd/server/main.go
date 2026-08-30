@@ -307,6 +307,11 @@ func main() {
 	// Start a scheduled task: clean up read receipts older than 7 days to avoid unlimited growth of the message_reads table
 	go func() {
 		cleanup := func() {
+			if n, err := messageReadSvc.ExpirePendingEncryptedMessages(context.Background()); err != nil {
+				log.Printf("[cron] cleanup expired encrypted inbox: %v", err)
+			} else if n > 0 {
+				log.Printf("[cron] expired %d encrypted inbox messages", n)
+			}
 			n, err := messageReadSvc.DeleteOldReadReceipts(context.Background(), 7)
 			if err != nil {
 				log.Printf("[cron] cleanup read receipts: %v", err)

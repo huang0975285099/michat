@@ -209,8 +209,20 @@ async function dbAddMessage(msg) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite')
-    const req = tx.objectStore(STORE_NAME).add(msg)
-    req.onsuccess = () => resolve()
+    tx.objectStore(STORE_NAME).add(msg)
+    // ACK the server only after the IndexedDB transaction has actually committed.
+    tx.oncomplete = () => resolve()
+    tx.onerror = (e) => reject(e.target.error)
+    tx.onabort = (e) => reject(e.target.error || new Error('message persistence aborted'))
+  })
+}
+
+async function dbHasMessage(msgId) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly')
+    const req = tx.objectStore(STORE_NAME).getKey(msgId)
+    req.onsuccess = () => resolve(req.result !== undefined)
     req.onerror = (e) => reject(e.target.error)
   })
 }
@@ -558,7 +570,7 @@ export const useChatStore = defineStore('chat', () => {
   /**
    * Add messages to memory and encrypt persistence to IndexedDB
    */
-  async function addMessage(chatId, msg) {
+  async function addMessage(chatId, msg, rollbackOnPersistenceFailure = false) {
     // Security Check: Preventing Replay Attacks
     if (isMsgIdExists(msg.id)) {
       console.warn('[chat] duplicate message id, ignoring:', msg.id)
@@ -594,7 +606,12 @@ export const useChatStore = defineStore('chat', () => {
       // DB write failure: Keep message in memory (still visible to user), only lost after refresh.
       // Rolling back the memory will lead to the inconsistency of "the message has been sent but the sender cannot see it"——
       // The other party has received the message, but the sender has neither memory records nor DB records locally.
-      console.error('[chat] persist message failed, kept in memory:', e)
+      console.error('[chat] persist message failed:', e)
+      if (rollbackOnPersistenceFailure) {
+        const index = messages.value[chatId]?.findIndex(item => item.id === msg.id) ?? -1
+        if (index >= 0) messages.value[chatId].splice(index, 1)
+        if (earlyReceipt) rememberEarlyReadReceipt(earlyReceipt)
+      }
       return false
     }
     return true
@@ -1259,6 +1276,17 @@ function validateMsgId(msgId) {
  * Register WebSocket message listening (called when the chat page is mounted)
    */
   function startListening() {
+    const recalledMessageIds = new Set()
+    const rememberRecall = (msgId) => {
+      if (recalledMessageIds.size >= 1000 && !recalledMessageIds.has(msgId)) {
+        recalledMessageIds.delete(recalledMessageIds.values().next().value)
+      }
+      recalledMessageIds.add(msgId)
+    }
+    const confirmIncoming = (type, from, msgId) => {
+      send(type, { from, msg_id: [msgId] })
+    }
+
     async function onMessage(payload) {
       // Security verification: check payload structure
       if (!payload) {
@@ -1284,6 +1312,24 @@ function validateMsgId(msgId) {
         return
       }
 
+      // Replays are expected when a previous ACK was lost. Confirm only after
+      // proving the message is already durable on this device.
+      try {
+        if (await dbHasMessage(payload.msg_id)) {
+          confirmIncoming('message_received_ack', payload.from, payload.msg_id)
+          return
+        }
+      } catch (e) {
+        console.error('[chat] check persisted message failed', e)
+        return
+      }
+      if (recalledMessageIds.has(payload.msg_id)) {
+        confirmIncoming('message_received_ack', payload.from, payload.msg_id)
+        return
+      }
+      // A concurrent replay of this ID is already being persisted and will ACK.
+      if (isMsgIdExists(payload.msg_id)) return
+
       // Reminder is placed before decryption: the private key has been cleared in the locked state and the message cannot be decrypted.
       // However, the user should still be informed of "received new message" and trigger a flash (the notification text is general and does not contain content)
       notifyNewMessage()
@@ -1294,7 +1340,11 @@ function validateMsgId(msgId) {
           iv: payload.iv,
           ciphertext: payload.ciphertext
         })
-        await addMessage(payload.from, {
+        if (recalledMessageIds.has(payload.msg_id)) {
+          confirmIncoming('message_received_ack', payload.from, payload.msg_id)
+          return
+        }
+        const persisted = await addMessage(payload.from, {
           id: payload.msg_id,
           from: payload.from,
           text,
@@ -1302,20 +1352,26 @@ function validateMsgId(msgId) {
           mine: false,
           burnAfterRead: payload.burn_after_read || false,
           burnAt: null
-        })
+        }, true)
+        if (persisted) confirmIncoming('message_received_ack', payload.from, payload.msg_id)
       } catch (e) {
         // If the private key has been cleared in the locked state, decryption must fail: the original ciphertext is temporarily stored and decrypted after unlocking.
         // Decryption failure in the non-locked state is considered true damage, and the original "discard" behavior is used.
         if (useIdentityStore().isLocked) {
-          await dbAddPending({
-            msg_id: payload.msg_id,
-            from: payload.from,
-            ephemeral_pub_key: payload.ephemeral_pub_key,
-            iv: payload.iv,
-            ciphertext: payload.ciphertext,
-            ts: payload.ts,
-            burn_after_read: payload.burn_after_read || false
-          }).catch(err => console.error('[chat] stash pending failed', err))
+          try {
+            await dbAddPending({
+              msg_id: payload.msg_id,
+              from: payload.from,
+              ephemeral_pub_key: payload.ephemeral_pub_key,
+              iv: payload.iv,
+              ciphertext: payload.ciphertext,
+              ts: payload.ts,
+              burn_after_read: payload.burn_after_read || false
+            })
+            confirmIncoming('message_received_ack', payload.from, payload.msg_id)
+          } catch (err) {
+            console.error('[chat] stash pending failed', err)
+          }
         } else {
           console.error('[chat] decrypt failed', e)
         }
@@ -1339,6 +1395,7 @@ function validateMsgId(msgId) {
 
       const chatId = payload.from
       const msgId = payload.msg_id
+      rememberRecall(msgId)
       const msgs = messages.value[chatId]
       let removed
       if (msgs) {
@@ -1346,7 +1403,9 @@ function validateMsgId(msgId) {
         if (idx !== -1) removed = msgs.splice(idx, 1)[0]
       }
       await dbDeleteMessage(msgId)
+      await dbDeletePending(msgId)
       await deleteFileArtifacts(removed, msgId)
+      confirmIncoming('recall_received_ack', chatId, msgId)
     }
 
     async function onAck(payload) {
@@ -1831,12 +1890,16 @@ function validateMsgId(msgId) {
 
     for (const p of pending) {
       try {
+        if (await dbHasMessage(p.msg_id)) {
+          await dbDeletePending(p.msg_id).catch(() => {})
+          continue
+        }
         const text = await decryptMessage({
           ephemeralPubKey: p.ephemeral_pub_key,
           iv: p.iv,
           ciphertext: p.ciphertext
         })
-        await addMessage(p.from, {
+        const persisted = await addMessage(p.from, {
           id: p.msg_id,
           from: p.from,
           text,
@@ -1844,8 +1907,8 @@ function validateMsgId(msgId) {
           mine: false,
           burnAfterRead: p.burn_after_read || false,
           burnAt: null
-        })
-        await dbDeletePending(p.msg_id).catch(() => {})
+        }, true)
+        if (persisted) await dbDeletePending(p.msg_id).catch(() => {})
       } catch (e) {
         // Still failed after unlocking: If it is still locked, keep it for next time, otherwise it is really damaged and delete it.
         if (useIdentityStore().isLocked) {

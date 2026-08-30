@@ -2,8 +2,20 @@ package migrations
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestReliableMessageInboxMigrationRegistered(t *testing.T) {
+	if strings.TrimSpace(reliableMessageInboxSQL) == "" {
+		t.Fatal("reliable message inbox migration is not embedded")
+	}
+	for _, required := range []string{"encrypted_envelope", "recipient_applied_at", "recalled_at", "recall_applied_at"} {
+		if !strings.Contains(reliableMessageInboxSQL, required) {
+			t.Fatalf("reliable inbox migration is missing %s", required)
+		}
+	}
+}
 
 func TestSplitStatementsIgnoresSemicolonsInComments(t *testing.T) {
 	src := `

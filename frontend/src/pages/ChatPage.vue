@@ -1221,6 +1221,7 @@ function messageFailureText(msg) {
     message_id_conflict: t('chat.reasonIdConflict'),
     service_unavailable: t('chat.reasonServiceUnavailable'),
     temporary_failure: t('chat.reasonTemporaryFailure'),
+    recipient_inbox_full: t('chat.reasonInboxFull'),
     client_error: t('chat.reasonClientError'),
     rejected: t('chat.reasonRejected')
   }

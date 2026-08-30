@@ -81,6 +81,9 @@ type Client struct {
 	send   chan []byte
 	ChatID string
 	UserID uint64 //Used to query the friend list
+	// ReliableInbox is negotiated by the client in the auth payload. Older clients
+	// are delivered with legacy enqueue semantics so a rolling upgrade does not fill their inbox forever.
+	ReliableInbox bool
 
 	// closed is closed when the connection is preempted by a new connection, telling writePump to stop sending data to the old connection that may be half dead.
 	// Write and exit (recycle unsent messages in the send buffer into the offline queue when exiting). Use closeOnce
@@ -157,7 +160,13 @@ type friendChecker interface {
 
 type messageReadStore interface {
 	AcceptMessage(context.Context, string, string, string) (service.MessageDelivery, bool, error)
+	AcceptEncryptedMessage(context.Context, string, string, string, json.RawMessage) (service.MessageDelivery, bool, error)
 	GetMessageDeliveries(context.Context, string, []string) ([]service.MessageDelivery, error)
+	GetPendingEncryptedMessages(context.Context, string, int) ([]service.PendingEncryptedMessage, error)
+	MarkEncryptedMessagesApplied(context.Context, []string, string, string) error
+	RecallMessage(context.Context, string, string, string) (service.MessageDelivery, bool, error)
+	GetPendingRecalls(context.Context, string, int) ([]service.PendingRecall, error)
+	MarkRecallsApplied(context.Context, []string, string, string) error
 	RecordMessage(context.Context, string, string, string) error
 	DeleteMessage(context.Context, string, string, string) error
 	RecordReads(context.Context, []string, string, string) ([]service.ReadReceipt, error)
@@ -449,6 +458,100 @@ func (h *Hub) FlushStoredReadReceipts(c *Client) {
 	}
 }
 
+type storedEncryptedEnvelope struct {
+	EphemeralPubKey string `json:"ephemeral_pub_key"`
+	IV              string `json:"iv"`
+	Ciphertext      string `json:"ciphertext"`
+	BurnAfterRead   bool   `json:"burn_after_read"`
+}
+
+func marshalForwardEncryptedMessage(item service.PendingEncryptedMessage) ([]byte, error) {
+	var encrypted storedEncryptedEnvelope
+	if err := json.Unmarshal(item.Envelope, &encrypted); err != nil {
+		return nil, err
+	}
+	return json.Marshal(Message{
+		Type: "message",
+		Payload: mustMarshal(struct {
+			From            string `json:"from"`
+			MsgID           string `json:"msg_id"`
+			EphemeralPubKey string `json:"ephemeral_pub_key"`
+			IV              string `json:"iv"`
+			Ciphertext      string `json:"ciphertext"`
+			Timestamp       int64  `json:"ts"`
+			BurnAfterRead   bool   `json:"burn_after_read"`
+		}{
+			From: item.MsgFrom, MsgID: item.MsgID, EphemeralPubKey: encrypted.EphemeralPubKey,
+			IV: encrypted.IV, Ciphertext: encrypted.Ciphertext, Timestamp: item.SentAt,
+			BurnAfterRead: encrypted.BurnAfterRead,
+		}),
+	})
+}
+
+func marshalForwardRecall(item service.PendingRecall) ([]byte, error) {
+	return json.Marshal(Message{
+		Type: "recall",
+		Payload: mustMarshal(struct {
+			From       string `json:"from"`
+			MsgID      string `json:"msg_id"`
+			RecalledAt int64  `json:"recalled_at"`
+		}{From: item.MsgFrom, MsgID: item.MsgID, RecalledAt: item.RecalledAt}),
+	})
+}
+
+// FlushPersistentInbox replays ciphertext and recall tombstones without deleting them.
+// The corresponding client-applied ACK is the only operation allowed to clear them.
+func (h *Hub) FlushPersistentInbox(c *Client) {
+	if h.messageReadSvc == nil {
+		return
+	}
+	ctx := context.Background()
+	messages, err := h.messageReadSvc.GetPendingEncryptedMessages(ctx, c.ChatID, service.MaxPendingMessageCount)
+	if err != nil {
+		log.Printf("[ws] load encrypted inbox failed: %v", err)
+		return
+	}
+	for _, item := range messages {
+		raw, marshalErr := marshalForwardEncryptedMessage(item)
+		if marshalErr != nil {
+			log.Printf("[ws] invalid encrypted inbox envelope: %v", marshalErr)
+			continue
+		}
+		select {
+		case c.send <- raw:
+			if !c.ReliableInbox {
+				if ackErr := h.messageReadSvc.MarkEncryptedMessagesApplied(ctx, []string{item.MsgID}, item.MsgFrom, c.ChatID); ackErr != nil {
+					log.Printf("[ws] clear legacy encrypted delivery failed: %v", ackErr)
+				}
+			}
+		case <-c.closed:
+			return
+		}
+	}
+
+	recalls, err := h.messageReadSvc.GetPendingRecalls(ctx, c.ChatID, service.MaxPendingMessageCount)
+	if err != nil {
+		log.Printf("[ws] load recall inbox failed: %v", err)
+		return
+	}
+	for _, item := range recalls {
+		raw, marshalErr := marshalForwardRecall(item)
+		if marshalErr != nil {
+			continue
+		}
+		select {
+		case c.send <- raw:
+			if !c.ReliableInbox {
+				if ackErr := h.messageReadSvc.MarkRecallsApplied(ctx, []string{item.MsgID}, item.MsgFrom, c.ChatID); ackErr != nil {
+					log.Printf("[ws] clear legacy recall delivery failed: %v", ackErr)
+				}
+			}
+		case <-c.closed:
+			return
+		}
+	}
+}
+
 func (h *Hub) storeOffline(chatID string, msg []byte) {
 	if err := h.storeOfflineChecked(chatID, msg); err != nil {
 		log.Printf("[ws] store offline message failed: %v", err)
@@ -478,6 +581,7 @@ func (h *Hub) ServeClient(c *Client) {
 	// The send channel buffer (256) is exceeded, and writePump has not yet been started to consume, c.send<- will be permanently blocked resulting in
 	// The connection is deadlocked and no messages can be received at all. When writePump is run first, it can be consumed while writing, and it will only degrade to back pressure.
 	go c.writePump(h)
+	h.FlushPersistentInbox(c)
 	h.FlushOffline(c)
 	h.FlushStoredReadReceipts(c)
 
@@ -608,6 +712,10 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 		h.handleHealthPing(c, msg.Payload)
 	case "recall":
 		h.handleRecall(c, msg.Payload)
+	case "message_received_ack":
+		h.handleMessageReceivedAck(c, msg.Payload)
+	case "recall_received_ack":
+		h.handleRecallReceivedAck(c, msg.Payload)
 	case "read":
 		h.handleRead(c, msg.Payload)
 	case "read_receipt_applied":
@@ -723,11 +831,19 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 		h.rejectChatMessage(from, p.MsgID, "service_unavailable", true)
 		return
 	}
-	delivery, created, err := h.messageReadSvc.AcceptMessage(ctx, p.MsgID, from.ChatID, p.To)
+	envelope, _ := json.Marshal(storedEncryptedEnvelope{
+		EphemeralPubKey: p.EphemeralPubKey,
+		IV:              p.IV,
+		Ciphertext:      p.Ciphertext,
+		BurnAfterRead:   p.BurnAfterRead,
+	})
+	delivery, created, err := h.messageReadSvc.AcceptEncryptedMessage(ctx, p.MsgID, from.ChatID, p.To, envelope)
 	if err != nil {
 		log.Printf("[ws] record message delivery failed: %v", err)
 		if errors.Is(err, service.ErrMessageIDConflict) {
 			h.rejectChatMessage(from, p.MsgID, "message_id_conflict", false)
+		} else if errors.Is(err, service.ErrMessageInboxFull) {
+			h.rejectChatMessage(from, p.MsgID, "recipient_inbox_full", true)
 		} else {
 			h.rejectChatMessage(from, p.MsgID, "temporary_failure", true)
 		}
@@ -739,48 +855,78 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 		return
 	}
 
-	type ForwardPayload struct {
-		From            string `json:"from"`
-		MsgID           string `json:"msg_id"`
-		EphemeralPubKey string `json:"ephemeral_pub_key"`
-		IV              string `json:"iv"`
-		Ciphertext      string `json:"ciphertext"`
-		Timestamp       int64  `json:"ts"`
-		BurnAfterRead   bool   `json:"burn_after_read"`
-	}
 	timestamp := delivery.SentAt
-	fwd, _ := json.Marshal(Message{
-		Type: "message",
-		Payload: mustMarshal(ForwardPayload{
-			From:            from.ChatID,
-			MsgID:           p.MsgID,
-			EphemeralPubKey: p.EphemeralPubKey,
-			IV:              p.IV,
-			Ciphertext:      p.Ciphertext,
-			Timestamp:       timestamp,
-			BurnAfterRead:   p.BurnAfterRead,
-		}),
+	fwd, _ := marshalForwardEncryptedMessage(service.PendingEncryptedMessage{
+		MessageDelivery: delivery,
+		Envelope:        envelope,
 	})
-	if err = h.sendReliable(p.To, fwd); err != nil {
-		// The recipient never obtained the ciphertext and Redis did not retain it. Revoke the attribution so the same msg_id can be retried safely.
-		if deleteErr := h.messageReadSvc.DeleteMessage(ctx, p.MsgID, from.ChatID, p.To); deleteErr != nil {
-			log.Printf("[ws] rollback undelivered message failed: %v", deleteErr)
-		}
-		log.Printf("[ws] retain recipient message failed: %v", err)
-		h.rejectChatMessage(from, p.MsgID, "temporary_failure", true)
-		return
-	}
 
-	// If the receiver is not online, Aurora push is triggered (asynchronous, does not block the main process)
+	// The database remains authoritative even when the live connection buffer is full.
 	h.mu.RLock()
-	_, recipientOnline := h.clients[p.To]
+	recipient, recipientOnline := h.clients[p.To]
 	h.mu.RUnlock()
-	if !recipientOnline && h.pushSvc != nil {
+	queuedLive := false
+	if recipientOnline {
+		select {
+		case recipient.send <- fwd:
+			queuedLive = true
+			if !recipient.ReliableInbox {
+				if ackErr := h.messageReadSvc.MarkEncryptedMessagesApplied(ctx, []string{p.MsgID}, from.ChatID, p.To); ackErr != nil {
+					log.Printf("[ws] clear legacy live delivery failed: %v", ackErr)
+				}
+			}
+		default:
+		}
+	}
+	if !queuedLive && h.pushSvc != nil {
 		go h.pushSvc.NotifyOfflineUser(p.To, from.ChatID)
 	}
 
 	// ACK cannot be silently discarded: it determines whether the sender mistakenly marked a message as failed when it was actually delivered.
 	h.sendChatResult(from, ChatAckPayload{MsgID: p.MsgID, Status: "accepted", Timestamp: timestamp})
+}
+
+type receivedAckPayload struct {
+	From  string   `json:"from"`
+	MsgID []string `json:"msg_id"`
+}
+
+func validReceivedAck(p receivedAckPayload) bool {
+	if !chatIDRe.MatchString(p.From) || len(p.MsgID) == 0 || len(p.MsgID) > 100 {
+		return false
+	}
+	for _, id := range p.MsgID {
+		if !msgIDRe.MatchString(id) {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *Hub) handleMessageReceivedAck(from *Client, payload json.RawMessage) {
+	if h.messageReadSvc == nil {
+		return
+	}
+	var p receivedAckPayload
+	if json.Unmarshal(payload, &p) != nil || !validReceivedAck(p) {
+		return
+	}
+	if err := h.messageReadSvc.MarkEncryptedMessagesApplied(context.Background(), p.MsgID, p.From, from.ChatID); err != nil {
+		log.Printf("[ws] apply encrypted inbox ack failed: %v", err)
+	}
+}
+
+func (h *Hub) handleRecallReceivedAck(from *Client, payload json.RawMessage) {
+	if h.messageReadSvc == nil {
+		return
+	}
+	var p receivedAckPayload
+	if json.Unmarshal(payload, &p) != nil || !validReceivedAck(p) {
+		return
+	}
+	if err := h.messageReadSvc.MarkRecallsApplied(context.Background(), p.MsgID, p.From, from.ChatID); err != nil {
+		log.Printf("[ws] apply recall inbox ack failed: %v", err)
+	}
 }
 
 func (h *Hub) handleMessageStatusQuery(from *Client, payload json.RawMessage) {
@@ -878,32 +1024,68 @@ func (h *Hub) handleRecall(from *Client, payload json.RawMessage) {
 		return
 	}
 
-	// Only allow recalling to a friend
+	// Only allow recalling to a friend, then verify that this exact delivery belongs
+	// to the sender. Knowing or guessing another message ID must never authorize recall.
 	ctx := context.Background()
 	if ok, err := h.friendSvc.AreFriends(ctx, from.UserID, p.To); err != nil || !ok {
 		log.Printf("[ws] recall to non-friend rejected")
+		h.sendRecallResult(from, p.MsgID, "rejected", "not_friends", false)
 		return
 	}
-	type ForwardRecall struct {
-		From  string `json:"from"`
-		MsgID string `json:"msg_id"`
+	if h.messageReadSvc == nil {
+		h.sendRecallResult(from, p.MsgID, "retry", "service_unavailable", true)
+		return
 	}
-	fwd, _ := json.Marshal(Message{
-		Type: "recall",
-		Payload: mustMarshal(ForwardRecall{
-			From:  from.ChatID,
-			MsgID: p.MsgID,
-		}),
+	_, found, err := h.messageReadSvc.RecallMessage(ctx, p.MsgID, from.ChatID, p.To)
+	if err != nil {
+		log.Printf("[ws] persist recall failed: %v", err)
+		code := "temporary_failure"
+		if errors.Is(err, service.ErrMessageInboxFull) {
+			code = "recipient_inbox_full"
+		}
+		h.sendRecallResult(from, p.MsgID, "retry", code, true)
+		return
+	}
+	if !found {
+		h.sendRecallResult(from, p.MsgID, "rejected", "message_not_found", false)
+		return
+	}
+	fwd, _ := marshalForwardRecall(service.PendingRecall{
+		MsgID: p.MsgID, MsgFrom: from.ChatID, RecalledAt: time.Now().UnixMilli(),
 	})
-	// The withdrawal is only forwarded to online users and does not save offline users (the other party cannot receive it but it is not deleted locally, so there is no security issue)
 	h.mu.RLock()
 	c, ok := h.clients[p.To]
 	h.mu.RUnlock()
 	if ok {
 		select {
 		case c.send <- fwd:
+			if !c.ReliableInbox {
+				if ackErr := h.messageReadSvc.MarkRecallsApplied(ctx, []string{p.MsgID}, from.ChatID, p.To); ackErr != nil {
+					log.Printf("[ws] clear legacy live recall failed: %v", ackErr)
+				}
+			}
 		default:
 		}
+	}
+	h.sendRecallResult(from, p.MsgID, "accepted", "", false)
+}
+
+func (h *Hub) sendRecallResult(to *Client, msgID, status, code string, retryable bool) {
+	if to == nil || to.send == nil || !msgIDRe.MatchString(msgID) {
+		return
+	}
+	raw, _ := json.Marshal(Message{
+		Type: "recall_ack",
+		Payload: mustMarshal(struct {
+			MsgID     string `json:"msg_id"`
+			Status    string `json:"status"`
+			Code      string `json:"code,omitempty"`
+			Retryable bool   `json:"retryable,omitempty"`
+		}{MsgID: msgID, Status: status, Code: code, Retryable: retryable}),
+	})
+	select {
+	case to.send <- raw:
+	case <-time.After(2 * time.Second):
 	}
 }
 

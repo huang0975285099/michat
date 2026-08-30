@@ -18,6 +18,7 @@ let pendingMessageRetryTimer = null
 let readAckSupported = false
 let messageSyncSupported = false
 let healthCheckSupported = false
+let reliableInboxSupported = false
 let pendingMessageSync = false
 let pendingMessageSyncTimer = null
 let healthIntervalTimer = null
@@ -28,6 +29,7 @@ const listeners = new Map() // type → Set<callback>
 const PENDING_QUEUE_KEY = 'ws_pending_queue'  //A persistent queue for key messages such as read receipts
 const READ_BATCH_SIZE = 100
 const MAX_PENDING_MESSAGES = 100
+const MAX_PENDING_RECALLS = 100
 const MESSAGE_RETRY_MS = 15000
 const MESSAGE_RETRY_MAX_MS = 120000
 const HEALTH_INTERVAL_MS = 20000
@@ -39,6 +41,7 @@ let pendingMessageRetryDelay = MESSAGE_RETRY_MS
 const pendingQueue = loadPendingQueue()        //Messages cached during disconnection (retained across refreshes)
 const pendingReadInFlight = new Set()          //The ID of the current connection that has been written and is waiting for read_ack
 const pendingMessageInFlight = new Set()       //Text messages written on the current connection and waiting for ACK
+const pendingRecallInFlight = new Set()        //Recall tombstones waiting for server persistence ACK
 let serverClock = null //{ epochMs, monotonicMs }, calibrated by the server during authentication
 
 function browserOnline() {
@@ -174,6 +177,7 @@ function resetTransientConnectionState() {
   authenticated = false
   pendingReadInFlight.clear()
   pendingMessageInFlight.clear()
+  pendingRecallInFlight.clear()
   pendingMessageSync = false
   clearHealthTimers()
   if (pendingFlushTimer) { clearTimeout(pendingFlushTimer); pendingFlushTimer = null }
@@ -231,6 +235,15 @@ function loadPendingQueue() {
         }
         continue
       }
+      if (item?.type === 'recall') {
+        const loadedRecalls = result.reduce((count, existing) => count + (existing.type === 'recall' ? 1 : 0), 0)
+        if (loadedRecalls < MAX_PENDING_RECALLS && isValidPendingRecall(item.payload) && !result.some(existing =>
+          existing.type === 'recall' && existing.payload.msg_id === item.payload.msg_id
+        )) {
+          result.push({ type: 'recall', payload: { ...item.payload } })
+        }
+        continue
+      }
       if (item?.type !== 'read') {
         continue
       }
@@ -265,6 +278,10 @@ function isValidPendingMessage(payload) {
   )
 }
 
+function isValidPendingRecall(payload) {
+  return Boolean(payload && typeof payload.to === 'string' && typeof payload.msg_id === 'string')
+}
+
 function queuePendingMessage(payload) {
   if (!isValidPendingMessage(payload)) return false
   const existing = pendingQueue.find(item => item.type === 'message' && item.payload?.msg_id === payload.msg_id)
@@ -277,6 +294,21 @@ function queuePendingMessage(payload) {
   if (messageCount >= MAX_PENDING_MESSAGES) return false
   if (messageCount === 0) pendingMessageRetryDelay = MESSAGE_RETRY_MS
   pendingQueue.push({ type: 'message', payload: { ...payload } })
+  savePendingQueue()
+  return true
+}
+
+function queuePendingRecall(payload) {
+  if (!isValidPendingRecall(payload)) return false
+  const existing = pendingQueue.find(item => item.type === 'recall' && item.payload?.msg_id === payload.msg_id)
+  if (existing) {
+    existing.payload = { ...payload }
+    savePendingQueue()
+    return true
+  }
+  const count = pendingQueue.reduce((total, item) => total + (item.type === 'recall' ? 1 : 0), 0)
+  if (count >= MAX_PENDING_RECALLS) return false
+  pendingQueue.push({ type: 'recall', payload: { ...payload } })
   savePendingQueue()
   return true
 }
@@ -294,7 +326,27 @@ export function confirmPendingMessage(msgId) {
     if (pendingQueue[i].type === 'message' && pendingQueue[i].payload?.msg_id === msgId) pendingQueue.splice(i, 1)
   }
   savePendingQueue()
-  if (!pendingQueue.some(item => item.type === 'message')) {
+  if (!pendingQueue.some(item => item.type === 'message' || item.type === 'recall')) {
+    if (pendingMessageRetryTimer) clearTimeout(pendingMessageRetryTimer)
+    pendingMessageRetryTimer = null
+    pendingMessageRetryDelay = MESSAGE_RETRY_MS
+  }
+}
+
+export function hasPendingRecall(msgId) {
+  return typeof msgId === 'string' && pendingQueue.some(item =>
+    item.type === 'recall' && item.payload?.msg_id === msgId
+  )
+}
+
+export function confirmPendingRecall(msgId) {
+  if (typeof msgId !== 'string' || !msgId) return
+  pendingRecallInFlight.delete(msgId)
+  for (let i = pendingQueue.length - 1; i >= 0; i--) {
+    if (pendingQueue[i].type === 'recall' && pendingQueue[i].payload?.msg_id === msgId) pendingQueue.splice(i, 1)
+  }
+  savePendingQueue()
+  if (!pendingQueue.some(item => item.type === 'message' || item.type === 'recall')) {
     if (pendingMessageRetryTimer) clearTimeout(pendingMessageRetryTimer)
     pendingMessageRetryTimer = null
     pendingMessageRetryDelay = MESSAGE_RETRY_MS
@@ -311,7 +363,7 @@ export function discardPendingMessagesTo(chatId) {
     }
   }
   savePendingQueue()
-  if (!pendingQueue.some(item => item.type === 'message')) {
+  if (!pendingQueue.some(item => item.type === 'message' || item.type === 'recall')) {
     if (pendingMessageRetryTimer) clearTimeout(pendingMessageRetryTimer)
     pendingMessageRetryTimer = null
     pendingMessageRetryDelay = MESSAGE_RETRY_MS
@@ -396,10 +448,11 @@ function schedulePendingRetry() {
 }
 
 function schedulePendingMessageRetry() {
-  if (!pendingQueue.some(item => item.type === 'message') || pendingMessageRetryTimer) return
+  if (!pendingQueue.some(item => item.type === 'message' || item.type === 'recall') || pendingMessageRetryTimer) return
   pendingMessageRetryTimer = setTimeout(() => {
     pendingMessageRetryTimer = null
     pendingMessageInFlight.clear()
+    pendingRecallInFlight.clear()
     pendingMessageRetryDelay = Math.min(pendingMessageRetryDelay * 2, MESSAGE_RETRY_MAX_MS)
     flushPendingQueue()
   }, pendingMessageRetryDelay)
@@ -462,6 +515,16 @@ function processAckOutbox(payload) {
   }
 }
 
+function processRecallAckOutbox(payload) {
+  if (typeof payload?.msg_id !== 'string') return
+  const status = payload.status || 'accepted'
+  if (status === 'accepted' || status === 'duplicate' || status === 'rejected') {
+    confirmPendingRecall(payload.msg_id)
+  } else if (status === 'retry' || payload.retryable === true) {
+    pendingRecallInFlight.delete(payload.msg_id)
+  }
+}
+
 function savePendingQueue() {
   try {
     if (pendingQueue.length === 0) localStorage.removeItem(PENDING_QUEUE_KEY)
@@ -493,6 +556,7 @@ export function clearPendingQueue() {
   pendingQueue.length = 0
   pendingReadInFlight.clear()
   pendingMessageInFlight.clear()
+  pendingRecallInFlight.clear()
   pendingMessageRetryDelay = MESSAGE_RETRY_MS
   savePendingQueue()
   // Also clear the inbound early arrival buffer: otherwise unconsumed offline messages from the old identity may be played back when the new identity registers the listener.
@@ -559,6 +623,7 @@ export function connect() {
           readAckSupported = msg.payload?.read_ack === true
           messageSyncSupported = msg.payload?.message_sync === true
           healthCheckSupported = msg.payload?.health_check === true
+          reliableInboxSupported = msg.payload?.reliable_inbox === true
           if (msg.payload && msg.payload.success) {
             console.log('[ws] auth success')
             reconnectAttempt = 0
@@ -582,6 +647,7 @@ export function connect() {
           return
         }
         if (msg.type === 'ack') processAckOutbox(msg.payload)
+        if (msg.type === 'recall_ack') processRecallAckOutbox(msg.payload)
         dispatchMessage(msg.type, msg.payload)
       } catch (e) {
         console.error('[ws] parse error', e)
@@ -612,7 +678,7 @@ export function connect() {
  */
 function sendAuth(token, resolve, authenticatingSocket = socket) {
   if (authenticatingSocket && authenticatingSocket.readyState === WebSocket.OPEN) {
-    authenticatingSocket.send(JSON.stringify({ type: 'auth', payload: { token } }))
+    authenticatingSocket.send(JSON.stringify({ type: 'auth', payload: { token, reliable_inbox: true } }))
     // Wait for auth_result response before resolving
     // Set a timeout to prevent the server from becoming unresponsive
     const timeout = setTimeout(() => {
@@ -636,6 +702,7 @@ function sendAuth(token, resolve, authenticatingSocket = socket) {
           readAckSupported = msg.payload?.read_ack === true
           messageSyncSupported = msg.payload?.message_sync === true
           healthCheckSupported = msg.payload?.health_check === true
+          reliableInboxSupported = msg.payload?.reliable_inbox === true
           if (msg.payload?.success) {
             console.log('[ws] auth success')
             reconnectAttempt = 0
@@ -678,6 +745,7 @@ export function disconnect() {
   readAckSupported = false
   messageSyncSupported = false
   healthCheckSupported = false
+  reliableInboxSupported = false
 }
 
 export function reconnectNow(reason = 'manual') {
@@ -765,6 +833,17 @@ export function send(type, payload) {
     if (connected) schedulePendingFlush()
     return connected
   }
+  // Recall is also an outbox operation: deleting locally while offline must not silently
+  // lose the tombstone intended for the other device.
+  if (type === 'recall') {
+    if (!queuePendingRecall(payload)) {
+      console.warn('[ws] pending recall queue is full or invalid')
+      return false
+    }
+    const connected = Boolean(socket && socket.readyState === WebSocket.OPEN && authenticated)
+    if (connected) schedulePendingFlush()
+    return connected
+  }
   if (!socket || socket.readyState !== WebSocket.OPEN || !authenticated) {
     console.warn('[ws] not connected or auth pending, message dropped')
     return false
@@ -787,6 +866,11 @@ function flushPendingQueue() {
         ? []
         : [{ type: item.type, payload: { ...item.payload } }]
     }
+    if (item.type === 'recall') {
+      return pendingRecallInFlight.has(item.payload.msg_id)
+        ? []
+        : [{ type: item.type, payload: { ...item.payload } }]
+    }
     if (item.type !== 'read') return []
     const ids = (item.payload?.msg_id || []).filter(id => !pendingReadInFlight.has(`${item.payload.to}\u0000${id}`))
     return ids.length > 0 ? [{ type: item.type, payload: { ...item.payload, msg_id: ids } }] : []
@@ -801,6 +885,8 @@ function flushPendingQueue() {
         for (const id of payload.msg_id) pendingReadInFlight.add(`${payload.to}\u0000${id}`)
       } else if (type === 'message') {
         pendingMessageInFlight.add(payload.msg_id)
+      } else if (type === 'recall') {
+        pendingRecallInFlight.add(payload.msg_id)
       }
     } catch (e) {
       console.error('[ws] pending send failed', e)
@@ -816,7 +902,12 @@ function flushPendingQueue() {
       confirmPendingReads(item.payload.to, item.payload.msg_id)
       dispatchMessage('read_ack', { to: item.payload.to, msg_id: item.payload.msg_id })
     }
-    return
+  }
+  if (!reliableInboxSupported) {
+    // Compatibility with older servers that forward recalls but do not return recall_ack.
+    for (const item of sentItems) {
+      if (item.type === 'recall') confirmPendingRecall(item.payload.msg_id)
+    }
   }
   schedulePendingRetry()
 }

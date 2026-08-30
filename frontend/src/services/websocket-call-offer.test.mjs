@@ -21,7 +21,7 @@ class MemoryStorage {
   }
 }
 
-async function createWebSocketHarness({ messageSync = false, healthCheck = false, acceptedMessageIds = [], autoHealthPong = true } = {}) {
+async function createWebSocketHarness({ messageSync = false, healthCheck = false, reliableInbox = false, acceptedMessageIds = [], autoHealthPong = true } = {}) {
   const localStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
   const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window')
   const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document')
@@ -81,6 +81,7 @@ async function createWebSocketHarness({ messageSync = false, healthCheck = false
           read_ack: true,
           message_sync: messageSync,
           health_check: healthCheck,
+          reliable_inbox: reliableInbox,
         }))
       } else if (message.type === 'message_status_query') {
         controlMessages.push(message)
@@ -243,6 +244,45 @@ test('persists an offline encrypted text message and flushes it after authentica
     env.websocket.confirmPendingMessage(payload.msg_id)
     assert.equal(env.websocket.hasPendingMessage(payload.msg_id), false)
     assert.equal(env.storage.getItem('ws_pending_queue'), null)
+  } finally {
+    env.websocket.disconnect()
+    env.restore()
+  }
+})
+
+test('persists an offline recall until the server confirms its tombstone', async () => {
+  const env = await createWebSocketHarness({ reliableInbox: true })
+  const payload = { to: '1234-ABCD', msg_id: 'abc-9-abcdef' }
+  try {
+    assert.equal(env.websocket.send('recall', payload), false)
+    assert.equal(env.websocket.hasPendingRecall(payload.msg_id), true)
+    assert.match(env.storage.getItem('ws_pending_queue'), /recall/)
+
+    await env.websocket.connect()
+    await waitForTimers()
+    assert.deepEqual(env.sentMessages, [{ type: 'recall', payload }])
+    assert.equal(env.websocket.hasPendingRecall(payload.msg_id), true)
+
+    env.socket.emit('recall_ack', { msg_id: payload.msg_id, status: 'accepted' })
+    assert.equal(env.websocket.hasPendingRecall(payload.msg_id), false)
+    assert.equal(env.storage.getItem('ws_pending_queue'), null)
+  } finally {
+    env.websocket.disconnect()
+    env.restore()
+  }
+})
+
+test('sends recipient persistence acknowledgements after authentication', async () => {
+  const env = await createWebSocketHarness({ reliableInbox: true })
+  try {
+    await env.websocket.connect()
+    assert.equal(env.websocket.send('message_received_ack', {
+      from: '1234-ABCD', msg_id: ['abc-10-abcdef'],
+    }), true)
+    assert.deepEqual(env.sentMessages, [{
+      type: 'message_received_ack',
+      payload: { from: '1234-ABCD', msg_id: ['abc-10-abcdef'] },
+    }])
   } finally {
     env.websocket.disconnect()
     env.restore()
