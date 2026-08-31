@@ -3,7 +3,10 @@ import test from 'node:test'
 
 import {
   attachmentAutoCleanStorageKey,
+  acceptBurnWarning,
   burnModeStorageKey,
+  burnWarningStorageKey,
+  hasAcceptedBurnWarning,
   loadAttachmentAutoClean,
   loadBurnMode,
   saveAttachmentAutoClean,
@@ -46,4 +49,13 @@ test('remembers automatic sender attachment cleanup per account and defaults off
   saveAttachmentAutoClean('1000-AAAA', false, storage)
   assert.equal(loadAttachmentAutoClean('1000-AAAA', storage), false)
   assert.match(attachmentAutoCleanStorageKey('1000-AAAA'), /1000-AAAA$/)
+})
+
+test('records the burn-after-reading warning acknowledgement per account', () => {
+  const storage = memoryStorage()
+  assert.equal(hasAcceptedBurnWarning('1000-AAAA', storage), false)
+  acceptBurnWarning('1000-AAAA', storage)
+  assert.equal(hasAcceptedBurnWarning('1000-AAAA', storage), true)
+  assert.equal(hasAcceptedBurnWarning('2000-BBBB', storage), false)
+  assert.match(burnWarningStorageKey('1000-AAAA'), /1000-AAAA$/)
 })

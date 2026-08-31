@@ -1,5 +1,6 @@
 const BURN_MODE_PREFIX = 'yunmi.chat.burn-mode'
 const ATTACHMENT_AUTO_CLEAN_PREFIX = 'yunmi.attachment.auto-clean-received'
+const BURN_WARNING_PREFIX = 'yunmi.chat.burn-warning-v1'
 
 export function burnModeStorageKey(ownerChatId, friendChatId) {
   return `${BURN_MODE_PREFIX}.${ownerChatId}.${friendChatId}`
@@ -46,5 +47,27 @@ export function saveAttachmentAutoClean(ownerChatId, enabled, storage = globalTh
     else storage.removeItem(key)
   } catch {
     // Keep the in-memory setting when browser storage is unavailable.
+  }
+}
+
+export function burnWarningStorageKey(ownerChatId) {
+  return `${BURN_WARNING_PREFIX}.${ownerChatId}`
+}
+
+export function hasAcceptedBurnWarning(ownerChatId, storage = globalThis.localStorage) {
+  if (!ownerChatId || !storage) return false
+  try {
+    return storage.getItem(burnWarningStorageKey(ownerChatId)) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function acceptBurnWarning(ownerChatId, storage = globalThis.localStorage) {
+  if (!ownerChatId || !storage) return
+  try {
+    storage.setItem(burnWarningStorageKey(ownerChatId), '1')
+  } catch {
+    // The warning will be shown again if acknowledgement cannot be persisted.
   }
 }

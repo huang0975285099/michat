@@ -136,10 +136,10 @@
             <div class="text-caption q-mt-xs text-grey row items-center q-gutter-xs">
               <span>{{ formatTime(msg.ts) }}</span>
               <span v-if="msg.type === 'file'">· {{ attachmentStatusText(msg) }}</span>
-              <q-icon v-if="msg.burnAfterRead" name="local_fire_department" size="14px" color="orange">
-                <q-tooltip v-if="msg.burnAt">{{ formatBurnCountdown(msg.burnAt) }}</q-tooltip>
-                <q-tooltip v-else>{{ t("chat.burnAfterRead") }}</q-tooltip>
-              </q-icon>
+              <span v-if="msg.burnAfterRead" class="burn-countdown">
+                <q-icon name="local_fire_department" size="14px" />
+                {{ burnCountdownText(msg) }}
+              </span>
             </div>
             <message-action-menu
               :can-reply="canReply(msg)"
@@ -265,10 +265,10 @@
                   <q-tooltip v-else>{{ t("chat.delivered") }}</q-tooltip>
                 </template>
               </div>
-              <q-icon v-if="msg.burnAfterRead" name="local_fire_department" size="14px" color="orange">
-                <q-tooltip v-if="msg.burnAt">{{ formatBurnCountdown(msg.burnAt) }}</q-tooltip>
-                <q-tooltip v-else>{{ t("chat.burnUnread") }}</q-tooltip>
-              </q-icon>
+              <span v-if="msg.burnAfterRead" class="burn-countdown burn-countdown-mine">
+                <q-icon name="local_fire_department" size="14px" />
+                {{ burnCountdownText(msg) }}
+              </span>
             </div>
             <message-action-menu
               :can-reply="canReply(msg)"
@@ -351,7 +351,10 @@
     <!-- Burn-after-read status: only takes up space when enabled -->
     <div v-if="burnMode" class="burn-mode-status">
       <q-icon name="local_fire_department" size="17px" />
-      <span>{{ t("chat.burnEnabled") }}</span>
+      <div class="burn-mode-copy">
+        <span>{{ t("chat.burnEnabled") }}</span>
+        <small>{{ t("chat.burnExternalCopyWarning") }}</small>
+      </div>
       <q-btn flat round dense icon="close" size="sm" :aria-label="t('chat.closeBurn')" @click="burnMode = false" />
     </div>
 
@@ -621,7 +624,12 @@ import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
 import ImageGalleryDialog from 'src/components/ImageGalleryDialog.vue'
 import MessageActionMenu from 'src/components/MessageActionMenu.vue'
 import { useI18n } from 'src/i18n'
-import { loadBurnMode, saveBurnMode } from 'src/services/chat-preferences.mjs'
+import {
+  acceptBurnWarning,
+  hasAcceptedBurnWarning,
+  loadBurnMode,
+  saveBurnMode,
+} from 'src/services/chat-preferences.mjs'
 import { normalizeReplyReference } from 'src/services/chat-message-content.mjs'
 import {
   MAX_IMAGE_BATCH_BYTES,
@@ -867,6 +875,8 @@ async function downloadFile(msg) {
     return
   }
 
+  if (!await confirmBurnAttachmentSave(msg)) return
+
   setFileDownloadState(msg.id, { status: 'downloading', progress: 0 })
   try {
     const onProgress = progress => setFileDownloadState(msg.id, { status: 'downloading', progress })
@@ -983,9 +993,50 @@ function openImagePicker() {
   imageInputEl.value?.click()
 }
 
-function toggleBurnMode() {
-  burnMode.value = !burnMode.value
+function showConfirmDialog(options) {
+  return new Promise(resolve => {
+    let settled = false
+    const finish = value => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
+    $q.dialog({ ...options, persistent: true })
+      .onOk(() => finish(true))
+      .onCancel(() => finish(false))
+      .onDismiss(() => finish(false))
+  })
+}
+
+async function ensureBurnWarningAccepted() {
+  if (hasAcceptedBurnWarning(identityStore.chatId)) return true
+  const accepted = await showConfirmDialog({
+    title: t('chat.burnRiskTitle'),
+    message: t('chat.burnRiskMessage'),
+    cancel: { label: t('common.cancel'), flat: true },
+    ok: { label: t('chat.burnRiskConfirm'), color: 'orange' },
+  })
+  if (accepted) acceptBurnWarning(identityStore.chatId)
+  return accepted
+}
+
+async function toggleBurnMode() {
+  if (burnMode.value) {
+    burnMode.value = false
+  } else if (await ensureBurnWarningAccepted()) {
+    burnMode.value = true
+  }
   morePanelOpen.value = false
+}
+
+function confirmBurnAttachmentSave(msg) {
+  if (!msg?.burnAfterRead) return Promise.resolve(true)
+  return showConfirmDialog({
+    title: t('chat.burnSaveTitle'),
+    message: t('chat.burnSaveMessage'),
+    cancel: { label: t('common.cancel'), flat: true },
+    ok: { label: t('chat.burnSaveConfirm'), color: 'orange' },
+  })
 }
 
 watch(burnMode, enabled => {
@@ -1383,6 +1434,13 @@ onMounted(async () => {
       friendOnline.value = online
     }
   })
+
+  // Existing users may already have burn mode persisted from an older version.
+  // Require the same one-time acknowledgement before they continue using it.
+  if (burnMode.value && !hasAcceptedBurnWarning(identityStore.chatId)) {
+    const accepted = await ensureBurnWarningAccepted()
+    if (!accepted) burnMode.value = false
+  }
 
   // Precisely set the q-page height: the first synchronization attempt, and then add it after nextTick + rAF,
   // Ensure that the header/footer size is accurate after Quasar completes the layout
@@ -2194,6 +2252,11 @@ function formatBurnCountdown(burnAt) {
   return t('chat.deleteInMinutes', { minutes })
 }
 
+function burnCountdownText(msg) {
+  if (Number.isFinite(msg?.burnAt)) return formatBurnCountdown(msg.burnAt)
+  return msg?.mine ? t('chat.burnUnreadCompact') : t('chat.burnCountdownStartsOnRead')
+}
+
 /**
  * Compact display of continuous messages: hide avatars and reduce spacing
  */
@@ -2329,9 +2392,26 @@ function shouldCompact(msgs, idx) {
   border-top: 1px solid #ffe0b2;
   font-size: 12px;
 }
-.burn-mode-status span {
+.burn-mode-copy {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.burn-mode-copy small {
+  color: #bf360c;
+  font-size: 10px;
+}
+.burn-countdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: #e65100;
+  white-space: nowrap;
+}
+.burn-countdown-mine {
+  color: #fff3e0;
 }
 .reply-composer-bar {
   min-height: 48px;
