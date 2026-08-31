@@ -52,7 +52,7 @@
             </router-view>
         </q-page-container>
 
-        <q-footer v-if="showNav">
+        <q-footer v-if="showFooter">
             <q-tabs
                 v-model="tab"
                 dense
@@ -215,6 +215,11 @@ const showNav = computed(() => {
     if (route.path.startsWith("/games/")) return false; ///games/bomberman and other battle pages are full screen
     return identity.isReady;
 });
+
+// Chat details use the full available height; the global header remains visible.
+const showFooter = computed(
+    () => showNav.value && !route.path.startsWith("/chat/"),
+);
 
 const chatStore = useChatStore();
 const callStore = useCallStore();

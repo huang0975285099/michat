@@ -267,6 +267,13 @@ function loadPendingQueue() {
 }
 
 function isValidPendingMessage(payload) {
+  const replyFields = [
+    payload?.reply_ephemeral_pub_key,
+    payload?.reply_iv,
+    payload?.reply_ciphertext,
+  ]
+  const hasNoReply = replyFields.every(value => value === undefined)
+  const hasCompleteReply = replyFields.every(value => typeof value === 'string' && value.length > 0)
   return Boolean(
     payload &&
     typeof payload.to === 'string' &&
@@ -274,7 +281,8 @@ function isValidPendingMessage(payload) {
     typeof payload.ephemeral_pub_key === 'string' && payload.ephemeral_pub_key.length > 0 &&
     typeof payload.iv === 'string' && payload.iv.length > 0 &&
     typeof payload.ciphertext === 'string' && payload.ciphertext.length > 0 &&
-    typeof payload.burn_after_read === 'boolean'
+    typeof payload.burn_after_read === 'boolean' &&
+    (hasNoReply || hasCompleteReply)
   )
 }
 

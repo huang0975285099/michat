@@ -8,6 +8,13 @@ import {
 } from 'src/services/websocket'
 import { notifyNewMessage } from 'src/services/notify'
 import { buildEncryptedFileOfferPayload, openFileOfferMetadata, sealFileMetadata, validateFileMetadata } from 'src/services/file-metadata.mjs'
+import {
+  normalizeReplyReference,
+  parseChatMessageContent,
+  parseReplyReference,
+  serializeChatMessageContent,
+  serializeReplyReference,
+} from 'src/services/chat-message-content.mjs'
 import { useIdentityStore } from 'src/stores/identity'
 
 // ──Safety constants────────────────────────────────────────────
@@ -125,6 +132,40 @@ async function decryptMessageText(encryptedData, key) {
     ciphertext
   )
   return new TextDecoder().decode(decrypted)
+}
+
+async function encryptReplyReference(reply, recipientPubKey) {
+  const plaintext = serializeReplyReference(reply)
+  return plaintext ? encryptMessage(plaintext, recipientPubKey) : null
+}
+
+function replyEncryptionPayload(encryptedReply) {
+  if (!encryptedReply) return {}
+  return {
+    reply_ephemeral_pub_key: encryptedReply.ephemeralPubKey,
+    reply_iv: encryptedReply.iv,
+    reply_ciphertext: encryptedReply.ciphertext,
+  }
+}
+
+async function decryptReplyReference(payload, fallback = null) {
+  const hasEncryptedReply =
+    typeof payload?.reply_ephemeral_pub_key === 'string' && payload.reply_ephemeral_pub_key &&
+    typeof payload?.reply_iv === 'string' && payload.reply_iv &&
+    typeof payload?.reply_ciphertext === 'string' && payload.reply_ciphertext
+  if (!hasEncryptedReply) return fallback
+
+  try {
+    const plaintext = await decryptMessage({
+      ephemeralPubKey: payload.reply_ephemeral_pub_key,
+      iv: payload.reply_iv,
+      ciphertext: payload.reply_ciphertext,
+    })
+    return parseReplyReference(plaintext) || fallback
+  } catch (error) {
+    console.warn('[chat] decrypt reply reference failed', error)
+    return fallback
+  }
 }
 
 /**
@@ -584,7 +625,10 @@ export const useChatStore = defineStore('chat', () => {
     // Encrypted storage to IndexedDB
     try {
       await ensureMessageKey()
-      const encryptedText = await encryptMessageText(msg.text, messageEncryptKey)
+      const encryptedText = await encryptMessageText(
+        serializeChatMessageContent(msg.text, msg.reply),
+        messageEncryptKey,
+      )
       await dbAddMessage({
         id: msg.id,
         chatId: chatId,
@@ -642,7 +686,7 @@ export const useChatStore = defineStore('chat', () => {
             const meta = JSON.parse(decryptedText)
             return { ...m, text: null, objectUrl: existingUrls[m.id] || null, ...meta }
           }
-          return { ...m, text: decryptedText, status: restoreOutgoingStatus(m) }
+          return { ...m, ...parseChatMessageContent(decryptedText), status: restoreOutgoingStatus(m) }
         } catch (e) {
           console.warn('[chat] decrypt message failed:', m.id, e)
           return { ...m, text: null, decryptionFailed: true }
@@ -710,7 +754,7 @@ export const useChatStore = defineStore('chat', () => {
             const meta = JSON.parse(decryptedText)
             grouped[cid].push({ ...m, text: null, objectUrl: existingUrls[m.id] || null, ...meta })
           } else {
-            grouped[cid].push({ ...m, text: decryptedText, status: restoreOutgoingStatus(m) })
+            grouped[cid].push({ ...m, ...parseChatMessageContent(decryptedText), status: restoreOutgoingStatus(m) })
           }
         } catch (e) {
           console.warn('[chat] decrypt message failed:', m.id, e)
@@ -766,16 +810,22 @@ export const useChatStore = defineStore('chat', () => {
    * @param {string} recipientPubKey - recipient’s public key (Base64)
    * @param {string} text - plain text
    * @param {boolean} burnAfterRead - burn after reading (automatically deleted 2 hours after the other party reads it)
+   * @param {object|null} reply - encrypted reference to the replied-to message
    */
-  async function sendMessage(toChatId, recipientPubKey, text, burnAfterRead = false) {
+  async function sendMessage(toChatId, recipientPubKey, text, burnAfterRead = false, reply = null) {
     const msgId = genMsgId()
-    const encrypted = await encryptMessage(text, recipientPubKey)
+    const normalizedReply = normalizeReplyReference(reply)
+    const [encrypted, encryptedReply] = await Promise.all([
+      encryptMessage(text, recipientPubKey),
+      encryptReplyReference(normalizedReply, recipientPubKey),
+    ])
 
     // First establish a local pending record to ensure that the corresponding message can be found when the extremely fast ACK arrives.
     await addMessage(toChatId, {
       id: msgId,
       from: 'me',
       text,
+      reply: normalizedReply,
       ts: getServerNow(),
       mine: true,
       read: false,
@@ -790,6 +840,7 @@ export const useChatStore = defineStore('chat', () => {
       ephemeral_pub_key: encrypted.ephemeralPubKey,
       iv: encrypted.iv,
       ciphertext: encrypted.ciphertext,
+      ...replyEncryptionPayload(encryptedReply),
       burn_after_read: burnAfterRead
     }
     const sentNow = send('message', payload)
@@ -815,13 +866,17 @@ export const useChatStore = defineStore('chat', () => {
     if (queued) {
       retryPendingMessage(msgId)
     } else {
-      const encrypted = await encryptMessage(msg.text, recipientPubKey)
+      const [encrypted, encryptedReply] = await Promise.all([
+        encryptMessage(msg.text, recipientPubKey),
+        encryptReplyReference(msg.reply, recipientPubKey),
+      ])
       send('message', {
         to: toChatId,
         msg_id: msgId,
         ephemeral_pub_key: encrypted.ephemeralPubKey,
         iv: encrypted.iv,
         ciphertext: encrypted.ciphertext,
+        ...replyEncryptionPayload(encryptedReply),
         burn_after_read: msg.burnAfterRead || false
       })
       queued = hasPendingMessage(msgId)
@@ -1089,13 +1144,20 @@ export const useChatStore = defineStore('chat', () => {
    * @param {string} recipientPubKey
    * @param {File} file
    * @param {boolean} burnAfterRead - burn after reading (automatically deleted 2 hours after the other party reads it)
-   * @param {{kind?: 'voice', durationMs?: number}} options - encrypted attachment metadata
+   * @param {{kind?: 'voice', durationMs?: number, batchId?: string, batchIndex?: number, batchTotal?: number}} options - encrypted attachment metadata and local batch tracking
    */
   async function sendFile(toChatId, recipientPubKey, file, burnAfterRead = false, options = {}) {
     validateFile(file)
 
     const kind = options.kind === 'voice' ? 'voice' : undefined
     const durationMs = kind === 'voice' ? Math.round(options.durationMs) : undefined
+    const batchId = typeof options.batchId === 'string' && options.batchId ? options.batchId : undefined
+    const batchIndex = Number.isInteger(options.batchIndex) && options.batchIndex >= 0
+      ? options.batchIndex
+      : undefined
+    const batchTotal = Number.isInteger(options.batchTotal) && options.batchTotal > 0
+      ? options.batchTotal
+      : undefined
 
     const transferId = crypto.randomUUID()
     const msgId = genMsgId()  //Message record ID (in read receipt format), separate from the UUID used for WebSocket routing
@@ -1109,6 +1171,9 @@ export const useChatStore = defineStore('chat', () => {
       filetype: file.type,
       kind,
       durationMs,
+      batchId,
+      batchIndex,
+      batchTotal,
       totalChunks: 0,
       progress: 0,
       status: 'pending'
@@ -1195,13 +1260,17 @@ export const useChatStore = defineStore('chat', () => {
       if (!send('file_complete', { to: toChatId, transfer_id: transferId })) {
         throw new Error('Network outage，File completion signal failed to send')
       }
-      fileTransfers.value[transferId].progress = 100
+      // Ciphertext has been uploaded, but the recipient still needs to assemble,
+      // decrypt and persist it. Keep the UI below 100% until file_done arrives.
+      fileTransfers.value[transferId].progress = 95
+      fileTransfers.value[transferId].status = 'processing'
 
       // Wait for the receiving end to confirm that it has been received and decrypted successfully; if it times out or receives a file_error, it will be treated as a failure.
       // The returned ts comes from the receiving end, and both ends display the same
       const doneResult = await doneResultPromise
       if (!doneResult.ok) throw doneResult.error
       const doneTs = doneResult.ts
+      fileTransfers.value[transferId].progress = 100
       fileTransfers.value[transferId].status = 'done'
       scheduleTransferCleanup(transferId, 1000)
 
@@ -1335,11 +1404,13 @@ function validateMsgId(msgId) {
       notifyNewMessage()
 
       try {
-        const text = await decryptMessage({
+        const decryptedContent = await decryptMessage({
           ephemeralPubKey: payload.ephemeral_pub_key,
           iv: payload.iv,
           ciphertext: payload.ciphertext
         })
+        const content = parseChatMessageContent(decryptedContent)
+        content.reply = await decryptReplyReference(payload, content.reply)
         if (recalledMessageIds.has(payload.msg_id)) {
           confirmIncoming('message_received_ack', payload.from, payload.msg_id)
           return
@@ -1347,7 +1418,7 @@ function validateMsgId(msgId) {
         const persisted = await addMessage(payload.from, {
           id: payload.msg_id,
           from: payload.from,
-          text,
+          ...content,
           ts: payload.ts,  //Use server time
           mine: false,
           burnAfterRead: payload.burn_after_read || false,
@@ -1365,6 +1436,9 @@ function validateMsgId(msgId) {
               ephemeral_pub_key: payload.ephemeral_pub_key,
               iv: payload.iv,
               ciphertext: payload.ciphertext,
+              reply_ephemeral_pub_key: payload.reply_ephemeral_pub_key,
+              reply_iv: payload.reply_iv,
+              reply_ciphertext: payload.reply_ciphertext,
               ts: payload.ts,
               burn_after_read: payload.burn_after_read || false
             })
@@ -1894,15 +1968,17 @@ function validateMsgId(msgId) {
           await dbDeletePending(p.msg_id).catch(() => {})
           continue
         }
-        const text = await decryptMessage({
+        const decryptedContent = await decryptMessage({
           ephemeralPubKey: p.ephemeral_pub_key,
           iv: p.iv,
           ciphertext: p.ciphertext
         })
+        const content = parseChatMessageContent(decryptedContent)
+        content.reply = await decryptReplyReference(p, content.reply)
         const persisted = await addMessage(p.from, {
           id: p.msg_id,
           from: p.from,
-          text,
+          ...content,
           ts: p.ts,
           mine: false,
           burnAfterRead: p.burn_after_read || false,

@@ -1,11 +1,11 @@
 <template>
   <q-page ref="pageEl" class="column">
     <!-- Top friend information -->
-    <div class="row items-center q-pa-sm q-gutter-sm bg-grey-2">
+    <div class="chat-peer-bar row items-center q-px-sm q-py-xs q-gutter-sm">
       <deterministic-avatar :seed="friendChatId" :size="32" />
-      <div class="col">
-        <div class="text-subtitle2">{{ friendNickname }}<span class="text-caption text-grey">（{{ friendChatId }}）</span></div>
-        
+      <div class="col chat-peer-identity">
+        <div class="chat-peer-name">{{ friendNickname }}</div>
+        <div class="chat-peer-id">{{ friendChatId }}</div>
       </div>
       <q-icon name="circle" :color="friendOnline ? 'positive' : 'grey-4'" size="12px">
         <q-tooltip>{{ friendOnline ? t("common.online") : t("common.offline") }}</q-tooltip>
@@ -49,14 +49,17 @@
         ref="virtualScrollEl"
         :items="messages"
         :virtual-scroll-item-size="60"
-        class="chat-message-scroll q-pa-md"
+        class="chat-message-scroll q-px-sm q-py-md"
         :style="{ overflowAnchor: 'none', opacity: scrolled ? 1 : 0, transition: 'opacity 0.08s' }"
         v-slot="{ item: msg, index: idx }"
       >
       <div
         :key="msg.id"
         class="row items-end"
-        :class="msg.mine ? 'justify-end' : 'justify-start'"
+        :class="[
+          msg.mine ? 'justify-end' : 'justify-start',
+          { 'message-target-highlight': highlightedMessageId === msg.id },
+        ]"
         :style="{ paddingTop: shouldCompact(messages, idx) ? '2px' : '8px' }"
       >
         <!-- Message from the other party: The avatar is on the left -->
@@ -64,6 +67,15 @@
           <deterministic-avatar v-if="!shouldCompact(messages, idx)" :seed="friendChatId" :size="28" class="avatar-side q-mr-xs" />
           <div v-else class="avatar-placeholder" />
           <div class="q-pa-sm bubble-theirs" :class="{ 'bubble-burn': msg.burnAfterRead }">
+            <button
+              v-if="msg.reply"
+              type="button"
+              class="message-reply-quote message-reply-quote-theirs"
+              @click.stop="scrollToRepliedMessage(msg.reply)"
+            >
+              <span class="message-reply-author">{{ replySenderName(msg.reply) }}</span>
+              <span class="message-reply-preview">{{ replyPreviewText(msg.reply) }}</span>
+            </button>
             <!-- file message -->
             <template v-if="msg.type === 'file'">
               <button
@@ -77,7 +89,7 @@
                 <span class="voice-message-wave">▂▄▆▃▇▅▂▄▆</span>
                 <span>{{ formatVoiceDuration(msg.durationMs) }}</span>
               </button>
-              <img v-else-if="isMsgImage(msg) && msg.objectUrl" :src="msg.objectUrl" class="file-img" @click="imagePreview = { show: true, url: msg.objectUrl }" />
+              <img v-else-if="isMsgImage(msg) && msg.objectUrl" :src="msg.objectUrl" :alt="msg.filename || t('chat.imageMessage')" class="file-img" @click="openImagePreview(msg)" />
               <video v-else-if="isMsgVideo(msg) && msg.objectUrl" :src="msg.objectUrl" controls class="file-video" />
               <div v-else class="file-card file-card-theirs">
                 <span class="file-icon">{{ getFileIcon(msg.filetype, msg.filename) }}</span>
@@ -120,24 +132,31 @@
                 <q-tooltip v-else>{{ t("chat.burnAfterRead") }}</q-tooltip>
               </q-icon>
             </div>
-            <!-- <q-menu context-menu v-if="msg.type !== 'file'">
-              <q-list dense style="min-width: 100px">
-                <q-item v-if="canRecall(msg)" clickable v-close-popup @click="recall(msg)" class="text-negative items-center q-gutter-xs">
-                  <q-icon name="undo" size="sm" />
-                  <span>Delete both sides</span>
-                </q-item>
-                <q-item v-else clickable v-close-popup @click="deleteMsg(msg)" class="text-negative items-center q-gutter-xs">
-                  <q-icon name="delete" size="sm" />
-                  <span>Delete for me</span>
-                </q-item>
-              </q-list>
-            </q-menu> -->
+            <message-action-menu
+              :can-reply="canReply(msg)"
+              :can-copy="canCopy(msg)"
+              :can-delete="canDeleteMessage(msg)"
+              :can-recall="false"
+              :can-retry="false"
+              @reply="startReply(msg)"
+              @copy="copyMessage(msg)"
+              @delete="deleteMsg(msg)"
+            />
           </div>
         </template>
 
         <!-- My message: Avatar is on the right -->
         <template v-else>
           <div class="q-pa-sm bubble-mine" :class="{ 'bubble-burn': msg.burnAfterRead }">
+            <button
+              v-if="msg.reply"
+              type="button"
+              class="message-reply-quote message-reply-quote-mine"
+              @click.stop="scrollToRepliedMessage(msg.reply)"
+            >
+              <span class="message-reply-author">{{ replySenderName(msg.reply) }}</span>
+              <span class="message-reply-preview">{{ replyPreviewText(msg.reply) }}</span>
+            </button>
             <!-- file message -->
             <template v-if="msg.type === 'file'">
               <button
@@ -151,7 +170,7 @@
                 <span class="voice-message-wave">▂▄▆▃▇▅▂▄▆</span>
                 <span>{{ formatVoiceDuration(msg.durationMs) }}</span>
               </button>
-              <img v-else-if="isMsgImage(msg) && msg.objectUrl" :src="msg.objectUrl" class="file-img" @click="imagePreview = { show: true, url: msg.objectUrl }" />
+              <img v-else-if="isMsgImage(msg) && msg.objectUrl" :src="msg.objectUrl" :alt="msg.filename || t('chat.imageMessage')" class="file-img" @click="openImagePreview(msg)" />
               <video v-else-if="isMsgVideo(msg) && msg.objectUrl" :src="msg.objectUrl" controls class="file-video" />
               <div v-else class="file-card file-card-mine">
                 <span class="file-icon">{{ getFileIcon(msg.filetype, msg.filename) }}</span>
@@ -224,28 +243,18 @@
                 <q-tooltip v-else>{{ t("chat.burnUnread") }}</q-tooltip>
               </q-icon>
             </div>
-            <q-menu v-if="msg.status !== 'pending'" context-menu>
-              <q-list dense style="min-width: 100px">
-                <q-item
-                  v-if="msg.type !== 'file' && (msg.status === 'queued' || msg.status === 'failed')"
-                  clickable
-                  v-close-popup
-                  @click="retryMsg(msg)"
-                  class="text-primary items-center q-gutter-xs"
-                >
-                  <q-icon name="refresh" size="sm" />
-                  <span>{{ t("chat.resend") }}</span>
-                </q-item>
-                <q-item v-if="canRecall(msg)" clickable v-close-popup @click="recall(msg)" class="text-negative items-center q-gutter-xs">
-                  <q-icon name="undo" size="sm" />
-                  <span>{{ t("chat.deleteBoth") }}</span>
-                </q-item>
-                <q-item v-else clickable v-close-popup @click="deleteMsg(msg)" class="text-negative items-center q-gutter-xs">
-                  <q-icon name="delete" size="sm" />
-                  <span>{{ t("chat.deleteMine") }}</span>
-                </q-item>
-              </q-list>
-            </q-menu>
+            <message-action-menu
+              :can-reply="canReply(msg)"
+              :can-copy="canCopy(msg)"
+              :can-delete="canDeleteMessage(msg)"
+              :can-recall="canRecall(msg)"
+              :can-retry="msg.type !== 'file' && (msg.status === 'queued' || msg.status === 'failed')"
+              @reply="startReply(msg)"
+              @copy="copyMessage(msg)"
+              @retry="retryMsg(msg)"
+              @delete="deleteMsg(msg)"
+              @recall="recall(msg)"
+            />
           </div>
           <deterministic-avatar v-if="!shouldCompact(messages, idx)" :seed="identityStore.chatId" :size="28" class="avatar-side q-ml-xs" />
           <div v-else class="avatar-placeholder" />
@@ -296,9 +305,116 @@
       <q-btn flat round dense icon="close" size="sm" :aria-label="t('chat.closeBurn')" @click="burnMode = false" />
     </div>
 
+    <div v-if="replyTarget" class="reply-composer-bar">
+      <q-icon name="reply" size="19px" color="primary" />
+      <div class="reply-composer-content">
+        <div class="reply-composer-title">{{ t('chat.replyingTo', { name: replySenderName(replyTarget) }) }}</div>
+        <div class="reply-composer-preview">{{ replyPreviewText(replyTarget) }}</div>
+      </div>
+      <q-btn
+        flat
+        round
+        dense
+        icon="close"
+        size="sm"
+        :aria-label="t('chat.cancelReply')"
+        @click="cancelReply"
+      />
+    </div>
+
+    <div v-if="selectedImages.length || imageBatch.sending || imageProcessing.active" class="image-selection-tray">
+      <div class="image-selection-header">
+        <div class="image-selection-title">
+          <q-icon name="photo_library" color="primary" size="19px" />
+          <span>{{ imageSelectionSummary }}</span>
+        </div>
+        <q-btn
+          v-if="!imageBatch.sending && !imageProcessing.active"
+          flat
+          dense
+          no-caps
+          color="grey-7"
+          :label="t('chat.clearImages')"
+          @click="clearSelectedImages"
+        />
+      </div>
+
+      <div v-if="selectedImages.length && !imageBatch.sending" class="image-send-options">
+        <div class="image-send-mode" role="group" :aria-label="t('chat.imageSendQuality')">
+          <button
+            type="button"
+            :class="{ active: imageSendMode === 'high_quality' }"
+            :disabled="imageProcessing.active"
+            @click="setImageSendMode('high_quality')"
+          >{{ t('chat.highQuality') }}</button>
+          <button
+            type="button"
+            :class="{ active: imageSendMode === 'original' }"
+            :disabled="imageProcessing.active"
+            @click="setImageSendMode('original')"
+          >{{ t('chat.originalImage') }}</button>
+        </div>
+        <span v-if="imageSendMode === 'original' && originalOversizeCount" class="image-original-warning">
+          {{ t('chat.originalImageTooLarge', { count: originalOversizeCount, maxSize: formatFileSize(MAX_IMAGE_FILE_BYTES) }) }}
+        </span>
+      </div>
+
+      <div v-if="selectedImages.length" class="image-selection-list">
+        <div v-for="item in selectedImages" :key="item.id" class="image-selection-item">
+          <img :src="item.previewUrl" :alt="selectedImageFile(item).name" />
+          <button
+            v-if="!imageBatch.sending && !imageProcessing.active"
+            type="button"
+            class="image-selection-remove"
+            :aria-label="t('chat.removeImage', { name: selectedImageFile(item).name })"
+            @click="removeSelectedImage(item.id)"
+          >
+            <q-icon name="close" size="16px" />
+          </button>
+          <span class="image-selection-name">{{ selectedImageFile(item).name }}</span>
+          <span class="image-selection-size">{{ formatFileSize(selectedImageFile(item).size) }}</span>
+        </div>
+      </div>
+
+      <div v-if="imageProcessing.active" class="image-batch-progress">
+        <div class="row items-center no-wrap q-gutter-xs">
+          <span class="col ellipsis">{{ t('chat.processingImages', { current: imageProcessing.current, total: imageProcessing.total }) }}</span>
+        </div>
+        <q-linear-progress indeterminate rounded color="primary" />
+      </div>
+      <div v-else-if="imageBatch.sending" class="image-batch-progress">
+        <div class="row items-center no-wrap q-gutter-xs">
+          <span class="col ellipsis">{{ t('chat.sendingImages', { current: imageBatch.current, total: imageBatch.total }) }}</span>
+          <strong>{{ imageBatchProgress }}%</strong>
+        </div>
+        <q-linear-progress :value="imageBatchProgress / 100" rounded color="primary" />
+      </div>
+      <div v-else class="image-selection-footer">
+        <span>{{ t('chat.imageSelectionHint') }}</span>
+        <q-btn
+          unelevated
+          no-caps
+          rounded
+          color="primary"
+          icon="send"
+          :label="t('chat.sendImages', { count: selectedImages.length })"
+          :disable="!selectedImages.length || isTransferring || imageSendBlocked"
+          @click="sendSelectedImages"
+        />
+      </div>
+    </div>
+
     <!-- Compact dynamic input bar -->
     <div class="chat-composer bg-white">
-      <!-- Hidden file picker -->
+      <!-- Hidden image/file pickers -->
+      <input
+        ref="imageInputEl"
+        type="file"
+        multiple
+        style="display: none"
+        accept=".jpg,.jpeg,.png,.gif,.webp,.bmp,image/jpeg,image/png,image/gif,image/webp,image/bmp"
+        @change="onImagesSelected"
+      />
       <input
         ref="fileInputEl"
         type="file"
@@ -343,6 +459,7 @@
         :placeholder="t('chat.inputPlaceholder')"
         class="composer-input"
         @keyup.enter="sendMsg"
+        @keyup.esc="cancelReply"
         @focus="morePanelOpen = false"
         :disable="sending || voiceSending || voiceRecording"
       />
@@ -383,7 +500,7 @@
         dense
         :icon="morePanelOpen ? 'close' : 'add'"
         color="grey-7"
-        :disable="sending || voiceSending || voicePreparing || voiceRecording || isTransferring"
+        :disable="sending || voiceSending || voicePreparing || voiceRecording || isTransferring || imageProcessing.active"
         :aria-label="t('chat.more')"
         @click="toggleMorePanel"
       />
@@ -394,7 +511,17 @@
         <button
           type="button"
           class="composer-more-action"
-          :disabled="sending || voiceSending || voiceRecording || isTransferring"
+          :disabled="sending || voiceSending || voiceRecording || imageBatch.sending || imageProcessing.active"
+          @click="openImagePicker"
+        >
+          <span class="composer-more-icon"><q-icon name="photo_library" size="26px" /></span>
+          <span>{{ t("chat.images") }}</span>
+          <small>{{ t("chat.imagePickerHint") }}</small>
+        </button>
+        <button
+          type="button"
+          class="composer-more-action"
+          :disabled="sending || voiceSending || voiceRecording || isTransferring || imageProcessing.active"
           @click="openFilePicker"
         >
           <span class="composer-more-icon"><q-icon name="attach_file" size="26px" /></span>
@@ -414,19 +541,19 @@
       </div>
     </q-slide-transition>
 
-    <!-- Picture full screen preview -->
-    <q-dialog v-model="imagePreview.show" maximized>
-      <q-card class="bg-black column items-center justify-center" style="cursor: zoom-out" @click="imagePreview.show = false">
-        <img :src="imagePreview.url" style="max-width: 100%; max-height: 100vh; object-fit: contain" />
-      </q-card>
-    </q-dialog>
+    <image-gallery-dialog
+      v-model="imagePreview.show"
+      :images="galleryImages"
+      :start-id="imagePreview.startId"
+      @download="downloadGalleryImage"
+    />
   </q-page>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { useQuasar } from 'quasar'
+import { copyToClipboard, useQuasar } from 'quasar'
 import { useChatStore } from 'src/stores/chat'
 import { useIdentityStore } from 'src/stores/identity'
 import { useCallStore } from 'src/stores/call'
@@ -440,8 +567,21 @@ import {
   formatVoiceDuration,
 } from 'src/services/voice-recorder.mjs'
 import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
+import ImageGalleryDialog from 'src/components/ImageGalleryDialog.vue'
+import MessageActionMenu from 'src/components/MessageActionMenu.vue'
 import { useI18n } from 'src/i18n'
 import { loadBurnMode, saveBurnMode } from 'src/services/chat-preferences.mjs'
+import { normalizeReplyReference } from 'src/services/chat-message-content.mjs'
+import {
+  MAX_IMAGE_BATCH_BYTES,
+  MAX_IMAGE_FILE_BYTES,
+  MAX_IMAGE_SELECTION,
+  MAX_IMAGE_SOURCE_BYTES,
+  imageSelectionKey,
+  inferImageMimeType,
+  mergeImageSelection,
+} from 'src/services/image-selection.mjs'
+import { compressImageForSending } from 'src/services/image-compression.mjs'
 import { createChatWatermark } from 'src/services/chat-watermark.mjs'
 import { setSecureScreen } from 'src/services/chat-service-plugin'
 import { saveObjectUrlWithTauri, triggerBrowserDownload } from 'src/services/file-download.mjs'
@@ -494,11 +634,14 @@ if (!CHAT_ID_PATTERN.test(friendChatId)) {
 const virtualScrollEl = ref(null)
 const pageEl = ref(null)
 const inputEl = ref(null)
+const imageInputEl = ref(null)
 const fileInputEl = ref(null)
 const inputText = ref('')
 const sending = ref(false)
 const retryingMessageId = ref(null)
 const burnMode = ref(loadBurnMode(identityStore.chatId, friendChatId))
+const replyTarget = ref(null)
+const highlightedMessageId = ref(null)
 const voiceInputMode = ref(false)
 const morePanelOpen = ref(false)
 const hasInputText = computed(() => inputText.value.trim().length > 0)
@@ -512,7 +655,41 @@ let nowTimer = null
 let nudgeTimer = null
 let heightResizeObserver = null
 let rafNudgeId = null
-const imagePreview = ref({ show: false, url: '' })
+let highlightTimer = null
+const imagePreview = ref({ show: false, startId: '' })
+const selectedImages = ref([])
+const imageSendMode = ref('high_quality')
+const imageProcessing = ref({ active: false, current: 0, total: 0 })
+const imageBatch = ref({
+  sending: false,
+  id: '',
+  current: 0,
+  total: 0,
+  completedBytes: 0,
+  totalBytes: 0,
+})
+function selectedImageFile(item) {
+  return imageSendMode.value === 'original' ? item.originalFile : item.preparedFile
+}
+const selectedImageBytes = computed(() => selectedImages.value.reduce((sum, item) => sum + selectedImageFile(item).size, 0))
+const selectedImageOriginalBytes = computed(() => selectedImages.value.reduce((sum, item) => sum + item.originalFile.size, 0))
+const hasCompressedImages = computed(() => selectedImages.value.some(item => item.compressed))
+const originalOversizeCount = computed(() => selectedImages.value.filter(item => item.originalFile.size > MAX_IMAGE_FILE_BYTES).length)
+const imageSendBlocked = computed(() =>
+  imageProcessing.value.active ||
+  (imageSendMode.value === 'original' && originalOversizeCount.value > 0) ||
+  selectedImageBytes.value > MAX_IMAGE_BATCH_BYTES
+)
+const imageSelectionSummary = computed(() => {
+  const params = {
+    count: selectedImages.value.length,
+    original: formatFileSize(selectedImageOriginalBytes.value),
+    size: formatFileSize(selectedImageBytes.value),
+  }
+  return imageSendMode.value === 'high_quality' && hasCompressedImages.value
+    ? t('chat.selectedImagesCompressed', params)
+    : t('chat.selectedImages', params)
+})
 const voicePreparing = ref(false)
 const voiceRecording = ref(false)
 const voiceCancelling = ref(false)
@@ -537,6 +714,7 @@ let voiceAudioContext = null
 let voiceAnalyser = null
 let voiceLevelFrame = null
 let voicePlayer = null
+let chatPageUnmounted = false
 
 // Allowed file types (for input accept attribute)
 const allowedFileTypes = [
@@ -673,6 +851,12 @@ function toggleMorePanel() {
 function openFilePicker() {
   morePanelOpen.value = false
   fileInputEl.value?.click()
+}
+
+function openImagePicker() {
+  if (imageProcessing.value.active || imageBatch.value.sending) return
+  morePanelOpen.value = false
+  imageInputEl.value?.click()
 }
 
 function toggleBurnMode() {
@@ -919,6 +1103,20 @@ const isTransferring = computed(() =>
   )
 )
 
+const imageBatchProgress = computed(() => {
+  const batch = imageBatch.value
+  if (!batch.sending || !batch.totalBytes) return 0
+  const currentTransfer = Object.values(chatStore.fileTransfers).find(transfer =>
+    transfer.batchId === batch.id &&
+    transfer.batchIndex === batch.current - 1 &&
+    transfer.status !== 'done'
+  )
+  const currentBytes = currentTransfer
+    ? currentTransfer.filesize * Math.max(0, Math.min(100, currentTransfer.progress || 0)) / 100
+    : 0
+  return Math.min(100, Math.round((batch.completedBytes + currentBytes) / batch.totalBytes * 100))
+})
+
 // ── Expression Panel ────────────────────────────────────────────────
 const emojiTab = ref('face')
 
@@ -984,6 +1182,23 @@ const friendOnline = ref(false)
 const friendPubKey = ref(identityStore.getFriendPubKey(friendChatId) || '')
 
 const messages = computed(() => chatStore.getMessages(friendChatId))
+const galleryImages = computed(() => messages.value
+  .filter(message => isMsgImage(message) && message.objectUrl)
+  .map(message => ({
+    id: message.id,
+    url: message.objectUrl,
+    name: message.filename || t('chat.imageMessage'),
+  })))
+
+function openImagePreview(message) {
+  if (!message?.id || !message.objectUrl) return
+  imagePreview.value = { show: true, startId: message.id }
+}
+
+function downloadGalleryImage(image) {
+  const message = messages.value.find(item => item.id === image?.id)
+  if (message) downloadFile(message)
+}
 
 let stopStatus = null
 
@@ -995,6 +1210,7 @@ function handleVoiceVisibilityChange() {
 }
 
 onMounted(async () => {
+  chatPageUnmounted = false
   // Android uses the native FLAG_SECURE only while the chat page is visible.
   // H5 and desktop builds use a no-op implementation and retain the traceable watermark.
   setSecureScreen(true)
@@ -1023,6 +1239,7 @@ onMounted(async () => {
     if (footer) heightResizeObserver.observe(footer)
   }
   window.addEventListener('resize', updatePageHeight)
+  window.visualViewport?.addEventListener('resize', updatePageHeight)
   document.addEventListener('visibilitychange', handleVoiceVisibilityChange)
 
   // Loading messages - scroll to the end as soon as the message arrives, without waiting for subsequent network requests
@@ -1070,19 +1287,24 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  chatPageUnmounted = true
   setSecureScreen(false)
   stopStatus && stopStatus()
   if (nowTimer) { clearTimeout(nowTimer); nowTimer = null }
   if (nudgeTimer) { clearInterval(nudgeTimer); nudgeTimer = null }
+  if (highlightTimer) { clearTimeout(highlightTimer); highlightTimer = null }
   cancelRafNudge()
   if (heightResizeObserver) { heightResizeObserver.disconnect(); heightResizeObserver = null }
   window.removeEventListener('resize', updatePageHeight)
+  window.visualViewport?.removeEventListener('resize', updatePageHeight)
   document.removeEventListener('visibilitychange', handleVoiceVisibilityChange)
   voicePointerHeld = false
   removeVoicePointerListeners()
   if (voiceRecording.value) finishVoiceRecording(true)
   else stopVoiceCaptureResources()
   if (voicePlayer) { voicePlayer.pause(); voicePlayer = null }
+  selectedImages.value.forEach(disposeSelectedImage)
+  selectedImages.value = []
   for (const timer of downloadResetTimers) clearTimeout(timer)
   downloadResetTimers.clear()
 })
@@ -1143,6 +1365,244 @@ function onStatusUpdate(callback) {
 
 // ── File sending ───────────────────────────────────────────────
 
+const IMAGE_REJECTION_KEYS = {
+  not_image: 'imageRejectedType',
+  file_size: 'imageRejectedSourceSize',
+  duplicate: 'imageRejectedDuplicate',
+  count: 'imageRejectedCount',
+  total_size: 'imageRejectedTotalSize',
+  invalid_metadata: 'imageRejectedType',
+  output_size: 'imageRejectedOutputSize',
+  dimensions_too_large: 'imageRejectedDimensions',
+  compression_failed: 'imageCompressionFailed',
+  compression_fallback: 'imageCompressionFallback',
+}
+
+function normalizedImageFile(file) {
+  if (file.type) return file
+  const inferredType = inferImageMimeType(file.name)
+  if (!inferredType) return file
+  return new File([file], file.name, {
+    type: inferredType,
+    lastModified: file.lastModified,
+  })
+}
+
+function notifyImageRejections(rejected) {
+  if (!rejected.length) return
+  const counts = new Map()
+  for (const item of rejected) {
+    counts.set(item.reason, (counts.get(item.reason) || 0) + 1)
+  }
+  const details = [...counts.entries()].map(([reason, count]) => t(
+    `chat.${IMAGE_REJECTION_KEYS[reason] || 'imageRejectedType'}`,
+    {
+      count,
+      maxCount: MAX_IMAGE_SELECTION,
+      maxSize: formatFileSize(MAX_IMAGE_FILE_BYTES),
+      maxSource: formatFileSize(MAX_IMAGE_SOURCE_BYTES),
+      maxTotal: formatFileSize(MAX_IMAGE_BATCH_BYTES),
+    },
+  ))
+  $q.notify({
+    type: 'warning',
+    icon: 'image_not_supported',
+    message: details.join(locale.value === 'zh-CN' ? '；' : '; '),
+    timeout: 4200,
+  })
+}
+
+function setImageSendMode(mode) {
+  if (imageProcessing.value.active || imageBatch.value.sending) return
+  imageSendMode.value = mode === 'original' ? 'original' : 'high_quality'
+}
+
+async function onImagesSelected(event) {
+  const incoming = Array.from(event.target.files || [], normalizedImageFile)
+  event.target.value = ''
+  if (!incoming.length || imageProcessing.value.active || imageBatch.value.sending) return
+
+  const existingByKey = new Map(selectedImages.value.map(item => [imageSelectionKey(item.originalFile), item]))
+  const merged = mergeImageSelection(selectedImages.value.map(item => item.originalFile), incoming)
+  const nextItems = []
+  const rejected = [...merged.rejected]
+  const newFiles = merged.files.filter(file => !existingByKey.has(imageSelectionKey(file)))
+
+  morePanelOpen.value = false
+  imageProcessing.value = { active: newFiles.length > 0, current: 0, total: newFiles.length }
+  try {
+    for (const file of merged.files) {
+      const existing = existingByKey.get(imageSelectionKey(file))
+      if (existing) {
+        nextItems.push(existing)
+        continue
+      }
+      if (chatPageUnmounted) break
+
+      imageProcessing.value.current++
+      try {
+        const prepared = await compressImageForSending(file)
+        if (prepared.file.size > MAX_IMAGE_FILE_BYTES) {
+          rejected.push({ file, reason: 'output_size' })
+          continue
+        }
+        chatStore.validateFile(prepared.file)
+        nextItems.push({
+          id: crypto.randomUUID(),
+          originalFile: file,
+          preparedFile: prepared.file,
+          compressed: prepared.compressed,
+          previewUrl: URL.createObjectURL(prepared.file),
+        })
+      } catch (error) {
+        if (error?.code === 'dimensions_too_large') {
+          rejected.push({ file, reason: 'dimensions_too_large' })
+          continue
+        }
+        if (file.size <= MAX_IMAGE_FILE_BYTES) {
+          try {
+            chatStore.validateFile(file)
+            nextItems.push({
+              id: crypto.randomUUID(),
+              originalFile: file,
+              preparedFile: file,
+              compressed: false,
+              previewUrl: URL.createObjectURL(file),
+            })
+            rejected.push({ file, reason: 'compression_fallback' })
+            continue
+          } catch {
+            // Fall through to the explicit compression failure below.
+          }
+        }
+        rejected.push({ file, reason: 'compression_failed' })
+      }
+    }
+  } finally {
+    imageProcessing.value = { active: false, current: 0, total: 0 }
+  }
+
+  if (chatPageUnmounted) {
+    nextItems.forEach(disposeSelectedImage)
+    return
+  }
+  selectedImages.value = nextItems
+  notifyImageRejections(rejected)
+}
+
+function disposeSelectedImage(item) {
+  if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl)
+}
+
+function removeSelectedImage(id) {
+  if (imageBatch.value.sending || imageProcessing.value.active) return
+  const index = selectedImages.value.findIndex(item => item.id === id)
+  if (index < 0) return
+  const [item] = selectedImages.value.splice(index, 1)
+  disposeSelectedImage(item)
+}
+
+function clearSelectedImages() {
+  if (imageBatch.value.sending || imageProcessing.value.active) return
+  selectedImages.value.forEach(disposeSelectedImage)
+  selectedImages.value = []
+}
+
+function consumeSelectedImage(id) {
+  const index = selectedImages.value.findIndex(item => item.id === id)
+  if (index < 0) return
+  const [item] = selectedImages.value.splice(index, 1)
+  disposeSelectedImage(item)
+}
+
+async function sendSelectedImages() {
+  if (imageBatch.value.sending || imageProcessing.value.active || isTransferring.value || !selectedImages.value.length) return
+  if (imageSendBlocked.value) {
+    $q.notify({
+      type: 'warning',
+      message: t('chat.originalImageTooLarge', {
+        count: originalOversizeCount.value,
+        maxSize: formatFileSize(MAX_IMAGE_FILE_BYTES),
+      }),
+    })
+    return
+  }
+  if (!friendPubKey.value) {
+    $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
+    return
+  }
+
+  const queue = selectedImages.value.map(item => ({ ...item, file: selectedImageFile(item) }))
+  const recipientKey = friendPubKey.value
+  const batchId = crypto.randomUUID()
+  const batchTotalBytes = queue.reduce((sum, item) => sum + item.file.size, 0)
+  const burnAfterRead = burnMode.value
+  let completed = 0
+  let failed = false
+
+  morePanelOpen.value = false
+  imageBatch.value = {
+    sending: true,
+    id: batchId,
+    current: 1,
+    total: queue.length,
+    completedBytes: 0,
+    totalBytes: batchTotalBytes,
+  }
+
+  try {
+    for (let index = 0; index < queue.length; index++) {
+      if (chatPageUnmounted) break
+      const item = queue[index]
+      imageBatch.value.current = index + 1
+      try {
+        await chatStore.sendFile(
+          friendChatId,
+          recipientKey,
+          item.file,
+          burnAfterRead,
+          { batchId, batchIndex: index, batchTotal: queue.length },
+        )
+        completed++
+        imageBatch.value.completedBytes += item.file.size
+        consumeSelectedImage(item.id)
+      } catch (error) {
+        failed = true
+        consumeSelectedImage(item.id)
+        if (!chatPageUnmounted) {
+          $q.notify({
+            type: 'negative',
+            message: t('chat.imageBatchFailed', {
+              name: item.file.name,
+              error: error?.message || t('chat.unknownError'),
+            }),
+            timeout: 5000,
+          })
+        }
+        break
+      }
+    }
+
+    if (!failed && completed === queue.length && !chatPageUnmounted) {
+      $q.notify({
+        type: 'positive',
+        icon: 'done_all',
+        message: t('chat.imagesSent', { count: completed }),
+        timeout: 1800,
+      })
+    }
+  } finally {
+    imageBatch.value = {
+      sending: false,
+      id: '',
+      current: 0,
+      total: 0,
+      completedBytes: 0,
+      totalBytes: 0,
+    }
+  }
+}
+
 function onFileSelected(e) {
   const file = e.target.files?.[0]
   e.target.value = ''  //Allow repeated selection of the same file
@@ -1194,16 +1654,26 @@ async function sendMsg(event) {
     return
   }
   sending.value = true
+  const pendingReply = replyTarget.value
   inputText.value = ''
+  replyTarget.value = null
   try {
-    const ok = await chatStore.sendMessage(friendChatId, friendPubKey.value, text, burnMode.value)
+    const ok = await chatStore.sendMessage(
+      friendChatId,
+      friendPubKey.value,
+      text,
+      burnMode.value,
+      pendingReply,
+    )
     if (!ok) {
       $q.notify({ type: 'warning', message: t('chat.messageSendFailed') })
       inputText.value = text
+      replyTarget.value = pendingReply
     }
   } catch (e) {
     $q.notify({ type: 'negative', message: t('chat.messageSendError', { error: e.message }) })
     inputText.value = text
+    replyTarget.value = pendingReply
   } finally {
     sending.value = false
   }
@@ -1251,15 +1721,119 @@ function messageFailureText(msg) {
 const RECALL_LIMIT_MS = 144 * 60 * 60 * 1000 //Can be withdrawn within 144 hours (6 days)
 
 function canRecall(msg) {
-  return Date.now() - msg.ts < RECALL_LIMIT_MS
+  return Boolean(
+    msg?.mine &&
+    msg.status === 'sent' &&
+    Number.isFinite(msg.ts) &&
+    getServerNow() - msg.ts < RECALL_LIMIT_MS,
+  )
 }
 
-function recall(msg) {
-  chatStore.recallMessage(friendChatId, msg.id, friendChatId)
+function canReply(msg) {
+  return Boolean(msg?.id && !msg.decryptionFailed)
 }
 
-function deleteMsg(msg) {
-  chatStore.recallMessage(friendChatId, msg.id, null)
+function canCopy(msg) {
+  return Boolean(msg?.type !== 'file' && typeof msg?.text === 'string' && !msg.decryptionFailed)
+}
+
+function canDeleteMessage(msg) {
+  return Boolean(msg?.id && msg.status !== 'pending')
+}
+
+function messageReplyKind(msg) {
+  if (msg.burnAfterRead) return 'burn'
+  if (isMsgVoice(msg)) return 'voice'
+  if (isMsgImage(msg)) return 'image'
+  if (isMsgVideo(msg)) return 'video'
+  if (msg.type === 'file') return 'file'
+  return 'text'
+}
+
+function startReply(msg) {
+  if (!canReply(msg)) return
+  const kind = messageReplyKind(msg)
+  const reply = normalizeReplyReference({
+    messageId: msg.id,
+    senderId: msg.mine ? identityStore.chatId : friendChatId,
+    kind,
+    preview: kind === 'text' ? msg.text : (msg.filename || ''),
+  })
+  if (!reply) return
+
+  replyTarget.value = reply
+  voiceInputMode.value = false
+  morePanelOpen.value = false
+  nextTick(() => inputEl.value?.focus?.())
+}
+
+function cancelReply() {
+  replyTarget.value = null
+}
+
+function replySenderName(reply) {
+  if (reply?.senderId === identityStore.chatId) return t('chat.you')
+  if (reply?.senderId === friendChatId) return friendNickname.value
+  return reply?.senderId || t('chat.unknownSender')
+}
+
+function replyPreviewText(reply) {
+  if (!reply) return ''
+  if (reply.kind === 'burn') return t('chat.burnMessage')
+  if (reply.kind === 'voice') return t('chat.voiceMessage')
+  if (reply.kind === 'image') return reply.preview || t('chat.imageMessage')
+  if (reply.kind === 'video') return reply.preview || t('chat.videoMessage')
+  if (reply.kind === 'file') return reply.preview || t('chat.fileMessage')
+  return reply.preview || t('chat.originalUnavailable')
+}
+
+function scrollToRepliedMessage(reply) {
+  const index = messages.value.findIndex(message => message.id === reply?.messageId)
+  if (index < 0) {
+    $q.notify({ type: 'info', message: t('chat.originalNotFound'), timeout: 1800 })
+    return
+  }
+
+  highlightedMessageId.value = reply.messageId
+  virtualScrollEl.value?.scrollTo(index, 'center-force')
+  if (highlightTimer) clearTimeout(highlightTimer)
+  highlightTimer = setTimeout(() => {
+    highlightedMessageId.value = null
+    highlightTimer = null
+  }, 1600)
+}
+
+async function copyMessage(msg) {
+  if (!canCopy(msg)) return
+  try {
+    await copyToClipboard(msg.text)
+    $q.notify({ type: 'positive', message: t('chat.messageCopied'), timeout: 1200 })
+  } catch (error) {
+    $q.notify({
+      type: 'negative',
+      message: t('chat.copyFailed', { error: error?.message || t('chat.unknownError') }),
+    })
+  }
+}
+
+async function recall(msg) {
+  if (!canRecall(msg)) return
+  try {
+    await chatStore.recallMessage(friendChatId, msg.id, friendChatId)
+    $q.notify({ type: 'positive', message: t('chat.messageRecalled'), timeout: 1200 })
+  } catch (error) {
+    $q.notify({ type: 'negative', message: t('chat.actionFailed') })
+  }
+}
+
+async function deleteMsg(msg) {
+  if (!canDeleteMessage(msg)) return
+  try {
+    await chatStore.recallMessage(friendChatId, msg.id, null)
+    $q.notify({ type: 'positive', message: t('chat.messageDeleted'), timeout: 1200 })
+  } catch (error) {
+    $q.notify({ type: 'negative', message: t('chat.actionFailed') })
+  }
 }
 
 function clearHistory() {
@@ -1286,7 +1860,8 @@ function updatePageHeight() {
   const footer = document.querySelector('.q-footer')
   const headerH = header ? Math.round(header.getBoundingClientRect().height) : 0
   const footerH = footer ? Math.round(footer.getBoundingClientRect().height) : 0
-  el.style.height = `calc(100vh - ${headerH + footerH}px)`
+  const viewportHeight = Math.round(window.visualViewport?.height || window.innerHeight)
+  el.style.height = `${Math.max(0, viewportHeight - headerH - footerH)}px`
   // After height change, light alignment to avoid gaps if user is near the bottom
   if (isNearBottom()) nudgeToBottom()
 }
@@ -1387,11 +1962,39 @@ function shouldCompact(msgs, idx) {
 </script>
 
 <style scoped>
+.chat-peer-bar {
+  min-height: 50px;
+  flex: 0 0 auto;
+  background: rgba(255, 255, 255, 0.96);
+  border-bottom: 1px solid #e7ebf0;
+  box-shadow: 0 2px 8px rgba(31, 55, 78, 0.05);
+}
+.chat-peer-identity {
+  min-width: 0;
+  line-height: 1.2;
+}
+.chat-peer-name {
+  overflow: hidden;
+  color: #263238;
+  font-size: 14px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-peer-id {
+  margin-top: 2px;
+  color: #8b96a3;
+  font-size: 10px;
+  letter-spacing: 0.35px;
+}
 .chat-message-area {
   position: relative;
   min-height: 0;
   overflow: hidden;
   isolation: isolate;
+  background-color: #f8fafc;
+  background-image: radial-gradient(circle at 1px 1px, rgba(25, 118, 210, 0.035) 1px, transparent 0);
+  background-size: 18px 18px;
 }
 .chat-message-scroll {
   position: relative;
@@ -1482,13 +2085,171 @@ function shouldCompact(msgs, idx) {
   flex: 1;
   min-width: 0;
 }
+.reply-composer-bar {
+  min-height: 48px;
+  padding: 5px 8px 5px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #f7f9fc;
+  border-top: 1px solid #e3e8ef;
+}
+.reply-composer-content {
+  flex: 1;
+  min-width: 0;
+  padding-left: 8px;
+  border-left: 3px solid #1976d2;
+}
+.reply-composer-title {
+  color: #1565c0;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.reply-composer-preview {
+  overflow: hidden;
+  color: #616161;
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.image-selection-tray {
+  flex: 0 0 auto;
+  padding: 9px 10px 10px;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+}
+.image-selection-header,
+.image-selection-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.image-selection-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #455a64;
+  font-size: 12px;
+  font-weight: 600;
+}
+.image-send-options {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.image-send-mode {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 10px;
+  background: #e7edf3;
+}
+.image-send-mode button {
+  min-height: 27px;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #607d8b;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.image-send-mode button.active {
+  background: #fff;
+  color: #1565c0;
+  font-weight: 650;
+  box-shadow: 0 1px 4px rgba(38, 50, 56, 0.14);
+}
+.image-send-mode button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.image-original-warning {
+  color: #c62828;
+  font-size: 10px;
+  line-height: 1.3;
+}
+.image-selection-list {
+  margin: 7px -2px 8px;
+  padding: 2px;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+.image-selection-item {
+  position: relative;
+  width: 68px;
+  flex: 0 0 68px;
+}
+.image-selection-item img {
+  width: 68px;
+  height: 68px;
+  display: block;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid #d9e2ec;
+  background: #e9eef3;
+}
+.image-selection-remove {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 23px;
+  height: 23px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 2px solid white;
+  border-radius: 50%;
+  background: #455a64;
+  color: white;
+  cursor: pointer;
+}
+.image-selection-name {
+  margin-top: 3px;
+  display: block;
+  overflow: hidden;
+  color: #78909c;
+  font-size: 9px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.image-selection-size {
+  display: block;
+  color: #90a4ae;
+  font-size: 9px;
+  line-height: 1.2;
+  text-align: center;
+}
+.image-selection-footer {
+  color: #8794a1;
+  font-size: 10px;
+}
+.image-batch-progress {
+  color: #546e7a;
+  font-size: 11px;
+}
+.image-batch-progress .q-linear-progress {
+  height: 5px;
+  margin-top: 5px;
+}
 .chat-composer {
   min-height: 54px;
   padding: 6px 8px;
   display: flex;
   align-items: center;
   gap: 4px;
-  border-top: 1px solid #eee;
+  border-top: 1px solid #e2e8f0;
+  box-shadow: 0 -4px 12px rgba(31, 55, 78, 0.05);
 }
 .chat-composer :deep(.q-btn) {
   flex: 0 0 auto;
@@ -1524,16 +2285,17 @@ function shouldCompact(msgs, idx) {
   cursor: default;
 }
 .composer-more-panel {
-  min-height: 118px;
-  padding: 14px 16px 16px;
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
+  min-height: 116px;
+  padding: 13px 10px 16px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+  gap: 6px;
   background: #f6f7f9;
   border-top: 1px solid #e5e5e5;
 }
 .composer-more-action {
-  width: 102px;
+  width: 100%;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -1578,18 +2340,68 @@ function shouldCompact(msgs, idx) {
   background: #1976d2;
   color: white;
   border-radius: 16px 4px 16px 16px;
-  max-width: 70vw;
-  word-wrap: break-word;
+  max-width: min(78%, 560px);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  box-shadow: 0 2px 6px rgba(25, 118, 210, 0.14);
 }
 .bubble-theirs {
   background: #f0f0f0;
   color: #222;
   border-radius: 4px 16px 16px 16px;
-  max-width: 70vw;
-  word-wrap: break-word;
+  max-width: min(78%, 560px);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  box-shadow: 0 2px 6px rgba(38, 50, 56, 0.08);
 }
 .bubble-burn {
   border: 4px solid #ff9800;
+}
+.message-reply-quote {
+  width: 100%;
+  min-width: 130px;
+  margin: 0 0 6px;
+  padding: 5px 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 0;
+  border-left: 3px solid currentColor;
+  border-radius: 4px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.message-reply-quote-theirs {
+  color: #1565c0;
+  background: rgba(25, 118, 210, 0.08);
+}
+.message-reply-quote-mine {
+  color: #e3f2fd;
+  background: rgba(255, 255, 255, 0.16);
+}
+.message-reply-author {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.message-reply-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  opacity: 0.9;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.message-target-highlight .bubble-mine,
+.message-target-highlight .bubble-theirs {
+  animation: message-target-pulse 1.5s ease-out;
+}
+@keyframes message-target-pulse {
+  0%, 35% { box-shadow: 0 0 0 4px rgba(255, 152, 0, 0.5); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 152, 0, 0); }
 }
 .read-status {
   font-size: 11px;
@@ -1599,14 +2411,17 @@ function shouldCompact(msgs, idx) {
   font-weight: bold;
 }
 .file-img {
-  max-width: 220px;
-  max-height: 220px;
-  border-radius: 8px;
+  width: auto;
+  max-width: 100%;
+  max-height: min(42vh, 360px);
+  border-radius: 10px;
   display: block;
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.04);
   cursor: zoom-in;
 }
 .file-video {
-  max-width: 240px;
+  max-width: 100%;
   border-radius: 8px;
   display: block;
 }
@@ -1617,7 +2432,7 @@ function shouldCompact(msgs, idx) {
   padding: 6px 8px;
   border-radius: 8px;
   min-width: 180px;
-  max-width: 260px;
+  max-width: min(100%, 320px);
 }
 .file-card-mine {
   background: rgba(255,255,255,0.18);

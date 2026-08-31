@@ -2,6 +2,7 @@ package ws
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -235,6 +236,60 @@ func TestPersistentInboxKeepsLegacyClientUpgradeCompatible(t *testing.T) {
 	}
 	if len(store.applied) != 1 || store.applied[0] != testMessageID {
 		t.Fatalf("legacy delivery was not cleared after enqueue: %v", store.applied)
+	}
+}
+
+func TestEncryptedReplyMetadataSurvivesPersistentInboxReplay(t *testing.T) {
+	replyKey := base64.StdEncoding.EncodeToString([]byte("reply-key"))
+	replyIV := base64.StdEncoding.EncodeToString(make([]byte, 12))
+	replyCiphertext := base64.StdEncoding.EncodeToString([]byte("encrypted-reply"))
+	envelope, _ := json.Marshal(storedEncryptedEnvelope{
+		EphemeralPubKey: "key", IV: "iv", Ciphertext: "ciphertext",
+		ReplyEphemeralPubKey: replyKey, ReplyIV: replyIV, ReplyCiphertext: replyCiphertext,
+	})
+
+	raw, err := marshalForwardEncryptedMessage(service.PendingEncryptedMessage{
+		MessageDelivery: service.MessageDelivery{
+			MsgID: testMessageID, MsgFrom: testCallerChatID, MsgTo: testPeerChatID, SentAt: 1234000,
+		},
+		Envelope: envelope,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var message Message
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatal(err)
+	}
+	var payload ChatMessagePayload
+	if err := json.Unmarshal(message.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Ciphertext != "ciphertext" || payload.ReplyEphemeralPubKey != replyKey ||
+		payload.ReplyIV != replyIV || payload.ReplyCiphertext != replyCiphertext {
+		t.Fatalf("encrypted reply fields were not preserved: %+v", payload)
+	}
+}
+
+func TestOptionalEncryptedReplyValidation(t *testing.T) {
+	valid := ChatMessagePayload{
+		ReplyEphemeralPubKey: base64.StdEncoding.EncodeToString([]byte("reply-key")),
+		ReplyIV:              base64.StdEncoding.EncodeToString(make([]byte, 12)),
+		ReplyCiphertext:      base64.StdEncoding.EncodeToString([]byte("encrypted-reply")),
+	}
+	if !validOptionalReplyEncryption(valid) {
+		t.Fatal("complete encrypted reply was rejected")
+	}
+	if !validOptionalReplyEncryption(ChatMessagePayload{}) {
+		t.Fatal("legacy message without a reply was rejected")
+	}
+	if validOptionalReplyEncryption(ChatMessagePayload{ReplyIV: valid.ReplyIV}) {
+		t.Fatal("partial encrypted reply was accepted")
+	}
+	valid.ReplyIV = base64.StdEncoding.EncodeToString(make([]byte, 11))
+	if validOptionalReplyEncryption(valid) {
+		t.Fatal("reply with an invalid IV length was accepted")
 	}
 }
 

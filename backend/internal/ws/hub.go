@@ -459,10 +459,13 @@ func (h *Hub) FlushStoredReadReceipts(c *Client) {
 }
 
 type storedEncryptedEnvelope struct {
-	EphemeralPubKey string `json:"ephemeral_pub_key"`
-	IV              string `json:"iv"`
-	Ciphertext      string `json:"ciphertext"`
-	BurnAfterRead   bool   `json:"burn_after_read"`
+	EphemeralPubKey      string `json:"ephemeral_pub_key"`
+	IV                   string `json:"iv"`
+	Ciphertext           string `json:"ciphertext"`
+	ReplyEphemeralPubKey string `json:"reply_ephemeral_pub_key,omitempty"`
+	ReplyIV              string `json:"reply_iv,omitempty"`
+	ReplyCiphertext      string `json:"reply_ciphertext,omitempty"`
+	BurnAfterRead        bool   `json:"burn_after_read"`
 }
 
 func marshalForwardEncryptedMessage(item service.PendingEncryptedMessage) ([]byte, error) {
@@ -473,16 +476,21 @@ func marshalForwardEncryptedMessage(item service.PendingEncryptedMessage) ([]byt
 	return json.Marshal(Message{
 		Type: "message",
 		Payload: mustMarshal(struct {
-			From            string `json:"from"`
-			MsgID           string `json:"msg_id"`
-			EphemeralPubKey string `json:"ephemeral_pub_key"`
-			IV              string `json:"iv"`
-			Ciphertext      string `json:"ciphertext"`
-			Timestamp       int64  `json:"ts"`
-			BurnAfterRead   bool   `json:"burn_after_read"`
+			From                 string `json:"from"`
+			MsgID                string `json:"msg_id"`
+			EphemeralPubKey      string `json:"ephemeral_pub_key"`
+			IV                   string `json:"iv"`
+			Ciphertext           string `json:"ciphertext"`
+			ReplyEphemeralPubKey string `json:"reply_ephemeral_pub_key,omitempty"`
+			ReplyIV              string `json:"reply_iv,omitempty"`
+			ReplyCiphertext      string `json:"reply_ciphertext,omitempty"`
+			Timestamp            int64  `json:"ts"`
+			BurnAfterRead        bool   `json:"burn_after_read"`
 		}{
 			From: item.MsgFrom, MsgID: item.MsgID, EphemeralPubKey: encrypted.EphemeralPubKey,
 			IV: encrypted.IV, Ciphertext: encrypted.Ciphertext, Timestamp: item.SentAt,
+			ReplyEphemeralPubKey: encrypted.ReplyEphemeralPubKey,
+			ReplyIV:              encrypted.ReplyIV, ReplyCiphertext: encrypted.ReplyCiphertext,
 			BurnAfterRead: encrypted.BurnAfterRead,
 		}),
 	})
@@ -747,12 +755,32 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 
 // ChatMessagePayload chat message payload
 type ChatMessagePayload struct {
-	To              string `json:"to"`
-	MsgID           string `json:"msg_id"`
-	EphemeralPubKey string `json:"ephemeral_pub_key"`
-	IV              string `json:"iv"`
-	Ciphertext      string `json:"ciphertext"`
-	BurnAfterRead   bool   `json:"burn_after_read"`
+	To                   string `json:"to"`
+	MsgID                string `json:"msg_id"`
+	EphemeralPubKey      string `json:"ephemeral_pub_key"`
+	IV                   string `json:"iv"`
+	Ciphertext           string `json:"ciphertext"`
+	ReplyEphemeralPubKey string `json:"reply_ephemeral_pub_key,omitempty"`
+	ReplyIV              string `json:"reply_iv,omitempty"`
+	ReplyCiphertext      string `json:"reply_ciphertext,omitempty"`
+	BurnAfterRead        bool   `json:"burn_after_read"`
+}
+
+func validOptionalReplyEncryption(p ChatMessagePayload) bool {
+	values := []string{p.ReplyEphemeralPubKey, p.ReplyIV, p.ReplyCiphertext}
+	present := 0
+	for _, value := range values {
+		if value != "" {
+			present++
+		}
+	}
+	if present == 0 {
+		return true
+	}
+	return present == len(values) &&
+		validBase64Size(p.ReplyEphemeralPubKey, 1, 256) &&
+		validBase64Size(p.ReplyIV, 12, 12) &&
+		validBase64Size(p.ReplyCiphertext, 1, 2048)
 }
 
 type ChatAckPayload struct {
@@ -810,6 +838,11 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 		h.rejectChatMessage(from, p.MsgID, "invalid_payload", false)
 		return
 	}
+	if !validOptionalReplyEncryption(p) {
+		log.Printf("[ws] invalid encrypted reply fields")
+		h.rejectChatMessage(from, p.MsgID, "invalid_payload", false)
+		return
+	}
 
 	// Verify friendship — sender must be friends with recipient
 	ctx := context.Background()
@@ -832,10 +865,13 @@ func (h *Hub) handleChatMessage(from *Client, payload json.RawMessage) {
 		return
 	}
 	envelope, _ := json.Marshal(storedEncryptedEnvelope{
-		EphemeralPubKey: p.EphemeralPubKey,
-		IV:              p.IV,
-		Ciphertext:      p.Ciphertext,
-		BurnAfterRead:   p.BurnAfterRead,
+		EphemeralPubKey:      p.EphemeralPubKey,
+		IV:                   p.IV,
+		Ciphertext:           p.Ciphertext,
+		ReplyEphemeralPubKey: p.ReplyEphemeralPubKey,
+		ReplyIV:              p.ReplyIV,
+		ReplyCiphertext:      p.ReplyCiphertext,
+		BurnAfterRead:        p.BurnAfterRead,
 	})
 	delivery, created, err := h.messageReadSvc.AcceptEncryptedMessage(ctx, p.MsgID, from.ChatID, p.To, envelope)
 	if err != nil {
