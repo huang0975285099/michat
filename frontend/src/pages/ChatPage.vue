@@ -89,7 +89,15 @@
                 <span class="voice-message-wave">▂▄▆▃▇▅▂▄▆</span>
                 <span>{{ formatVoiceDuration(msg.durationMs) }}</span>
               </button>
-              <img v-else-if="isMsgImage(msg) && msg.objectUrl" :src="msg.objectUrl" :alt="msg.filename || t('chat.imageMessage')" class="file-img" @click="openImagePreview(msg)" />
+              <img
+                v-else-if="isMsgImage(msg) && msg.objectUrl"
+                :src="msg.objectUrl"
+                :alt="msg.filename || t('chat.imageMessage')"
+                class="file-img"
+                @load="onMessageImageSettled(msg, idx)"
+                @error="onMessageImageSettled(msg, idx)"
+                @click="openImagePreview(msg)"
+              />
               <video v-else-if="isMsgVideo(msg) && msg.objectUrl" :src="msg.objectUrl" controls class="file-video" />
               <div v-else class="file-card file-card-theirs">
                 <span class="file-icon">{{ getFileIcon(msg.filetype, msg.filename) }}</span>
@@ -170,7 +178,15 @@
                 <span class="voice-message-wave">▂▄▆▃▇▅▂▄▆</span>
                 <span>{{ formatVoiceDuration(msg.durationMs) }}</span>
               </button>
-              <img v-else-if="isMsgImage(msg) && msg.objectUrl" :src="msg.objectUrl" :alt="msg.filename || t('chat.imageMessage')" class="file-img" @click="openImagePreview(msg)" />
+              <img
+                v-else-if="isMsgImage(msg) && msg.objectUrl"
+                :src="msg.objectUrl"
+                :alt="msg.filename || t('chat.imageMessage')"
+                class="file-img"
+                @load="onMessageImageSettled(msg, idx)"
+                @error="onMessageImageSettled(msg, idx)"
+                @click="openImagePreview(msg)"
+              />
               <video v-else-if="isMsgVideo(msg) && msg.objectUrl" :src="msg.objectUrl" controls class="file-video" />
               <div v-else class="file-card file-card-mine">
                 <span class="file-icon">{{ getFileIcon(msg.filetype, msg.filename) }}</span>
@@ -460,6 +476,7 @@
         class="composer-input"
         @keyup.enter="sendMsg"
         @keyup.esc="cancelReply"
+        @paste="onComposerPaste"
         @focus="morePanelOpen = false"
         :disable="sending || voiceSending || voiceRecording"
       />
@@ -577,6 +594,7 @@ import {
   MAX_IMAGE_FILE_BYTES,
   MAX_IMAGE_SELECTION,
   MAX_IMAGE_SOURCE_BYTES,
+  extractClipboardImageFiles,
   imageSelectionKey,
   inferImageMimeType,
   mergeImageSelection,
@@ -656,6 +674,8 @@ let nudgeTimer = null
 let heightResizeObserver = null
 let rafNudgeId = null
 let highlightTimer = null
+const pendingImageBottomIds = new Set()
+const measuredImageIds = new Set()
 const imagePreview = ref({ show: false, startId: '' })
 const selectedImages = ref([])
 const imageSendMode = ref('high_quality')
@@ -1293,6 +1313,8 @@ onUnmounted(() => {
   if (nowTimer) { clearTimeout(nowTimer); nowTimer = null }
   if (nudgeTimer) { clearInterval(nudgeTimer); nudgeTimer = null }
   if (highlightTimer) { clearTimeout(highlightTimer); highlightTimer = null }
+  pendingImageBottomIds.clear()
+  measuredImageIds.clear()
   cancelRafNudge()
   if (heightResizeObserver) { heightResizeObserver.disconnect(); heightResizeObserver = null }
   window.removeEventListener('resize', updatePageHeight)
@@ -1311,10 +1333,15 @@ onUnmounted(() => {
 
 // Only monitor changes in the number of messages (new/deleted) to avoid deep traversal of the entire array.
 // It also avoids unnecessary forced scrolling caused by changes in fields such as read receipts.
-watch(() => messages.value.length, () => {
+watch(() => messages.value.length, (newLength, oldLength) => {
   const newMsgs = messages.value
+  const appended = newLength > oldLength ? newMsgs.slice(oldLength) : []
+  const keepBottom = isNearBottom() || appended.some(message => message.mine)
   // Automatically scroll only when the user is already near the bottom, without interrupting when reviewing history
-  if (isNearBottom()) {
+  if (keepBottom) {
+    for (const message of appended) {
+      if (isMsgImage(message)) pendingImageBottomIds.add(message.id)
+    }
     nextTick(() => scrollToBottomReliable())
   }
   // Automatically mark new messages as read
@@ -1323,6 +1350,16 @@ watch(() => messages.value.length, () => {
     chatStore.markAsRead(friendChatId)
   }
 })
+
+function onMessageImageSettled(message, index) {
+  if (measuredImageIds.has(message.id)) return
+  measuredImageIds.add(message.id)
+  const keepBottom = pendingImageBottomIds.delete(message.id) || isNearBottom()
+  // Image height is unknown until decoding completes. Ask QVirtualScroll to
+  // replace its estimated item height with the actual rendered height.
+  virtualScrollEl.value?.refresh?.(index)
+  if (keepBottom) nextTick(() => scrollToBottomReliable(90))
+}
 
 /**
  * Obtain friend's public key through API (fallback)
@@ -1417,9 +1454,8 @@ function setImageSendMode(mode) {
   imageSendMode.value = mode === 'original' ? 'original' : 'high_quality'
 }
 
-async function onImagesSelected(event) {
-  const incoming = Array.from(event.target.files || [], normalizedImageFile)
-  event.target.value = ''
+async function addSelectedImages(files) {
+  const incoming = Array.from(files || [], normalizedImageFile)
   if (!incoming.length || imageProcessing.value.active || imageBatch.value.sending) return
 
   const existingByKey = new Map(selectedImages.value.map(item => [imageSelectionKey(item.originalFile), item]))
@@ -1488,6 +1524,29 @@ async function onImagesSelected(event) {
   }
   selectedImages.value = nextItems
   notifyImageRejections(rejected)
+}
+
+async function onImagesSelected(event) {
+  const incoming = Array.from(event.target.files || [])
+  event.target.value = ''
+  await addSelectedImages(incoming)
+}
+
+async function onComposerPaste(event) {
+  const incoming = extractClipboardImageFiles(event.clipboardData, {
+    baseName: t('chat.clipboardScreenshotName'),
+    timestamp: getCalibratedServerNow() ?? Date.now(),
+  })
+  if (!incoming.length) return
+
+  // Clipboard images enter the same confirmation tray as gallery images.
+  // Only image pastes are intercepted; text keeps the browser's native paste.
+  event.preventDefault()
+  if (imageProcessing.value.active || imageBatch.value.sending) {
+    $q.notify({ type: 'warning', message: t('chat.imagePasteBusy') })
+    return
+  }
+  await addSelectedImages(incoming)
 }
 
 function disposeSelectedImage(item) {
@@ -2009,8 +2068,9 @@ function shouldCompact(msgs, idx) {
   z-index: 2;
   inset: -18%;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  grid-auto-rows: 92px;
+  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  grid-auto-rows: 104px;
+  column-gap: 32px;
   align-items: center;
   justify-items: center;
   overflow: hidden;
@@ -2035,8 +2095,10 @@ function shouldCompact(msgs, idx) {
 }
 @media (max-width: 420px) {
   .chat-watermark {
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    grid-auto-rows: 82px;
+    inset: -24% -42%;
+    grid-template-columns: repeat(auto-fit, minmax(275px, 1fr));
+    grid-auto-rows: 94px;
+    column-gap: 28px;
   }
   .chat-watermark span {
     font-size: 11px;
@@ -2044,8 +2106,9 @@ function shouldCompact(msgs, idx) {
 }
 @media (min-width: 760px) {
   .chat-watermark {
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-    grid-auto-rows: 104px;
+    grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+    grid-auto-rows: 112px;
+    column-gap: 40px;
   }
 }
 .avatar-placeholder {

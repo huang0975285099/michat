@@ -10,7 +10,8 @@ const quasarLanguages = {
   'zh-CN': zhCN
 }
 
-export default defineBoot(({ $q }) => {
+export default defineBoot(({ app }) => {
+  const $q = app.config.globalProperties.$q
   const { locale } = useI18n()
   const applyLanguage = value => $q.lang.set(quasarLanguages[value] || enUS)
 

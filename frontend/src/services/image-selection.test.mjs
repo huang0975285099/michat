@@ -6,6 +6,7 @@ import {
   MAX_IMAGE_FILE_BYTES,
   MAX_IMAGE_SELECTION,
   MAX_IMAGE_SOURCE_BYTES,
+  extractClipboardImageFiles,
   imageSelectionKey,
   inferImageMimeType,
   isSupportedImageFile,
@@ -15,6 +16,51 @@ import {
 function image(name, size, lastModified = 1, type = 'image/jpeg') {
   return { name, size, lastModified, type }
 }
+
+function clipboardItem(file, type = file.type, kind = 'file') {
+  return { kind, type, getAsFile: () => file }
+}
+
+function createTestFile([source], name, options) {
+  return { ...source, name, type: options.type, lastModified: options.lastModified }
+}
+
+test('extracts clipboard screenshots, assigns stable names, and preserves real filenames', () => {
+  const screenshot = image('image.png', 20, 4, 'image/png')
+  const copiedFile = image('holiday.jpg', 30, 5, 'image/jpeg')
+  const files = extractClipboardImageFiles({
+    items: [clipboardItem(screenshot), clipboardItem(copiedFile)],
+  }, {
+    baseName: '截图',
+    timestamp: Date.UTC(2026, 7, 31, 0, 31, 0),
+    createFile: createTestFile,
+  })
+
+  assert.equal(files[0].name, '截图_20260831_003100.png')
+  assert.equal(files[0].type, 'image/png')
+  assert.equal(files[1], copiedFile)
+})
+
+test('leaves text paste untouched and ignores unsupported clipboard image formats', () => {
+  const text = { kind: 'string', type: 'text/plain', getAsFile: () => null }
+  const svg = clipboardItem(image('image.svg', 20, 1, 'image/svg+xml'))
+  assert.deepEqual(extractClipboardImageFiles({ items: [text, svg] }), [])
+})
+
+test('uses clipboard file fallback and unique names for multiple unnamed images', () => {
+  const first = image('', 10, 1, 'image/png')
+  const second = image('', 11, 2, 'image/png')
+  const files = extractClipboardImageFiles({ files: [first, second] }, {
+    baseName: 'Screenshot',
+    timestamp: Date.UTC(2026, 7, 31, 1, 2, 3),
+    createFile: createTestFile,
+  })
+
+  assert.deepEqual(files.map(file => file.name), [
+    'Screenshot_20260831_010203.png',
+    'Screenshot_20260831_010203_2.png',
+  ])
+})
 
 test('keeps image selection order and accepts extension-based Android files without a MIME type', () => {
   const first = image('1.jpg', 10)
