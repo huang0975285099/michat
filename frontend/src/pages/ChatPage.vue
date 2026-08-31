@@ -116,7 +116,7 @@
                   </div>
                 </div>
                 <button
-                  v-if="msg.objectUrl"
+                  v-if="msg.objectUrl || msg.localFileAvailable"
                   type="button"
                   class="file-dl"
                   :class="{ complete: fileDownloadState(msg)?.status === 'done' }"
@@ -135,6 +135,7 @@
             </template>
             <div class="text-caption q-mt-xs text-grey row items-center q-gutter-xs">
               <span>{{ formatTime(msg.ts) }}</span>
+              <span v-if="msg.type === 'file'">· {{ attachmentStatusText(msg) }}</span>
               <q-icon v-if="msg.burnAfterRead" name="local_fire_department" size="14px" color="orange">
                 <q-tooltip v-if="msg.burnAt">{{ formatBurnCountdown(msg.burnAt) }}</q-tooltip>
                 <q-tooltip v-else>{{ t("chat.burnAfterRead") }}</q-tooltip>
@@ -205,7 +206,7 @@
                   </div>
                 </div>
                 <button
-                  v-if="msg.objectUrl"
+                  v-if="msg.objectUrl || msg.localFileAvailable"
                   type="button"
                   class="file-dl file-dl-mine"
                   :class="{ complete: fileDownloadState(msg)?.status === 'done' }"
@@ -224,6 +225,7 @@
             </template>
             <div class="text-caption q-mt-xs text-blue-2 row items-center q-gutter-xs">
               <span>{{ formatTime(msg.ts) }}</span>
+              <span v-if="msg.type === 'file'">· {{ attachmentStatusText(msg) }}</span>
               <div>
                 <q-icon v-if="msg.status === 'pending'" name="schedule" size="13px">
                   <q-tooltip>{{ t("chat.sending") }}</q-tooltip>
@@ -247,6 +249,15 @@
                 >
                   <q-tooltip>{{ messageFailureText(msg) }}</q-tooltip>
                 </q-icon>
+                <q-icon
+                  v-else-if="msg.status === 'paused'"
+                  name="pause_circle_outline"
+                  size="14px"
+                  class="message-retry-icon"
+                  @click.stop="retryMsg(msg)"
+                >
+                  <q-tooltip>{{ t("chat.uploadPaused") }}</q-tooltip>
+                </q-icon>
                 <template v-else>
                   <span v-if="msg.read" class="read-status">✔✔</span>
                   <span v-else class="read-status">✔</span>
@@ -264,7 +275,8 @@
               :can-copy="canCopy(msg)"
               :can-delete="canDeleteMessage(msg)"
               :can-recall="canRecall(msg)"
-              :can-retry="msg.type !== 'file' && (msg.status === 'queued' || msg.status === 'failed')"
+              :can-retry="(msg.type !== 'file' || !!msg.offlineAttachment) && (msg.status === 'queued' || msg.status === 'failed' || msg.status === 'paused')"
+              :retry-label="msg.status === 'paused' ? t('chat.resumeUpload') : t('chat.resend')"
               @reply="startReply(msg)"
               @copy="copyMessage(msg)"
               @retry="retryMsg(msg)"
@@ -293,9 +305,31 @@
         />
       </div>
       <span class="text-caption text-grey-7">
-        {{ activeTransfer.status === 'error' ? t("chat.failed") : activeTransfer.status === 'processing' ? t("chat.processingFile") : activeTransfer.progress + '%' }}
+        {{ activeTransferStatusText(activeTransfer) }}
       </span>
-      <q-icon v-if="activeTransfer.status === 'error'" name="error_outline" color="negative" size="18px" />
+      <q-btn
+        v-if="activeTransfer.transport === 'offline' && (activeTransfer.status === 'transferring' || activeTransfer.status === 'paused' || (activeTransfer.direction === 'receive' && activeTransfer.status === 'error'))"
+        flat
+        round
+        dense
+        size="sm"
+        :icon="activeTransfer.status === 'paused' || activeTransfer.status === 'error' ? 'play_arrow' : 'pause'"
+        :aria-label="activeTransfer.status === 'paused' || activeTransfer.status === 'error' ? t('chat.resumeTransfer') : t('chat.pauseTransfer')"
+        @click="toggleOfflineTransfer(activeTransfer)"
+      >
+        <q-tooltip>{{ activeTransfer.status === 'paused' || activeTransfer.status === 'error' ? t("chat.resumeTransfer") : t("chat.pauseTransfer") }}</q-tooltip>
+      </q-btn>
+      <q-btn
+        v-if="activeTransfer.transport === 'offline' && ['pending', 'transferring', 'processing', 'paused', 'error'].includes(activeTransfer.status)"
+        flat round dense size="sm" icon="close" color="negative"
+        :aria-label="t('chat.cancelTransfer')"
+        @click="confirmCancelTransfer(activeTransfer)"
+      >
+        <q-tooltip>{{ t("chat.cancelTransfer") }}</q-tooltip>
+      </q-btn>
+      <q-icon v-if="activeTransfer.status === 'error'" name="error_outline" color="negative" size="18px">
+        <q-tooltip>{{ transferFailureText(activeTransfer) }}</q-tooltip>
+      </q-icon>
       <q-icon v-else-if="activeTransfer.status === 'done'" name="check_circle_outline" color="positive" size="18px" />
     </div>
 
@@ -602,8 +636,15 @@ import {
 import { compressImageForSending } from 'src/services/image-compression.mjs'
 import { createChatWatermark } from 'src/services/chat-watermark.mjs'
 import { setSecureScreen } from 'src/services/chat-service-plugin'
-import { saveObjectUrlWithTauri, triggerBrowserDownload } from 'src/services/file-download.mjs'
-import { isTauri } from 'src/services/platform.js'
+import {
+  saveChunkReaderWithBrowserPicker,
+  saveChunkReaderWithCapacitor,
+  saveChunkReaderWithTauri,
+  saveObjectUrlWithTauri,
+  triggerBrowserDownload,
+} from 'src/services/file-download.mjs'
+import { classifyAttachmentError } from 'src/services/attachment-errors.mjs'
+import { isCapacitor, isTauri } from 'src/services/platform.js'
 
 // ── File utility functions ─────────────────────────────────────────────
 
@@ -788,8 +829,33 @@ function fileDownloadTooltip(msg) {
   return t('chat.downloadFile')
 }
 
+function attachmentFailureText(error, phase = 'transfer') {
+  if (error?.code === 'attachment_file_too_large') {
+    return t('chat.attachmentFileTooLarge', {
+      size: formatFileSize(error.fileSize || 0),
+      max: formatFileSize(error.maxBytes || 500 * 1024 * 1024),
+    })
+  }
+  if (error?.code === 'attachment_file_empty') return t('chat.attachmentFileEmpty')
+  if (error?.code === 'attachment_filename_invalid') return t('chat.attachmentFilenameInvalid')
+  if (error?.code === 'attachment_filetype_invalid') return t('chat.attachmentFiletypeInvalid')
+  if (error?.code === 'attachment_filetype_unsupported') return t('chat.attachmentFiletypeUnsupported')
+  const reason = classifyAttachmentError(error, phase)
+  if (reason === 'local_storage') return t('chat.localAttachmentStorageFull')
+  if (reason === 'server_quota') return t('chat.serverAttachmentQuotaFull')
+  if (reason === 'destination_storage') return t('chat.destinationStorageFull')
+  if (reason === 'network') return t('chat.networkAttachmentError')
+  if (reason === 'expired') return t('chat.expiredAttachmentError')
+  if (reason === 'corrupted') return t('chat.corruptedAttachmentError')
+  return error?.message || t('chat.unknownError')
+}
+
+function transferFailureText(transfer) {
+  return attachmentFailureText({ code: transfer?.errorCode, message: transfer?.errorReason })
+}
+
 async function downloadFile(msg) {
-  if (!msg?.objectUrl || isFileDownloading(msg)) return
+  if (!msg || (!msg.objectUrl && !msg.localFileAvailable) || isFileDownloading(msg)) return
 
   const existing = fileDownloadState(msg)
   if (existing?.status === 'done') {
@@ -803,30 +869,68 @@ async function downloadFile(msg) {
 
   setFileDownloadState(msg.id, { status: 'downloading', progress: 0 })
   try {
+    const onProgress = progress => setFileDownloadState(msg.id, { status: 'downloading', progress })
+    const getDescriptor = () => chatStore.getStoredFileDescriptor(msg)
+    const useChunkedSave = !!msg.offlineAttachment && msg.filesize > 20 * 1024 * 1024
+    let savedResult = null
+
     if (isTauri()) {
-      const result = await saveObjectUrlWithTauri({
-        objectUrl: msg.objectUrl,
+      if (useChunkedSave) {
+        savedResult = await saveChunkReaderWithTauri({
+          filename: msg.filename,
+          totalBytes: msg.filesize,
+          dialogTitle: t('chat.saveFileTitle'),
+          getDescriptor,
+          onProgress,
+        })
+      } else {
+        const objectUrl = msg.objectUrl || await chatStore.ensureFileObjectUrl(msg)
+        if (!objectUrl) throw new Error(t('chat.expired'))
+        savedResult = await saveObjectUrlWithTauri({
+          objectUrl,
+          filename: msg.filename,
+          totalBytes: msg.filesize,
+          dialogTitle: t('chat.saveFileTitle'),
+          onProgress,
+        })
+      }
+    } else if (isCapacitor() && msg.offlineAttachment) {
+      savedResult = await saveChunkReaderWithCapacitor({
+        filename: msg.filename,
+        mimeType: msg.filetype,
+        totalBytes: msg.filesize,
+        getDescriptor,
+        onProgress,
+      })
+    } else if (useChunkedSave) {
+      const result = await saveChunkReaderWithBrowserPicker({
         filename: msg.filename,
         totalBytes: msg.filesize,
-        dialogTitle: t('chat.saveFileTitle'),
-        onProgress: progress => setFileDownloadState(msg.id, { status: 'downloading', progress }),
+        getDescriptor,
+        onProgress,
       })
-      if (result.canceled) {
+      if (!result.unsupported) savedResult = result
+    }
+
+    if (savedResult) {
+      if (savedResult.canceled) {
         clearFileDownloadState(msg.id)
         return
       }
-      setFileDownloadState(msg.id, { status: 'done', progress: 100, path: result.path })
+      setFileDownloadState(msg.id, { status: 'done', progress: 100, path: savedResult.path })
       $q.notify({
         type: 'positive',
         icon: 'download_done',
         message: t('chat.fileDownloadComplete', { name: msg.filename }),
-        caption: t('chat.fileSavedAt', { path: result.path }),
+        caption: t('chat.fileSavedAt', { path: savedResult.path }),
         timeout: 5000,
       })
       return
     }
 
-    triggerBrowserDownload(msg.objectUrl, msg.filename)
+    const objectUrl = msg.objectUrl || await chatStore.ensureFileObjectUrl(msg)
+    if (!objectUrl) throw new Error(t('chat.expired'))
+    triggerBrowserDownload(objectUrl, msg.filename)
     $q.notify({
       type: 'info',
       icon: 'download',
@@ -842,7 +946,7 @@ async function downloadFile(msg) {
     clearFileDownloadState(msg.id)
     $q.notify({
       type: 'negative',
-      message: t('chat.fileDownloadFailed', { error: error?.message || t('chat.unknownError') }),
+      message: t('chat.fileDownloadFailed', { error: attachmentFailureText(error, 'save') }),
     })
   }
 }
@@ -1109,10 +1213,10 @@ const activeTransfer = computed(() => {
   const transfers = Object.values(chatStore.fileTransfers)
   return transfers.find(t =>
     (t.toChatId === friendChatId || t.fromChatId === friendChatId) &&
-    (t.status === 'pending' || t.status === 'transferring' || t.status === 'processing')
+    (t.status === 'pending' || t.status === 'transferring' || t.status === 'processing' || t.status === 'paused')
   ) || transfers.find(t =>
     (t.toChatId === friendChatId || t.fromChatId === friendChatId) &&
-    t.status === 'error' && Date.now() - (t.errorAt || 0) < 5000
+    t.status === 'error' && (t.transport === 'offline' || Date.now() - (t.errorAt || 0) < 5000)
   ) || null
 })
 
@@ -1136,6 +1240,44 @@ const imageBatchProgress = computed(() => {
     : 0
   return Math.min(100, Math.round((batch.completedBytes + currentBytes) / batch.totalBytes * 100))
 })
+
+function attachmentStatusText(msg) {
+  const saving = fileDownloadState(msg)
+  if (saving?.status === 'downloading') return t('chat.attachmentSaving')
+  if (saving?.status === 'done') return t('chat.fileSaved')
+  const transfer = msg.attachmentId ? chatStore.fileTransfers[msg.attachmentId] : null
+  let status = msg.attachmentStatus
+  if (transfer) {
+    if (transfer.status === 'paused') status = 'paused'
+    else if (transfer.status === 'error') status = 'failed'
+    else if (transfer.status === 'processing') status = transfer.direction === 'receive' ? 'saving' : 'waiting'
+    else if (transfer.status === 'pending') status = 'preparing'
+    else if (transfer.status === 'transferring') status = transfer.direction === 'receive' ? 'receiving' : 'uploading'
+  }
+  return {
+    preparing: t('chat.attachmentPreparing'),
+    uploading: t('chat.attachmentUploading'),
+    waiting: t('chat.attachmentWaiting'),
+    received: t('chat.attachmentReceived'),
+    saving: t('chat.attachmentSaving'),
+    expired: t('chat.attachmentExpired'),
+    failed: t('chat.attachmentFailed'),
+    paused: t('chat.transferPaused'),
+    receiving: t('chat.attachmentReceiving'),
+  }[status] || (msg.localFileAvailable ? t('chat.attachmentReceived') : t('chat.attachmentExpired'))
+}
+
+function activeTransferStatusText(transfer) {
+  if (transfer.status === 'error') return t('chat.attachmentFailed')
+  if (transfer.status === 'paused') return t('chat.transferPaused')
+  if (transfer.status === 'pending') return t('chat.attachmentPreparing')
+  if (transfer.status === 'processing') return transfer.direction === 'receive' ? t('chat.attachmentSaving') : t('chat.attachmentWaiting')
+  if (transfer.status === 'transferring') {
+    const label = transfer.direction === 'receive' ? t('chat.attachmentReceiving') : t('chat.attachmentUploading')
+    return `${label} ${transfer.progress}%`
+  }
+  return `${transfer.progress}%`
+}
 
 // ── Expression Panel ────────────────────────────────────────────────
 const emojiTab = ref('face')
@@ -1670,7 +1812,7 @@ function onFileSelected(e) {
   try {
     chatStore.validateFile(file)
   } catch (error) {
-    $q.notify({ type: 'warning', message: error.message })
+    $q.notify({ type: 'warning', message: attachmentFailureText(error, 'local'), timeout: 5000 })
     return
   }
 
@@ -1678,7 +1820,7 @@ function onFileSelected(e) {
     title: t('chat.sendFileTitle'),
     message: t('chat.sendFileMessage', { name: file.name, size: formatFileSize(file.size) }),
     cancel: { label: t('common.cancel'), flat: true },
-    ok: { label: t('chat.send'), color: 'primary' },
+    ok: { label: t('chat.sendFile'), color: 'primary' },
     persistent: true
   }).onOk(() => doSendFile(file))
 }
@@ -1691,7 +1833,7 @@ async function doSendFile(file) {
   try {
     await chatStore.sendFile(friendChatId, friendPubKey.value, file, burnMode.value)
   } catch (e) {
-    $q.notify({ type: 'negative', message: t('chat.fileSendFailed', { error: e.message }) })
+    $q.notify({ type: 'negative', message: t('chat.fileSendFailed', { error: attachmentFailureText(e, 'local') }) })
   }
 }
 
@@ -1746,17 +1888,60 @@ async function retryMsg(msg) {
   }
   retryingMessageId.value = msg.id
   try {
-    const ok = await chatStore.retryMessage(friendChatId, friendPubKey.value, msg.id)
+    const ok = msg.type === 'file' && msg.offlineAttachment
+      ? await chatStore.retryOfflineFile(friendChatId, friendPubKey.value, msg.id)
+      : await chatStore.retryMessage(friendChatId, friendPubKey.value, msg.id)
     if (!ok) {
       $q.notify({ type: 'warning', message: t('chat.queueFailed') })
     } else if (msg.status === 'queued') {
       $q.notify({ type: 'info', message: t('chat.queued') })
     }
   } catch (error) {
-    $q.notify({ type: 'negative', message: t('chat.retryFailed', { error: error?.message || t('chat.unknownError') }) })
+    $q.notify({ type: 'negative', message: t('chat.retryFailed', { error: attachmentFailureText(error) }) })
   } finally {
     retryingMessageId.value = null
   }
+}
+
+async function toggleOfflineTransfer(transfer) {
+  if (!transfer?.id) return
+  if (transfer.direction === 'receive') {
+    if (transfer.status === 'paused' || transfer.status === 'error') {
+      chatStore.resumeOfflineDownload(transfer.id)
+    } else {
+      chatStore.pauseOfflineDownload(transfer.id)
+    }
+    return
+  }
+  if (transfer.status === 'paused') {
+    if (!friendPubKey.value) {
+      $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
+      return
+    }
+    try {
+      await chatStore.resumeOfflineTransfer(transfer.id, friendPubKey.value)
+    } catch (error) {
+      $q.notify({ type: 'negative', message: t('chat.retryFailed', { error: attachmentFailureText(error) }) })
+    }
+  } else {
+    chatStore.pauseOfflineTransfer(transfer.id)
+  }
+}
+
+function confirmCancelTransfer(transfer) {
+  $q.dialog({
+    title: t('chat.cancelTransferTitle'),
+    message: t('chat.cancelTransferMessage'),
+    cancel: true,
+    persistent: true,
+  }).onOk(async () => {
+    try {
+      await chatStore.cancelOfflineTransfer(transfer.id)
+      $q.notify({ type: 'info', message: t('chat.transferCanceled') })
+    } catch (error) {
+      $q.notify({ type: 'negative', message: t('chat.actionFailed') })
+    }
+  })
 }
 
 function messageFailureText(msg) {

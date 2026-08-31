@@ -1,4 +1,5 @@
 const BURN_MODE_PREFIX = 'yunmi.chat.burn-mode'
+const ATTACHMENT_AUTO_CLEAN_PREFIX = 'yunmi.attachment.auto-clean-received'
 
 export function burnModeStorageKey(ownerChatId, friendChatId) {
   return `${BURN_MODE_PREFIX}.${ownerChatId}.${friendChatId}`
@@ -21,5 +22,29 @@ export function saveBurnMode(ownerChatId, friendChatId, enabled, storage = globa
     else storage.removeItem(key)
   } catch {
     // Keeping the in-memory setting is sufficient when storage is unavailable.
+  }
+}
+
+export function attachmentAutoCleanStorageKey(ownerChatId) {
+  return `${ATTACHMENT_AUTO_CLEAN_PREFIX}.${ownerChatId}`
+}
+
+export function loadAttachmentAutoClean(ownerChatId, storage = globalThis.localStorage) {
+  if (!ownerChatId || !storage) return false
+  try {
+    return storage.getItem(attachmentAutoCleanStorageKey(ownerChatId)) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function saveAttachmentAutoClean(ownerChatId, enabled, storage = globalThis.localStorage) {
+  if (!ownerChatId || !storage) return
+  const key = attachmentAutoCleanStorageKey(ownerChatId)
+  try {
+    if (enabled) storage.setItem(key, '1')
+    else storage.removeItem(key)
+  } catch {
+    // Keep the in-memory setting when browser storage is unavailable.
   }
 }

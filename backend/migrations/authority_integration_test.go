@@ -45,6 +45,8 @@ func TestAuthorityMigrationCreatesConstraints(t *testing.T) {
 		"ironfist_active_pve",
 		"ironfist_outbox",
 		"system_migration_markers",
+		"attachments",
+		"attachment_chunks",
 	} {
 		assertTableExists(t, db, table)
 	}
@@ -54,11 +56,19 @@ func TestAuthorityMigrationCreatesConstraints(t *testing.T) {
 	assertUniqueIndex(t, db, "ironfist_matches", "uq_im_authoritative_game")
 	assertUniqueIndex(t, db, "fist_transactions", "uq_ft_settlement_ref")
 	assertIndex(t, db, "ironfist_outbox", "idx_ifo_unpublished")
+	assertIndex(t, db, "attachments", "idx_attachments_owner_quota")
+	assertIndex(t, db, "attachments", "idx_attachments_recipient")
+	assertIndex(t, db, "attachments", "idx_attachments_cleanup")
 	assertForeignKey(t, db, "ironfist_game_actions", "ironfist_games", "CASCADE")
 	assertForeignKey(t, db, "ironfist_game_rounds", "ironfist_games", "CASCADE")
 	assertForeignKey(t, db, "ironfist_active_pve", "ironfist_games", "CASCADE")
+	assertForeignKey(t, db, "attachments", "users", "CASCADE")
+	assertForeignKey(t, db, "attachment_chunks", "attachments", "CASCADE")
 	for _, column := range []string{"encrypted_envelope", "envelope_size", "recipient_applied_at", "recalled_at", "recall_applied_at"} {
 		assertColumnExists(t, db, "message_deliveries", column)
+	}
+	for _, column := range []string{"file_key", "filename", "mime_type"} {
+		assertColumnMissing(t, db, "attachments", column)
 	}
 	assertReliableInboxRoundTrip(t, db)
 }
@@ -181,6 +191,18 @@ func assertColumnExists(t *testing.T, db *sql.DB, table, column string) {
 	}
 	if count != 1 {
 		t.Fatalf("column %s.%s does not exist", table, column)
+	}
+}
+
+func assertColumnMissing(t *testing.T, db *sql.DB, table, column string) {
+	t.Helper()
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`, table, column).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("column %s.%s must not exist", table, column)
 	}
 }
 

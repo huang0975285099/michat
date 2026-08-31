@@ -16,15 +16,36 @@ import {
   serializeReplyReference,
 } from 'src/services/chat-message-content.mjs'
 import { useIdentityStore } from 'src/stores/identity'
+import { attachmentApi } from 'src/services/api'
+import { classifyAttachmentError, isStorageQuotaError } from 'src/services/attachment-errors.mjs'
+import { loadAttachmentAutoClean } from 'src/services/chat-preferences.mjs'
+import {
+  assertLocalAttachmentSpace,
+  binarySize,
+  estimateLocalStorage,
+} from 'src/services/attachment-storage.mjs'
+import {
+  acknowledgeOfflineAttachment,
+  createOfflineAttachmentUpload,
+  downloadOfflineAttachment,
+  parseOfflineAttachmentContent,
+  serializeOfflineAttachmentContent,
+  uploadOfflineAttachment,
+} from 'src/services/offline-attachment.mjs'
 
 // ──Safety constants────────────────────────────────────────────
 
 const DB_NAME = 'e2eechat_messages'
-const DB_VERSION = 5  //v5: Added message_files persistent encrypted file body (can still be downloaded/previewed after refreshing)
+const DB_VERSION = 7  //v7: Added chunk-encrypted local file copies for large attachments
 const STORE_NAME = 'messages'
 const KEY_STORE_NAME = 'message_key'  //Store message encryption key
 const PENDING_STORE_NAME = 'pending_messages'  //The original ciphertext received during the lock period and to be decrypted after unlocking
 const FILE_STORE_NAME = 'message_files'  //Encrypted file binary (separated from message records, lazy loading)
+const ATTACHMENT_CHUNK_STORE_NAME = 'attachment_cipher_chunks'
+const FILE_CHUNK_STORE_NAME = 'message_file_chunks'
+const LOCAL_FILE_CHUNK_SIZE = 1024 * 1024
+const AUTO_PREVIEW_FILE_BYTES = 20 * 1024 * 1024
+const REALTIME_MAX_FILE_SIZE = 100 * 1024 * 1024
 const BURN_AFTER_READ_DELAY = 2 * 60 * 60 * 1000  //2 hours
 
 // ── File transfer constants ────────────────────────────────────────
@@ -185,6 +206,28 @@ async function decryptFileBytes(record, key) {
   return crypto.subtle.decrypt({ name: 'AES-GCM', iv: record.iv }, key, record.ciphertext)
 }
 
+function localFileChunkAAD(msgId, index) {
+  return new TextEncoder().encode(`yunmi.local-file-chunk|1|${msgId}|${index}`)
+}
+
+async function encryptLocalFileChunk(arrayBuffer, key, msgId, index) {
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const ciphertext = await crypto.subtle.encrypt({
+    name: 'AES-GCM',
+    iv,
+    additionalData: localFileChunkAAD(msgId, index),
+  }, key, arrayBuffer)
+  return { iv, ciphertext }
+}
+
+async function decryptLocalFileChunk(record, key, msgId, index) {
+  return crypto.subtle.decrypt({
+    name: 'AES-GCM',
+    iv: record.iv,
+    additionalData: localFileChunkAAD(msgId, index),
+  }, key, record.ciphertext)
+}
+
 // ── IndexedDB Auxiliary ───────────────────────────────────────────
 
 function openMessagesDB() {
@@ -217,6 +260,16 @@ function openMessagesDB() {
       if (!db.objectStoreNames.contains(FILE_STORE_NAME)) {
         const fileStore = db.createObjectStore(FILE_STORE_NAME, { keyPath: 'id' })
         fileStore.createIndex('chatId', 'chatId', { unique: false })
+      }
+      if (!db.objectStoreNames.contains(ATTACHMENT_CHUNK_STORE_NAME)) {
+        const chunkStore = db.createObjectStore(ATTACHMENT_CHUNK_STORE_NAME, { keyPath: 'id' })
+        chunkStore.createIndex('msgId', 'msgId', { unique: false })
+        chunkStore.createIndex('chatId', 'chatId', { unique: false })
+      }
+      if (!db.objectStoreNames.contains(FILE_CHUNK_STORE_NAME)) {
+        const fileChunkStore = db.createObjectStore(FILE_CHUNK_STORE_NAME, { keyPath: 'id' })
+        fileChunkStore.createIndex('msgId', 'msgId', { unique: false })
+        fileChunkStore.createIndex('chatId', 'chatId', { unique: false })
       }
     }
     req.onsuccess = (e) => resolve(e.target.result)
@@ -284,7 +337,7 @@ async function dbPutFile(record) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {
     const tx = db.transaction(FILE_STORE_NAME, 'readwrite')
-    tx.objectStore(FILE_STORE_NAME).put(record)
+    tx.objectStore(FILE_STORE_NAME).put({ ...record, updatedAt: Date.now() })
     tx.oncomplete = () => resolve()
     tx.onerror = (e) => reject(e.target.error)
   })
@@ -323,6 +376,129 @@ async function dbClearChatFiles(chatId) {
     }
     tx.oncomplete = () => resolve()
     tx.onerror = (e) => reject(e.target.error)
+  })
+}
+
+async function dbPutAttachmentCipherChunk(chatId, msgId, attachmentId, index, ciphertext) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ATTACHMENT_CHUNK_STORE_NAME, 'readwrite')
+    tx.objectStore(ATTACHMENT_CHUNK_STORE_NAME).put({
+      id: `${msgId}:${index}`,
+      chatId,
+      msgId,
+      attachmentId,
+      index,
+      ciphertext,
+      updatedAt: Date.now(),
+    })
+    tx.oncomplete = () => resolve()
+    tx.onerror = event => reject(event.target.error)
+  })
+}
+
+async function dbPutFileChunk(chatId, msgId, index, encrypted) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FILE_CHUNK_STORE_NAME, 'readwrite')
+    tx.objectStore(FILE_CHUNK_STORE_NAME).put({
+      id: `${msgId}:${index}`,
+      chatId,
+      msgId,
+      index,
+      iv: encrypted.iv,
+      ciphertext: encrypted.ciphertext,
+      updatedAt: Date.now(),
+    })
+    tx.oncomplete = () => resolve()
+    tx.onerror = event => reject(event.target.error)
+  })
+}
+
+async function dbGetFileChunk(msgId, index) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FILE_CHUNK_STORE_NAME, 'readonly')
+    const request = tx.objectStore(FILE_CHUNK_STORE_NAME).get(`${msgId}:${index}`)
+    request.onsuccess = () => resolve(request.result || null)
+    request.onerror = event => reject(event.target.error)
+  })
+}
+
+async function dbDeleteIndexedRecords(storeName, indexName, value) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite')
+    const index = tx.objectStore(storeName).index(indexName)
+    const request = index.openCursor(IDBKeyRange.only(value))
+    request.onsuccess = event => {
+      const cursor = event.target.result
+      if (cursor) { cursor.delete(); cursor.continue() }
+    }
+    tx.oncomplete = () => resolve()
+    tx.onerror = event => reject(event.target.error)
+  })
+}
+
+function dbDeleteFileChunksByMessage(msgId) {
+  return dbDeleteIndexedRecords(FILE_CHUNK_STORE_NAME, 'msgId', msgId)
+}
+
+function dbDeleteFileChunksByChat(chatId) {
+  return dbDeleteIndexedRecords(FILE_CHUNK_STORE_NAME, 'chatId', chatId)
+}
+
+async function dbGetAttachmentCipherChunk(msgId, index) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ATTACHMENT_CHUNK_STORE_NAME, 'readonly')
+    const request = tx.objectStore(ATTACHMENT_CHUNK_STORE_NAME).get(`${msgId}:${index}`)
+    request.onsuccess = () => resolve(request.result?.ciphertext || null)
+    request.onerror = event => reject(event.target.error)
+  })
+}
+
+async function dbDeleteAttachmentCipherChunk(msgId, index) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ATTACHMENT_CHUNK_STORE_NAME, 'readwrite')
+    tx.objectStore(ATTACHMENT_CHUNK_STORE_NAME).delete(`${msgId}:${index}`)
+    tx.oncomplete = () => resolve()
+    tx.onerror = event => reject(event.target.error)
+  })
+}
+
+async function dbDeleteAttachmentCipherChunks(indexName, value) {
+  return dbDeleteIndexedRecords(ATTACHMENT_CHUNK_STORE_NAME, indexName, value)
+}
+
+function dbDeleteAttachmentCipherChunksByMessage(msgId) {
+  return dbDeleteAttachmentCipherChunks('msgId', msgId)
+}
+
+function dbDeleteAttachmentCipherChunksByChat(chatId) {
+  return dbDeleteAttachmentCipherChunks('chatId', chatId)
+}
+
+async function dbGetAllStoreRecords(storeName) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readonly')
+    const request = tx.objectStore(storeName).getAll()
+    request.onsuccess = () => resolve(request.result || [])
+    request.onerror = event => reject(event.target.error)
+  })
+}
+
+async function dbDeleteStoreRecords(storeName, ids) {
+  if (!ids.length) return
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite')
+    const store = tx.objectStore(storeName)
+    for (const id of ids) store.delete(id)
+    tx.oncomplete = () => resolve()
+    tx.onerror = event => reject(event.target.error)
   })
 }
 
@@ -427,6 +603,45 @@ async function dbUpdateMessageDelivery(msgId, status, ts, failureCode) {
   })
 }
 
+async function dbUpdateMessageAttachmentStatus(msgId, attachmentStatus, failureCode) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    const store = tx.objectStore(STORE_NAME)
+    const request = store.get(msgId)
+    request.onsuccess = () => {
+      const record = request.result
+      if (record) {
+        record.attachmentStatus = attachmentStatus
+        if (failureCode !== undefined) record.failureCode = failureCode
+        store.put(record)
+      }
+    }
+    tx.oncomplete = () => resolve()
+    tx.onerror = event => reject(event.target.error)
+  })
+}
+
+async function dbMarkFileAttachmentReceived(msgId) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    const store = tx.objectStore(STORE_NAME)
+    const request = store.get(msgId)
+    let isFile = false
+    request.onsuccess = () => {
+      const record = request.result
+      if (record?.mine && record.type === 'file') {
+        isFile = true
+        record.attachmentStatus = 'received'
+        store.put(record)
+      }
+    }
+    tx.oncomplete = () => resolve(isFile)
+    tx.onerror = event => reject(event.target.error)
+  })
+}
+
 export function clearAllMessagesDB() {
   return new Promise((resolve) => {
     const req = indexedDB.deleteDatabase(DB_NAME)
@@ -456,6 +671,16 @@ async function dbGetAllPending() {
     const req = tx.objectStore(PENDING_STORE_NAME).getAll()
     req.onsuccess = (e) => resolve(e.target.result || [])
     req.onerror = (e) => reject(e.target.error)
+  })
+}
+
+async function dbGetPending(msgId) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PENDING_STORE_NAME, 'readonly')
+    const request = tx.objectStore(PENDING_STORE_NAME).get(msgId)
+    request.onsuccess = () => resolve(request.result || null)
+    request.onerror = event => reject(event.target.error)
   })
 }
 
@@ -516,6 +741,14 @@ export const useChatStore = defineStore('chat', () => {
   // This type of early receipt is temporarily stored and used immediately when the local message is stored in the database.
   const earlyReadReceipts = new Map()
   const EARLY_READ_RECEIPT_MAX = 500
+  // Large offline attachments are decrypted one at a time. WebSocket listener
+  // callbacks are otherwise concurrent and could allocate several 100MB files.
+  const offlineAttachmentReceives = new Map()
+  let offlineAttachmentReceiveQueue = Promise.resolve()
+  const offlineUploadOperations = new Map()
+  const offlineDownloadOperations = new Map()
+  const canceledOfflineDownloadMessages = new Set()
+  const attachmentStatusTimers = new Map()
 
   // Message encryption key (used to encrypt IndexedDB storage)
   let messageEncryptKey = null
@@ -544,6 +777,53 @@ export const useChatStore = defineStore('chat', () => {
       if (msg) return msg
     }
     return null
+  }
+
+  async function setMessageAttachmentStatus(msg, status, failureCode) {
+    if (!msg) return
+    msg.attachmentStatus = status
+    if (failureCode !== undefined) msg.failureCode = failureCode
+    await dbUpdateMessageAttachmentStatus(msg.id, status, failureCode).catch(() => {})
+  }
+
+  async function maybeAutoCleanReceivedAttachment(msg) {
+    if (!msg?.mine || !loadAttachmentAutoClean(useIdentityStore().chatId)) return false
+    await deleteFileArtifacts(msg, msg.id)
+    return true
+  }
+
+  function stopAttachmentStatusWatch(attachmentId) {
+    const timer = attachmentStatusTimers.get(attachmentId)
+    if (timer) clearTimeout(timer)
+    attachmentStatusTimers.delete(attachmentId)
+  }
+
+  function watchOutgoingAttachment(msg, delay = 15000) {
+    const attachmentId = msg?.offlineAttachment?.attachmentId || msg?.attachmentId
+    if (!msg?.mine || !attachmentId || ['received', 'expired'].includes(msg.attachmentStatus)) return
+    stopAttachmentStatusWatch(attachmentId)
+    const check = async () => {
+      try {
+        const response = await attachmentApi.get(attachmentId)
+        const status = response?.data?.status
+        if (status === 'consumed') {
+          await setMessageAttachmentStatus(msg, 'received')
+          await maybeAutoCleanReceivedAttachment(msg)
+          return
+        }
+        if (status === 'expired' || status === 'canceled') {
+          await setMessageAttachmentStatus(msg, 'expired', 'attachment_expired')
+          return
+        }
+      } catch (error) {
+        if (error?.response?.status === 404 || error?.response?.status === 410) {
+          await setMessageAttachmentStatus(msg, 'expired', 'attachment_expired')
+          return
+        }
+      }
+      attachmentStatusTimers.set(attachmentId, setTimeout(check, 30000))
+    }
+    attachmentStatusTimers.set(attachmentId, setTimeout(check, delay))
   }
 
   function armMessageAckTimer(msgId) {
@@ -579,12 +859,37 @@ export const useChatStore = defineStore('chat', () => {
     return false
   }
 
+  function stopOfflineUploadOperation(attachmentId) {
+    const operation = offlineUploadOperations.get(attachmentId)
+    if (!operation) return false
+    operation.canceled = true
+    operation.paused = false
+    operation.controller?.abort()
+    operation.resume?.()
+    return true
+  }
+
+  function stopOfflineDownloadByMessage(msgId) {
+    canceledOfflineDownloadMessages.add(msgId)
+    for (const [attachmentId, operation] of offlineDownloadOperations) {
+      const transfer = fileTransfers.value[attachmentId]
+      if (transfer?.msgId !== msgId) continue
+      operation.canceled = true
+      operation.paused = false
+      operation.controller?.abort()
+      operation.resume?.()
+      return true
+    }
+    return false
+  }
+
   function applyEarlyReadReceipt(msg) {
     if (!msg.mine) return null
     const receipt = earlyReadReceipts.get(msg.id)
     if (!receipt) return null
     msg.read = true
     msg.status = 'sent'
+    if (msg.type === 'file') msg.attachmentStatus = 'received'
     if (msg.burnAfterRead && !msg.readReceivedAt) {
       msg.readReceivedAt = receipt.read_at
       msg.burnAt = receipt.read_at + BURN_AFTER_READ_DELAY
@@ -696,12 +1001,14 @@ export const useChatStore = defineStore('chat', () => {
       // Lazy loading of file bodies: Rebuild from IndexedDB only for file messages with "no valid blob URL in memory".
       // Only works on the currently open session to avoid reading all files into memory at once.
       await Promise.all(decryptedMsgs.map(async (m) => {
-        if (m.type !== 'file' || m.objectUrl) return
+        if (m.type !== 'file') return
         try {
           const rec = await dbGetFile(m.id)
-          if (!rec) return  //No persistent copy (old data/not saved successfully) → keep null and display "Expired"
-          const buf = await decryptFileBytes(rec, messageEncryptKey)
-          m.objectUrl = URL.createObjectURL(new Blob([buf], { type: m.filetype || rec.filetype }))
+          m.localFileAvailable = !!rec
+          if (!rec || m.objectUrl) return  //No persistent copy (old data/not saved successfully) → keep null and display "Expired"
+          if (rec.chunked && rec.filesize > AUTO_PREVIEW_FILE_BYTES) return
+          const blob = await loadStoredFileBlob(m.id, m.filetype || rec.filetype)
+          if (blob) m.objectUrl = URL.createObjectURL(blob)
         } catch (e) {
           console.warn('[chat] rehydrate file blob failed:', m.id, e)
         }
@@ -752,7 +1059,14 @@ export const useChatStore = defineStore('chat', () => {
           const decryptedText = await decryptMessageText(m.text, messageEncryptKey)
           if (m.type === 'file') {
             const meta = JSON.parse(decryptedText)
-            grouped[cid].push({ ...m, text: null, objectUrl: existingUrls[m.id] || null, ...meta })
+            const storedFile = await dbGetFile(m.id)
+            grouped[cid].push({
+              ...m,
+              text: null,
+              objectUrl: existingUrls[m.id] || null,
+              localFileAvailable: !!storedFile,
+              ...meta,
+            })
           } else {
             grouped[cid].push({ ...m, ...parseChatMessageContent(decryptedText), status: restoreOutgoingStatus(m) })
           }
@@ -783,6 +1097,16 @@ export const useChatStore = defineStore('chat', () => {
         grouped[cid].sort((a, b) => a.ts - b.ts)
       }
       messages.value = grouped
+      for (const thread of Object.values(grouped)) {
+        for (const msg of thread) {
+          if (msg.mine && msg.type === 'file' && msg.offlineAttachment && msg.attachmentStatus === 'waiting') {
+            watchOutgoingAttachment(msg, 1000)
+          }
+        }
+      }
+      cleanupStaleAttachmentStorage().catch(error => {
+        console.warn('[chat] stale attachment cleanup failed:', error)
+      })
     } catch (e) {
       console.error('[chat] load all messages failed:', e)
     }
@@ -792,12 +1116,21 @@ export const useChatStore = defineStore('chat', () => {
    * Clear messages with specified chatId (clear IndexedDB and memory)
    */
   async function clearChatMessages(chatId) {
+    const attachmentIDs = (messages.value[chatId] || [])
+      .filter(message => message.mine && message.offlineAttachment && message.status !== 'sent')
+      .map(message => message.offlineAttachment.attachmentId)
+    for (const attachmentID of attachmentIDs) {
+      stopOfflineUploadOperation(attachmentID)
+      attachmentApi.cancel(attachmentID).catch(() => {})
+    }
     // First release all file blob URLs of the session in memory to avoid leaks
     for (const m of messages.value[chatId] || []) releaseFileObjectUrl(m)
     try {
       discardPendingMessagesTo(chatId)
       await dbClearMessages(chatId)
       await dbClearChatFiles(chatId)
+      await dbDeleteFileChunksByChat(chatId)
+      await dbDeleteAttachmentCipherChunksByChat(chatId)
     } catch (e) {
       console.error('[chat] clear messages failed:', e)
     }
@@ -906,8 +1239,149 @@ export const useChatStore = defineStore('chat', () => {
       await ensureMessageKey()
       const { iv, ciphertext } = await encryptFileBytes(arrayBuffer, messageEncryptKey)
       await dbPutFile({ id: msgId, chatId, iv, ciphertext, filetype })
+      return true
     } catch (e) {
       console.error('[chat] persist file blob failed:', msgId, e)
+      return false
+    }
+  }
+
+  async function prepareChunkedFile(msgId) {
+    await dbDeleteFile(msgId).catch(() => {})
+    await dbDeleteFileChunksByMessage(msgId).catch(() => {})
+  }
+
+  async function persistPlainFileChunk(chatId, msgId, index, plaintext) {
+    const { iv, ciphertext } = await encryptLocalFileChunk(plaintext, messageEncryptKey, msgId, index)
+    await dbPutFileChunk(chatId, msgId, index, { iv, ciphertext })
+  }
+
+  async function finalizeChunkedFile(chatId, msgId, filetype, filesize, chunkSize, chunkCount) {
+    await dbPutFile({
+      id: msgId,
+      chatId,
+      filetype,
+      filesize,
+      chunked: true,
+      chunkSize,
+      chunkCount,
+    })
+  }
+
+  async function persistFileSource(chatId, msgId, source, filetype, chunkSize = LOCAL_FILE_CHUNK_SIZE) {
+    try {
+      await ensureMessageKey()
+      await prepareChunkedFile(msgId)
+      const chunkCount = Math.ceil(source.size / chunkSize)
+      for (let index = 0; index < chunkCount; index++) {
+        const start = index * chunkSize
+        const end = Math.min(source.size, start + chunkSize)
+        const plaintext = await source.slice(start, end).arrayBuffer()
+        if (plaintext.byteLength !== end - start) throw new Error('Local attachment source changed')
+        await persistPlainFileChunk(chatId, msgId, index, plaintext)
+      }
+      await finalizeChunkedFile(chatId, msgId, filetype, source.size, chunkSize, chunkCount)
+      return true
+    } catch (e) {
+      await dbDeleteFile(msgId).catch(() => {})
+      await dbDeleteFileChunksByMessage(msgId).catch(() => {})
+      console.error('[chat] persist chunked file failed:', msgId, e)
+      if (isStorageQuotaError(e)) {
+        const storageError = new Error('Local attachment storage is full')
+        storageError.code = 'local_attachment_storage_full'
+        storageError.cause = e
+        throw storageError
+      }
+      throw e
+    }
+  }
+
+  async function loadStoredFileBlob(msgId, fallbackType = '') {
+    await ensureMessageKey()
+    const record = await dbGetFile(msgId)
+    if (!record) return null
+    if (!record.chunked) {
+      const plaintext = await decryptFileBytes(record, messageEncryptKey)
+      return new Blob([plaintext], { type: fallbackType || record.filetype || '' })
+    }
+    const plaintextChunks = []
+    let totalBytes = 0
+    for (let index = 0; index < record.chunkCount; index++) {
+      const chunk = await dbGetFileChunk(msgId, index)
+      if (!chunk) throw new Error('The local attachment copy is incomplete')
+      const plaintext = await decryptLocalFileChunk(chunk, messageEncryptKey, msgId, index)
+      plaintextChunks.push(plaintext)
+      totalBytes += plaintext.byteLength
+    }
+    if (totalBytes !== record.filesize) throw new Error('The local attachment copy is incomplete')
+    return new Blob(plaintextChunks, { type: fallbackType || record.filetype || '' })
+  }
+
+  async function createStoredFileSource(msg) {
+    await ensureMessageKey()
+    const record = await dbGetFile(msg.id)
+    if (!record) throw new Error('The local attachment copy is unavailable')
+    if (!record.chunked) {
+      const plaintext = await decryptFileBytes(record, messageEncryptKey)
+      return new File([plaintext], msg.filename, { type: msg.filetype, lastModified: Date.now() })
+    }
+    return {
+      name: msg.filename,
+      type: msg.filetype || '',
+      size: record.filesize,
+      slice(start, end) {
+        return {
+          arrayBuffer: async () => {
+            const index = Math.floor(start / record.chunkSize)
+            const expectedStart = index * record.chunkSize
+            const expectedEnd = Math.min(record.filesize, expectedStart + record.chunkSize)
+            if (start !== expectedStart || end !== expectedEnd) {
+              throw new Error('Local attachment chunk size is incompatible')
+            }
+            const chunk = await dbGetFileChunk(msg.id, index)
+            if (!chunk) throw new Error('The local attachment copy is incomplete')
+            return decryptLocalFileChunk(chunk, messageEncryptKey, msg.id, index)
+          },
+        }
+      },
+    }
+  }
+
+  async function ensureFileObjectUrl(msg) {
+    if (!msg || msg.type !== 'file') return null
+    if (msg.objectUrl) return msg.objectUrl
+    const blob = await loadStoredFileBlob(msg.id, msg.filetype)
+    if (!blob) return null
+    msg.objectUrl = URL.createObjectURL(blob)
+    return msg.objectUrl
+  }
+
+  async function getStoredFileDescriptor(msg) {
+    if (!msg || msg.type !== 'file') throw new Error('Attachment message is invalid')
+    await ensureMessageKey()
+    const record = await dbGetFile(msg.id)
+    if (!record) throw new Error('The local attachment copy is unavailable')
+    if (!record.chunked) {
+      return {
+        size: msg.filesize,
+        chunkCount: 1,
+        async readChunk(index) {
+          if (index !== 0) throw new Error('Attachment chunk index is invalid')
+          return new Uint8Array(await decryptFileBytes(record, messageEncryptKey))
+        },
+      }
+    }
+    return {
+      size: record.filesize,
+      chunkCount: record.chunkCount,
+      async readChunk(index) {
+        if (!Number.isInteger(index) || index < 0 || index >= record.chunkCount) {
+          throw new Error('Attachment chunk index is invalid')
+        }
+        const chunk = await dbGetFileChunk(msg.id, index)
+        if (!chunk) throw new Error('The local attachment copy is incomplete')
+        return new Uint8Array(await decryptLocalFileChunk(chunk, messageEncryptKey, msg.id, index))
+      },
     }
   }
 
@@ -926,8 +1400,154 @@ export const useChatStore = defineStore('chat', () => {
    * msg may be undefined (no longer exists in memory), in which case only the persistent copy is cleaned.
    */
   async function deleteFileArtifacts(msg, msgId) {
+    const stoppedActiveDownload = stopOfflineDownloadByMessage(msgId)
+    const activeDownloadTask = stoppedActiveDownload ? offlineAttachmentReceives.get(msgId) : null
+    if (activeDownloadTask) await activeDownloadTask.catch(() => {})
     releaseFileObjectUrl(msg)
     await dbDeleteFile(msgId).catch(() => {})
+    await dbDeleteFileChunksByMessage(msgId).catch(() => {})
+    await dbDeleteAttachmentCipherChunksByMessage(msgId).catch(() => {})
+    if (msg) msg.localFileAvailable = false
+  }
+
+  function attachmentRecordBytes(record) {
+    return binarySize(record?.ciphertext) + binarySize(record?.iv)
+  }
+
+  async function getAttachmentStorageStats() {
+    const [files, fileChunks, receiveChunks, storage] = await Promise.all([
+      dbGetAllStoreRecords(FILE_STORE_NAME),
+      dbGetAllStoreRecords(FILE_CHUNK_STORE_NAME),
+      dbGetAllStoreRecords(ATTACHMENT_CHUNK_STORE_NAME),
+      estimateLocalStorage().catch(() => ({ supported: false, usage: null, quota: null, available: null })),
+    ])
+    const chats = new Map()
+    const messageIds = new Set()
+    let localBytes = 0
+    let temporaryBytes = 0
+    const add = (record, bytes, temporary = false) => {
+      const chatId = record.chatId || ''
+      if (!chatId) return
+      const current = chats.get(chatId) || { chatId, bytes: 0, temporaryBytes: 0, messageIds: new Set() }
+      current.bytes += bytes
+      if (temporary) current.temporaryBytes += bytes
+      if (record.msgId || record.id) current.messageIds.add(record.msgId || record.id)
+      chats.set(chatId, current)
+    }
+    for (const record of files) {
+      const bytes = record.chunked ? 0 : attachmentRecordBytes(record)
+      localBytes += bytes
+      messageIds.add(record.id)
+      add(record, bytes)
+    }
+    for (const record of fileChunks) {
+      const bytes = attachmentRecordBytes(record)
+      localBytes += bytes
+      messageIds.add(record.msgId)
+      add(record, bytes)
+    }
+    for (const record of receiveChunks) {
+      const bytes = attachmentRecordBytes(record)
+      temporaryBytes += bytes
+      messageIds.add(record.msgId)
+      add(record, bytes, true)
+    }
+    return {
+      attachmentBytes: localBytes + temporaryBytes,
+      localBytes,
+      temporaryBytes,
+      messageCount: messageIds.size,
+      storage,
+      chats: [...chats.values()]
+        .map(item => ({ ...item, messageCount: item.messageIds.size, messageIds: undefined }))
+        .sort((a, b) => b.bytes - a.bytes),
+    }
+  }
+
+  async function clearAttachmentStorage(chatId = null) {
+    const activeTransfers = Object.values(fileTransfers.value).filter(transfer =>
+      transfer.transport === 'offline' &&
+      (!chatId || transfer.toChatId === chatId || transfer.fromChatId === chatId),
+    )
+    for (const transfer of activeTransfers) {
+      await cancelOfflineTransfer(transfer.id).catch(() => {})
+    }
+    const matches = record => !chatId || record.chatId === chatId
+    const [files, fileChunks, receiveChunks] = await Promise.all([
+      dbGetAllStoreRecords(FILE_STORE_NAME),
+      dbGetAllStoreRecords(FILE_CHUNK_STORE_NAME),
+      dbGetAllStoreRecords(ATTACHMENT_CHUNK_STORE_NAME),
+    ])
+    const messageIds = new Set()
+    for (const record of [...files, ...fileChunks, ...receiveChunks]) {
+      if (matches(record)) messageIds.add(record.msgId || record.id)
+    }
+    for (const msgId of messageIds) {
+      const msg = findLocalMessage(msgId)
+      if (msg?.mine && msg.offlineAttachment && ['pending', 'queued', 'paused', 'failed'].includes(msg.status)) {
+        stopOfflineUploadOperation(msg.attachmentId)
+        attachmentApi.cancel(msg.attachmentId).catch(() => {})
+        msg.status = 'failed'
+        msg.failureCode = 'attachment_local_copy_removed'
+        await dbUpdateMessageDelivery(msg.id, 'failed', undefined, msg.failureCode).catch(() => {})
+      }
+      releaseFileObjectUrl(msg)
+      if (msg) msg.localFileAvailable = false
+    }
+    await Promise.all([
+      dbDeleteStoreRecords(FILE_STORE_NAME, files.filter(matches).map(record => record.id)),
+      dbDeleteStoreRecords(FILE_CHUNK_STORE_NAME, fileChunks.filter(matches).map(record => record.id)),
+      dbDeleteStoreRecords(ATTACHMENT_CHUNK_STORE_NAME, receiveChunks.filter(matches).map(record => record.id)),
+    ])
+    return getAttachmentStorageStats()
+  }
+
+  async function cleanupStaleAttachmentStorage(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
+    if (maxAgeMs === 0) {
+      const incompleteTransfers = Object.values(fileTransfers.value).filter(transfer =>
+        transfer.transport === 'offline' && ['paused', 'error'].includes(transfer.status),
+      )
+      for (const transfer of incompleteTransfers) {
+        await cancelOfflineTransfer(transfer.id).catch(() => {})
+      }
+    }
+    const cutoff = Date.now() - maxAgeMs
+    const [storedMessages, files, fileChunks, receiveChunks] = await Promise.all([
+      dbGetAllMessages(),
+      dbGetAllStoreRecords(FILE_STORE_NAME),
+      dbGetAllStoreRecords(FILE_CHUNK_STORE_NAME),
+      dbGetAllStoreRecords(ATTACHMENT_CHUNK_STORE_NAME),
+    ])
+    const messageIds = new Set(storedMessages.map(record => record.id))
+    const manifestIds = new Set(files.map(record => record.id))
+    const stale = record => maxAgeMs === 0 || (Number.isFinite(record.updatedAt) && record.updatedAt < cutoff)
+    const failedMessageIds = new Set(storedMessages
+      .filter(record => record.type === 'file' && record.status === 'failed' && (maxAgeMs === 0 || (Number(record.ts) || 0) < cutoff))
+      .map(record => record.id))
+    const staleFiles = files.filter(record => failedMessageIds.has(record.id) || (!messageIds.has(record.id) && stale(record)))
+    const staleFileChunks = fileChunks.filter(record =>
+      failedMessageIds.has(record.msgId) || (stale(record) && (!messageIds.has(record.msgId) || !manifestIds.has(record.msgId))),
+    )
+    const staleReceiveChunks = receiveChunks.filter(record => stale(record))
+    for (const msgId of failedMessageIds) {
+      const msg = findLocalMessage(msgId)
+      if (msg?.attachmentId) {
+        stopOfflineUploadOperation(msg.attachmentId)
+        attachmentApi.cancel(msg.attachmentId).catch(() => {})
+      }
+      releaseFileObjectUrl(msg)
+      if (msg) msg.localFileAvailable = false
+    }
+    await Promise.all([
+      dbDeleteStoreRecords(FILE_STORE_NAME, staleFiles.map(record => record.id)),
+      dbDeleteStoreRecords(FILE_CHUNK_STORE_NAME, staleFileChunks.map(record => record.id)),
+      dbDeleteStoreRecords(ATTACHMENT_CHUNK_STORE_NAME, staleReceiveChunks.map(record => record.id)),
+    ])
+    return {
+      removedRecords: staleFiles.length + staleFileChunks.length + staleReceiveChunks.length,
+      removedBytes: [...staleFiles, ...staleFileChunks, ...staleReceiveChunks]
+        .reduce((total, record) => total + attachmentRecordBytes(record), 0),
+    }
   }
 
   /**
@@ -939,7 +1559,14 @@ export const useChatStore = defineStore('chat', () => {
       if (msg.objectUrl) URL.revokeObjectURL(msg.objectUrl)
       return false
     }
-    const fullMsg = { ...msg, type: 'file', read: msg.read || false, burnAt: msg.burnAt || null }
+    const fullMsg = {
+      ...msg,
+      type: 'file',
+      read: msg.read || false,
+      burnAt: msg.burnAt || null,
+      localFileAvailable: msg.localFileAvailable !== false,
+      attachmentStatus: msg.attachmentStatus || (msg.mine ? 'waiting' : 'received'),
+    }
     const earlyReceipt = applyEarlyReadReceipt(fullMsg)
     ensureThread(chatId)
     messages.value[chatId].push(fullMsg)
@@ -949,6 +1576,8 @@ export const useChatStore = defineStore('chat', () => {
         filename: msg.filename,
         filesize: msg.filesize,
         filetype: msg.filetype,
+        ...(msg.attachmentId ? { attachmentId: msg.attachmentId } : {}),
+        ...(msg.offlineAttachment ? { offlineAttachment: msg.offlineAttachment } : {}),
         ...(msg.kind === 'voice' ? { kind: 'voice', durationMs: msg.durationMs } : {})
       })
       const encryptedText = await encryptMessageText(metaText, messageEncryptKey)
@@ -968,9 +1597,14 @@ export const useChatStore = defineStore('chat', () => {
         burnAfterRead: msg.burnAfterRead || false,
         readReceivedAt: fullMsg.readReceivedAt || null,
         burnAt: fullMsg.burnAt || null,
-        status: fullMsg.status || (fullMsg.mine ? 'sent' : undefined)
+        status: fullMsg.status || (fullMsg.mine ? 'sent' : undefined),
+        attachmentStatus: fullMsg.attachmentStatus || (fullMsg.mine ? 'waiting' : 'received'),
+        failureCode: fullMsg.failureCode || null,
       })
-      if (earlyReceipt) confirmReadReceiptsApplied(chatId, [earlyReceipt.msg_id])
+      if (earlyReceipt) {
+        confirmReadReceiptsApplied(chatId, [earlyReceipt.msg_id])
+        await maybeAutoCleanReceivedAttachment(fullMsg)
+      }
     } catch (e) {
       // DB write failure: retain messages in memory (still visible to users), clean up orphan file bodies (messages are lost after refresh)
       await dbDeleteFile(msg.id).catch(() => {})
@@ -1131,6 +1765,277 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function createOfflineReceiveTransfer(payload, metadata, status = 'transferring') {
+    return {
+      id: metadata.attachmentId,
+      msgId: payload.msg_id,
+      direction: 'receive',
+      transport: 'offline',
+      fromChatId: payload.from,
+      filename: metadata.filename,
+      filesize: metadata.fileSize,
+      filetype: metadata.filetype,
+      kind: metadata.kind,
+      durationMs: metadata.durationMs,
+      totalChunks: metadata.chunkCount,
+      progress: 0,
+      status,
+      payload,
+      metadata,
+    }
+  }
+
+  async function performOfflineAttachmentReceive(payload, metadata) {
+    if (canceledOfflineDownloadMessages.has(payload.msg_id)) return false
+    const transferId = metadata.attachmentId
+    const transfer = createOfflineReceiveTransfer(payload, metadata)
+    fileTransfers.value[transferId] = transfer
+    const operation = { controller: null, paused: false, pauseRequested: false, canceled: false, resume: null }
+    offlineDownloadOperations.set(transferId, operation)
+    let objectUrl = null
+    try {
+      await assertLocalAttachmentSpace(metadata.fileSize)
+      await ensureMessageKey()
+      // Keep already authenticated local chunks so a process restart resumes
+      // without downloading or decrypting them again. The manifest is written
+      // only after every chunk is present.
+      await dbDeleteFile(payload.msg_id).catch(() => {})
+      const collectPlaintext = metadata.fileSize <= AUTO_PREVIEW_FILE_BYTES
+      let blob
+      while (true) {
+        if (operation.canceled) throw new Error('Attachment download canceled')
+        await waitForOfflineUploadResume(operation)
+        if (operation.canceled) throw new Error('Attachment download canceled')
+        transfer.status = 'transferring'
+        operation.controller = new AbortController()
+        try {
+          blob = await downloadOfflineAttachment(metadata, {
+            api: attachmentApi,
+            signal: operation.controller.signal,
+            getStoredCiphertextChunk: index => dbGetAttachmentCipherChunk(payload.msg_id, index),
+            getStoredPlaintextChunk: async index => {
+              const chunk = await dbGetFileChunk(payload.msg_id, index)
+              return chunk ? decryptLocalFileChunk(chunk, messageEncryptKey, payload.msg_id, index) : null
+            },
+            onCiphertextChunk: (index, ciphertext) => dbPutAttachmentCipherChunk(
+              payload.from,
+              payload.msg_id,
+              metadata.attachmentId,
+              index,
+              ciphertext,
+            ),
+            onPlaintextChunk: async (index, plaintext) => {
+              await persistPlainFileChunk(payload.from, payload.msg_id, index, plaintext)
+              await dbDeleteAttachmentCipherChunk(payload.msg_id, index)
+            },
+            collectPlaintext,
+            onProgress: progress => { transfer.progress = progress },
+          })
+          break
+        } catch (error) {
+          if (operation.canceled) throw error
+          if (!operation.pauseRequested) throw error
+          operation.pauseRequested = false
+          transfer.status = operation.paused ? 'paused' : 'transferring'
+        }
+      }
+      transfer.status = 'processing'
+      transfer.progress = 95
+      await finalizeChunkedFile(
+        payload.from,
+        payload.msg_id,
+        metadata.filetype,
+        metadata.fileSize,
+        metadata.chunkSize,
+        metadata.chunkCount,
+      )
+      if (blob) objectUrl = URL.createObjectURL(blob)
+      const added = await addFileMessage(payload.from, {
+        id: payload.msg_id,
+        from: payload.from,
+        filename: metadata.filename,
+        filesize: metadata.fileSize,
+        filetype: metadata.filetype,
+        kind: metadata.kind,
+        durationMs: metadata.durationMs,
+        attachmentId: metadata.attachmentId,
+        objectUrl,
+        mine: false,
+        localFileAvailable: true,
+        attachmentStatus: 'received',
+        burnAfterRead: payload.burn_after_read || false,
+        ts: payload.ts,
+      })
+      if (!added) {
+        objectUrl = null // addFileMessage releases duplicate object URLs itself.
+        throw new Error('Unable to persist the received attachment message')
+      }
+      objectUrl = null // The message now owns this URL.
+
+      // The local body and message record are durable before ciphertext deletion.
+      // If this best-effort ACK fails, the server's seven-day expiry remains the fallback.
+      await acknowledgeOfflineAttachment(metadata, { api: attachmentApi }).catch(error => {
+        console.warn('[chat] attachment acknowledgement will rely on expiry:', error)
+      })
+      await dbDeleteAttachmentCipherChunksByMessage(payload.msg_id).catch(() => {})
+      transfer.progress = 100
+      transfer.status = 'done'
+      scheduleTransferCleanup(transferId, 1000)
+      return true
+    } catch (error) {
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+      if (operation.canceled || canceledOfflineDownloadMessages.has(payload.msg_id)) {
+        await dbDeleteFile(payload.msg_id).catch(() => {})
+        await dbDeleteFileChunksByMessage(payload.msg_id).catch(() => {})
+        delete fileTransfers.value[transferId]
+        return false
+      }
+      transfer.status = 'error'
+      transfer.errorReason = error?.message || 'Attachment download failed'
+      const reason = classifyAttachmentError(error, 'local')
+      transfer.errorCode = reason === 'local_storage'
+        ? 'local_attachment_storage_full'
+        : reason === 'expired'
+          ? 'attachment_expired'
+          : reason === 'corrupted'
+            ? 'attachment_corrupted'
+            : reason === 'network'
+              ? 'network_error'
+              : error?.response?.data?.code
+      transfer.errorAt = Date.now()
+      if (error?.response?.status === 404 || error?.response?.status === 410) {
+        await dbDeleteFile(payload.msg_id).catch(() => {})
+        await dbDeleteFileChunksByMessage(payload.msg_id).catch(() => {})
+        await dbDeleteAttachmentCipherChunksByMessage(payload.msg_id).catch(() => {})
+        const added = await addFileMessage(payload.from, {
+          id: payload.msg_id,
+          from: payload.from,
+          filename: metadata.filename,
+          filesize: metadata.fileSize,
+          filetype: metadata.filetype,
+          kind: metadata.kind,
+          durationMs: metadata.durationMs,
+          attachmentId: metadata.attachmentId,
+          objectUrl: null,
+          localFileAvailable: false,
+          attachmentStatus: 'expired',
+          failureCode: 'attachment_expired',
+          mine: false,
+          burnAfterRead: payload.burn_after_read || false,
+          ts: payload.ts,
+        })
+        if (added) return true
+      }
+      await dbAddPending({
+        ...payload,
+        attachment_failed: true,
+        attachment_failure_code: transfer.errorCode,
+      }).catch(persistError => {
+        console.warn('[chat] persist failed attachment transfer failed:', persistError)
+      })
+      throw error
+    } finally {
+      offlineDownloadOperations.delete(transferId)
+    }
+  }
+
+  function receiveOfflineAttachmentMessage(payload, metadata) {
+    const existing = offlineAttachmentReceives.get(payload.msg_id)
+    if (existing) return existing
+    const task = offlineAttachmentReceiveQueue.then(() => performOfflineAttachmentReceive(payload, metadata))
+    offlineAttachmentReceiveQueue = task.catch(() => {})
+    offlineAttachmentReceives.set(payload.msg_id, task)
+    task.finally(() => {
+      if (offlineAttachmentReceives.get(payload.msg_id) === task) {
+        offlineAttachmentReceives.delete(payload.msg_id)
+      }
+    }).catch(() => {})
+    return task
+  }
+
+  function pauseOfflineDownload(transferId, reason = 'user') {
+    const operation = offlineDownloadOperations.get(transferId)
+    const transfer = fileTransfers.value[transferId]
+    if (!operation || !transfer || transfer.status !== 'transferring') return false
+    operation.paused = true
+    operation.pauseReason = reason
+    operation.pauseRequested = true
+    transfer.status = 'paused'
+    if (reason === 'user' && transfer.payload) {
+      dbAddPending({ ...transfer.payload, attachment_paused: true }).catch(error => {
+        console.warn('[chat] persist paused attachment failed:', error)
+      })
+    }
+    operation.controller?.abort()
+    return true
+  }
+
+  function resumeOfflineDownload(transferId) {
+    const operation = offlineDownloadOperations.get(transferId)
+    const transfer = fileTransfers.value[transferId]
+    if (operation && transfer) {
+      operation.paused = false
+      operation.pauseReason = null
+      transfer.status = 'transferring'
+      if (transfer.msgId) dbDeletePending(transfer.msgId).catch(() => {})
+      const resume = operation.resume
+      operation.resume = null
+      resume?.()
+      return true
+    }
+    if (!transfer?.payload || !transfer?.metadata) return false
+    dbDeletePending(transfer.payload.msg_id).catch(() => {})
+    offlineAttachmentReceives.delete(transfer.payload.msg_id)
+    receiveOfflineAttachmentMessage(transfer.payload, transfer.metadata).catch(error => {
+      console.warn('[chat] retry offline attachment download failed:', error)
+    })
+    return true
+  }
+
+  async function cancelOfflineTransfer(transferId) {
+    const transfer = fileTransfers.value[transferId]
+    if (!transfer || transfer.transport !== 'offline') return false
+    if (transfer.direction === 'send') {
+      const msg = findLocalMessage(transfer.msgId)
+      stopOfflineUploadOperation(transferId)
+      stopAttachmentStatusWatch(transferId)
+      await attachmentApi.cancel(transferId).catch(() => {})
+      if (msg) {
+        const thread = messages.value[transfer.toChatId] || []
+        const index = thread.findIndex(item => item.id === msg.id)
+        if (index >= 0) thread.splice(index, 1)
+        await dbDeleteMessage(msg.id).catch(() => {})
+        await deleteFileArtifacts(msg, msg.id)
+      }
+    } else {
+      canceledOfflineDownloadMessages.add(transfer.msgId)
+      const operation = offlineDownloadOperations.get(transferId)
+      if (operation) {
+        operation.canceled = true
+        operation.paused = false
+        operation.controller?.abort()
+        operation.resume?.()
+      }
+      await dbDeletePending(transfer.msgId).catch(() => {})
+      await attachmentApi.acknowledge(transferId).catch(() => {})
+      await dbDeleteFile(transfer.msgId).catch(() => {})
+      await dbDeleteFileChunksByMessage(transfer.msgId).catch(() => {})
+      await dbDeleteAttachmentCipherChunksByMessage(transfer.msgId).catch(() => {})
+    }
+    delete fileTransfers.value[transferId]
+    return true
+  }
+
+  function pauseAllOfflineDownloads() {
+    for (const transferId of offlineDownloadOperations.keys()) pauseOfflineDownload(transferId, 'lock')
+  }
+
+  function resumeLockedOfflineDownloads() {
+    for (const [transferId, operation] of offlineDownloadOperations) {
+      if (operation.pauseReason === 'lock') resumeOfflineDownload(transferId)
+    }
+  }
+
   /**
    * Verify file type and size
    */
@@ -1146,8 +2051,10 @@ export const useChatStore = defineStore('chat', () => {
    * @param {boolean} burnAfterRead - burn after reading (automatically deleted 2 hours after the other party reads it)
    * @param {{kind?: 'voice', durationMs?: number, batchId?: string, batchIndex?: number, batchTotal?: number}} options - encrypted attachment metadata and local batch tracking
    */
-  async function sendFile(toChatId, recipientPubKey, file, burnAfterRead = false, options = {}) {
+  async function sendRealtimeFile(toChatId, recipientPubKey, file, burnAfterRead = false, options = {}) {
     validateFile(file)
+    if (file.size > REALTIME_MAX_FILE_SIZE) throw new Error('Realtime file transfer is limited to 100 MB')
+    await assertLocalAttachmentSpace(file.size)
 
     const kind = options.kind === 'voice' ? 'voice' : undefined
     const durationMs = kind === 'voice' ? Math.round(options.durationMs) : undefined
@@ -1280,6 +2187,7 @@ export const useChatStore = defineStore('chat', () => {
       const localMsg = messages.value[toChatId]?.find(m => m.id === msgId)
       if (localMsg) { localMsg.status = 'sent'; localMsg.ts = finalTs }
       await dbUpdateMessageDelivery(msgId, 'sent', finalTs).catch(() => {})
+      await maybeAutoCleanReceivedAttachment(localMsg)
 
       return transferId
     } catch (e) {
@@ -1297,6 +2205,279 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function createOfflineTransfer(toChatId, msg, metadata, options = {}) {
+    return {
+      id: metadata.attachmentId,
+      msgId: msg.id,
+      direction: 'send',
+      transport: 'offline',
+      toChatId,
+      filename: msg.filename,
+      filesize: msg.filesize,
+      filetype: msg.filetype,
+      kind: msg.kind,
+      durationMs: msg.durationMs,
+      batchId: options.batchId,
+      batchIndex: options.batchIndex,
+      batchTotal: options.batchTotal,
+      totalChunks: metadata.chunkCount,
+      progress: 0,
+      status: 'pending',
+    }
+  }
+
+  function waitForOfflineUploadResume(operation) {
+    if (!operation.paused) return Promise.resolve()
+    return new Promise(resolve => { operation.resume = resolve })
+  }
+
+  async function runOfflineUpload(toChatId, recipientPubKey, file, msg, metadata, options = {}) {
+    const transferId = metadata.attachmentId
+    const existingOperation = offlineUploadOperations.get(transferId)
+    if (existingOperation) return existingOperation.promise
+
+    const transfer = fileTransfers.value[transferId] || createOfflineTransfer(toChatId, msg, metadata, options)
+    fileTransfers.value[transferId] = transfer
+    const operation = { controller: null, paused: false, pauseRequested: false, canceled: false, resume: null, promise: null }
+    operation.promise = (async () => {
+      try {
+        while (true) {
+          if (operation.canceled) throw new Error('Attachment upload canceled')
+          await waitForOfflineUploadResume(operation)
+          if (operation.canceled) throw new Error('Attachment upload canceled')
+          transfer.status = 'transferring'
+          await setMessageAttachmentStatus(msg, 'uploading')
+          msg.status = 'pending'
+          await dbUpdateMessageDelivery(msg.id, 'pending').catch(() => {})
+          operation.controller = new AbortController()
+          try {
+            await uploadOfflineAttachment(file, metadata, {
+              api: attachmentApi,
+              signal: operation.controller.signal,
+              onProgress: progress => { transfer.progress = progress },
+            })
+            break
+          } catch (error) {
+            if (!operation.pauseRequested) throw error
+            operation.pauseRequested = false
+            transfer.status = operation.paused ? 'paused' : 'transferring'
+            msg.status = operation.paused ? 'paused' : 'pending'
+            await dbUpdateMessageDelivery(msg.id, msg.status).catch(() => {})
+          }
+        }
+
+        transfer.progress = 95
+        transfer.status = 'processing'
+        const encrypted = await encryptMessage(serializeOfflineAttachmentContent(metadata), recipientPubKey)
+        const sentNow = send('message', {
+          to: toChatId,
+          msg_id: msg.id,
+          ephemeral_pub_key: encrypted.ephemeralPubKey,
+          iv: encrypted.iv,
+          ciphertext: encrypted.ciphertext,
+          burn_after_read: msg.burnAfterRead || false,
+        })
+        const queued = hasPendingMessage(msg.id)
+        if (!sentNow && !queued) throw new Error('Unable to queue the encrypted attachment message')
+
+        msg.status = sentNow ? 'pending' : 'queued'
+        await setMessageAttachmentStatus(msg, 'waiting')
+        await dbUpdateMessageDelivery(msg.id, msg.status).catch(() => {})
+        if (sentNow) armMessageAckTimer(msg.id)
+        transfer.progress = 100
+        transfer.status = 'done'
+        scheduleTransferCleanup(transferId, 1000)
+        watchOutgoingAttachment(msg)
+        return transferId
+      } catch (error) {
+        transfer.status = 'error'
+        transfer.errorReason = error?.message || 'Attachment upload failed'
+        const reason = classifyAttachmentError(error, 'local')
+        transfer.errorCode = reason === 'local_storage'
+          ? 'local_attachment_storage_full'
+          : reason === 'expired'
+            ? 'attachment_expired'
+            : reason === 'corrupted'
+              ? 'attachment_corrupted'
+              : reason === 'network'
+                ? 'network_error'
+                : (error?.code || error?.response?.data?.code)
+        transfer.errorAt = Date.now()
+        msg.status = 'failed'
+        await setMessageAttachmentStatus(msg, reason === 'expired' ? 'expired' : 'failed', transfer.errorCode)
+        await dbUpdateMessageDelivery(msg.id, 'failed', undefined, transfer.errorCode).catch(() => {})
+        scheduleTransferCleanup(transferId, 6000)
+        throw error
+      } finally {
+        offlineUploadOperations.delete(transferId)
+      }
+    })()
+    offlineUploadOperations.set(transferId, operation)
+    return operation.promise
+  }
+
+  /**
+   * Upload independently authenticated ciphertext chunks, then send only the
+   * attachment key and private metadata through the reliable E2EE chat inbox.
+   * The recipient no longer needs to be online while this function runs.
+   */
+  async function sendOfflineFile(toChatId, recipientPubKey, file, burnAfterRead = false, options = {}) {
+    validateFile(file)
+    await assertLocalAttachmentSpace(file.size)
+    const msgId = genMsgId()
+    const kind = options.kind === 'voice' ? 'voice' : undefined
+    const durationMs = kind === 'voice' ? Math.round(options.durationMs) : undefined
+    const metadata = await createOfflineAttachmentUpload(file, toChatId, {
+      api: attachmentApi,
+      kind,
+      durationMs,
+    })
+    const preparationMessage = {
+      id: msgId,
+      filename: file.name,
+      filesize: file.size,
+      filetype: file.type,
+      kind,
+      durationMs,
+    }
+    const preparationTransfer = createOfflineTransfer(toChatId, preparationMessage, metadata, options)
+    preparationTransfer.status = 'processing'
+    fileTransfers.value[metadata.attachmentId] = preparationTransfer
+    const localObjectUrl = URL.createObjectURL(file)
+    try {
+      await persistFileSource(toChatId, msgId, file, file.type, metadata.chunkSize)
+    } catch (error) {
+      await attachmentApi.cancel(metadata.attachmentId).catch(() => {})
+      delete fileTransfers.value[metadata.attachmentId]
+      URL.revokeObjectURL(localObjectUrl)
+      throw error
+    }
+    const added = await addFileMessage(toChatId, {
+      id: msgId,
+      from: 'me',
+      filename: file.name,
+      filesize: file.size,
+      filetype: file.type,
+      kind,
+      durationMs,
+      attachmentId: metadata.attachmentId,
+      offlineAttachment: metadata,
+      objectUrl: localObjectUrl,
+      mine: true,
+      status: 'pending',
+      attachmentStatus: 'preparing',
+      burnAfterRead,
+      ts: getServerNow(),
+    })
+    if (!added) {
+      await attachmentApi.cancel(metadata.attachmentId).catch(() => {})
+      const index = messages.value[toChatId]?.findIndex(message => message.id === msgId) ?? -1
+      if (index >= 0) messages.value[toChatId].splice(index, 1)
+      await dbDeleteFile(msgId).catch(() => {})
+      await dbDeleteFileChunksByMessage(msgId).catch(() => {})
+      delete fileTransfers.value[metadata.attachmentId]
+      URL.revokeObjectURL(localObjectUrl)
+      throw new Error('Unable to save the attachment message')
+    }
+    const msg = messages.value[toChatId]?.find(message => message.id === msgId)
+    preparationTransfer.status = 'pending'
+    preparationTransfer.progress = 0
+    return runOfflineUpload(toChatId, recipientPubKey, file, msg, metadata, options)
+  }
+
+  async function restoreOfflineUploadFile(msg) {
+    return createStoredFileSource(msg)
+  }
+
+  async function retryOfflineFile(toChatId, recipientPubKey, msgId) {
+    const msg = messages.value[toChatId]?.find(message => message.id === msgId)
+    if (!msg?.mine || msg.type !== 'file' || !msg.offlineAttachment) return false
+    if (hasPendingMessage(msgId)) {
+      retryPendingMessage(msgId)
+      msg.status = isConnected() ? 'pending' : 'queued'
+      await dbUpdateMessageDelivery(msgId, msg.status).catch(() => {})
+      if (msg.status === 'pending') armMessageAckTimer(msgId)
+      return true
+    }
+    const file = await restoreOfflineUploadFile(msg)
+    fileTransfers.value[msg.attachmentId] = createOfflineTransfer(toChatId, msg, msg.offlineAttachment)
+    await runOfflineUpload(toChatId, recipientPubKey, file, msg, msg.offlineAttachment)
+    return true
+  }
+
+  function pauseOfflineTransfer(transferId, reason = 'user') {
+    const operation = offlineUploadOperations.get(transferId)
+    const transfer = fileTransfers.value[transferId]
+    if (!operation || !transfer || transfer.status !== 'transferring') return false
+    operation.paused = true
+    operation.pauseReason = reason
+    operation.pauseRequested = true
+    transfer.status = 'paused'
+    const msg = findLocalMessage(transfer.msgId)
+    if (msg) {
+      msg.status = 'paused'
+      setMessageAttachmentStatus(msg, 'paused').catch(() => {})
+      dbUpdateMessageDelivery(msg.id, 'paused').catch(() => {})
+    }
+    operation.controller?.abort()
+    return true
+  }
+
+  function pauseAllOfflineUploads() {
+    for (const transferId of offlineUploadOperations.keys()) pauseOfflineTransfer(transferId, 'lock')
+  }
+
+  async function resumeOfflineTransfer(transferId, recipientPubKey) {
+    const operation = offlineUploadOperations.get(transferId)
+    const transfer = fileTransfers.value[transferId]
+    if (operation && transfer) {
+      operation.paused = false
+      operation.pauseReason = null
+      transfer.status = 'transferring'
+      const msg = findLocalMessage(transfer.msgId)
+      if (msg) {
+        msg.status = 'pending'
+        setMessageAttachmentStatus(msg, 'uploading').catch(() => {})
+      }
+      const resume = operation.resume
+      operation.resume = null
+      resume?.()
+      return true
+    }
+    if (!transfer?.msgId) return false
+    return retryOfflineFile(transfer.toChatId, recipientPubKey, transfer.msgId)
+  }
+
+  function resumeLockedOfflineUploads() {
+    for (const [transferId, operation] of offlineUploadOperations) {
+      if (operation.pauseReason === 'lock') resumeOfflineTransfer(transferId)
+    }
+  }
+
+  async function recoverOfflineUploads(friends = []) {
+    if (useIdentityStore().isLocked) return
+    const publicKeys = new Map(friends.map(friend => [friend.chat_id, friend.public_key]))
+    for (const [chatId, thread] of Object.entries(messages.value)) {
+      const recipientPubKey = publicKeys.get(chatId) || useIdentityStore().getFriendPubKey(chatId)
+      if (!recipientPubKey) continue
+      for (const msg of thread) {
+        if (!msg.mine || msg.type !== 'file' || !msg.offlineAttachment || msg.status !== 'pending' || hasPendingMessage(msg.id)) continue
+        try {
+          await retryOfflineFile(chatId, recipientPubKey, msg.id)
+        } catch (error) {
+          console.warn('[chat] recover offline attachment upload failed:', error)
+        }
+      }
+    }
+  }
+
+  async function sendFile(toChatId, recipientPubKey, file, burnAfterRead = false, options = {}) {
+    if (options.transport === 'realtime') {
+      return sendRealtimeFile(toChatId, recipientPubKey, file, burnAfterRead, options)
+    }
+    return sendOfflineFile(toChatId, recipientPubKey, file, burnAfterRead, options)
+  }
+
   async function recallMessage(chatId, msgId, toChatId) {
     confirmPendingMessage(msgId)
     const pendingTimer = ackTimers.get(msgId)
@@ -1310,6 +2491,12 @@ export const useChatStore = defineStore('chat', () => {
     if (msgs) {
       const idx = msgs.findIndex(m => m.id === msgId)
       if (idx !== -1) removed = msgs.splice(idx, 1)[0]
+    }
+    if (removed?.attachmentId) stopOfflineUploadOperation(removed.attachmentId)
+    if (removed?.mine && removed.attachmentId) {
+      await attachmentApi.cancel(removed.attachmentId).catch(error => {
+        console.warn('[chat] cancel recalled attachment failed:', error)
+      })
     }
     await dbDeleteMessage(msgId)
     await deleteFileArtifacts(removed, msgId)
@@ -1388,6 +2575,8 @@ function validateMsgId(msgId) {
           confirmIncoming('message_received_ack', payload.from, payload.msg_id)
           return
         }
+        const pending = await dbGetPending(payload.msg_id)
+        if (pending?.attachment_paused || pending?.attachment_failed) return
       } catch (e) {
         console.error('[chat] check persisted message failed', e)
         return
@@ -1409,6 +2598,12 @@ function validateMsgId(msgId) {
           iv: payload.iv,
           ciphertext: payload.ciphertext
         })
+        const offlineAttachment = parseOfflineAttachmentContent(decryptedContent)
+        if (offlineAttachment) {
+          await receiveOfflineAttachmentMessage(payload, offlineAttachment)
+          confirmIncoming('message_received_ack', payload.from, payload.msg_id)
+          return
+        }
         const content = parseChatMessageContent(decryptedContent)
         content.reply = await decryptReplyReference(payload, content.reply)
         if (recalledMessageIds.has(payload.msg_id)) {
@@ -1530,6 +2725,11 @@ function validateMsgId(msgId) {
         if (msg) {
           msg.status = 'failed'
           msg.failureCode = payload.code || 'rejected'
+          if (msg.offlineAttachment) {
+            attachmentApi.cancel(msg.offlineAttachment.attachmentId).catch(error => {
+              console.warn('[chat] cancel rejected attachment failed:', error)
+            })
+          }
         }
         await dbUpdateMessageDelivery(msgId, 'failed', undefined, payload.code || 'rejected')
         return
@@ -1622,9 +2822,16 @@ function validateMsgId(msgId) {
           throw new Error('Missing file encryption parameters')
         }
         if (fileTransfers.value[transfer_id]) throw new Error('Duplicate file transfer number')
-      } catch {
+        await assertLocalAttachmentSpace(filesize)
+      } catch (error) {
         console.warn('[chat] rejected invalid file offer')
-        send('file_error', { to: from, transfer_id, reason: 'File metadata is invalid' })
+        send('file_error', {
+          to: from,
+          transfer_id,
+          reason: error?.code === 'local_attachment_storage_full'
+            ? 'Recipient local attachment storage is full'
+            : 'File metadata is invalid',
+        })
         return
       }
 
@@ -1725,6 +2932,7 @@ function validateMsgId(msgId) {
       const msg = messages.value[from]?.find(m => m.mine && m.id === msg_id)
       if (msg) { msg.status = 'sent'; msg.ts = ts }
       await dbUpdateMessageDelivery(msg_id, 'sent', ts).catch(() => {})
+      await maybeAutoCleanReceivedAttachment(msg)
     }
 
     on('message', onMessage)
@@ -1768,6 +2976,15 @@ function validateMsgId(msgId) {
   async function clearAll() {
     for (const timer of ackTimers.values()) clearTimeout(timer)
     ackTimers.clear()
+    for (const timer of attachmentStatusTimers.values()) clearTimeout(timer)
+    attachmentStatusTimers.clear()
+    for (const thread of Object.values(messages.value)) {
+      for (const message of thread) {
+        if (!message.mine || !message.offlineAttachment || message.status === 'sent') continue
+        stopOfflineUploadOperation(message.offlineAttachment.attachmentId)
+        attachmentApi.cancel(message.offlineAttachment.attachmentId).catch(() => {})
+      }
+    }
     // Release all in-memory file blob URLs (deleteDatabase will clear the file body storage)
     for (const cid in messages.value) {
       for (const m of messages.value[cid]) releaseFileObjectUrl(m)
@@ -1855,6 +3072,10 @@ function validateMsgId(msgId) {
         }
         m.status = 'sent'
         m.read = true
+        if (m.type === 'file') {
+          m.attachmentStatus = 'received'
+          if (m.attachmentId) stopAttachmentStatusWatch(m.attachmentId)
+        }
         // Messages that will burn after reading: The destruction countdown will only start when a receipt is received "for the first time".
         // The server's getReadReceipts will return the same batch of read IDs every time. If no guards are added,
         // Each time you re-enter the chat/reconnect, readReceivedAt will be reset to the current time.
@@ -1879,6 +3100,11 @@ function validateMsgId(msgId) {
       if (!found && rememberMissing) rememberEarlyReadReceipt(receipt)
       if (found || !rememberMissing) appliedIds.push(receipt.msg_id)
       await dbUpdateMessageDelivery(receipt.msg_id, 'sent').catch(() => {})
+      const isFile = await dbMarkFileAttachmentReceived(receipt.msg_id).catch(() => false)
+      if (isFile) {
+        const msg = findLocalMessage(receipt.msg_id) || { id: receipt.msg_id, mine: true, type: 'file' }
+        await maybeAutoCleanReceivedAttachment(msg)
+      }
     }))
     confirmReadReceiptsApplied(fromChatId, appliedIds)
   }
@@ -1973,6 +3199,23 @@ function validateMsgId(msgId) {
           iv: p.iv,
           ciphertext: p.ciphertext
         })
+        const offlineAttachment = parseOfflineAttachmentContent(decryptedContent)
+        if (offlineAttachment) {
+          if (p.attachment_paused || p.attachment_failed) {
+            const status = p.attachment_paused ? 'paused' : 'error'
+            const transfer = createOfflineReceiveTransfer(p, offlineAttachment, status)
+            if (p.attachment_failed) {
+              transfer.errorCode = p.attachment_failure_code
+              transfer.errorReason = p.attachment_failure_code
+              transfer.errorAt = Date.now()
+            }
+            fileTransfers.value[offlineAttachment.attachmentId] = transfer
+            continue
+          }
+          await receiveOfflineAttachmentMessage(p, offlineAttachment)
+          await dbDeletePending(p.msg_id).catch(() => {})
+          continue
+        }
         const content = parseChatMessageContent(decryptedContent)
         content.reply = await decryptReplyReference(p, content.reply)
         const persisted = await addMessage(p.from, {
@@ -2003,6 +3246,22 @@ function validateMsgId(msgId) {
     sendMessage,
     retryMessage,
     sendFile,
+    ensureFileObjectUrl,
+    getStoredFileDescriptor,
+    getAttachmentStorageStats,
+    clearAttachmentStorage,
+    cleanupStaleAttachmentStorage,
+    retryOfflineFile,
+    pauseOfflineTransfer,
+    pauseAllOfflineUploads,
+    resumeLockedOfflineUploads,
+    resumeOfflineTransfer,
+    pauseOfflineDownload,
+    resumeOfflineDownload,
+    cancelOfflineTransfer,
+    pauseAllOfflineDownloads,
+    resumeLockedOfflineDownloads,
+    recoverOfflineUploads,
     validateFile,
     recallMessage,
     startListening,

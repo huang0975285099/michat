@@ -57,8 +57,10 @@ services:
       APP_WINDOWS_UPDATE_URL: "https://m.yzs88.com:8088/download/yunChat.exe"
       APP_APK_UPDATE_URL: "https://m.yzs88.com:8088/download/yunChat.apk"
       APP_VERSION_NOTES: ""
+      ATTACHMENT_STORAGE_PATH: "/app/data/attachments"
     volumes:
       - ./deploy/config.yaml:/app/config.yaml:ro
+      - attachment-data:/app/data/attachments
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8888/api/version"]
       interval: 15s
@@ -124,3 +126,4 @@ services:
 volumes:
   mysql-data:
   redis-data:
+  attachment-data:

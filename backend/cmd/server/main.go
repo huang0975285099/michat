@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -52,7 +53,29 @@ type Config struct {
 		APK          string `yaml:"apk"`
 		Notes        string `yaml:"notes"`
 	} `yaml:"version"`
+	Attachments struct {
+		StoragePath    string `yaml:"storage_path"`
+		MaxFileMB      int64  `yaml:"max_file_mb"`
+		MaxAccountMB   int64  `yaml:"max_account_mb"`
+		MinChunkKB     int64  `yaml:"min_chunk_kb"`
+		MaxChunkMB     int64  `yaml:"max_chunk_mb"`
+		UploadTTLHours int64  `yaml:"upload_ttl_hours"`
+		RetentionHours int64  `yaml:"retention_hours"`
+		TombstoneHours int64  `yaml:"tombstone_hours"`
+	} `yaml:"attachments"`
 	AllowedOrigins []string `yaml:"allowed_origins"`
+}
+
+func envInt64(name string, fallback int64) int64 {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed <= 0 {
+		log.Fatalf("%s must be a positive integer", name)
+	}
+	return parsed
 }
 
 func main() {
@@ -145,6 +168,61 @@ func main() {
 	}
 	adminSvc := service.NewAdminService(db, rdb)
 
+	attachmentDefaults := service.DefaultAttachmentConfig()
+	attachmentStoragePath := cfg.Attachments.StoragePath
+	if attachmentStoragePath == "" {
+		attachmentStoragePath = "./data/attachments"
+	}
+	if value := os.Getenv("ATTACHMENT_STORAGE_PATH"); value != "" {
+		attachmentStoragePath = value
+	}
+	attachmentConfig := service.AttachmentConfig{
+		MaxFileBytes:    envInt64("ATTACHMENT_MAX_FILE_MB", cfg.Attachments.MaxFileMB) * 1024 * 1024,
+		MaxAccountBytes: envInt64("ATTACHMENT_MAX_ACCOUNT_MB", cfg.Attachments.MaxAccountMB) * 1024 * 1024,
+		MinChunkBytes:   envInt64("ATTACHMENT_MIN_CHUNK_KB", cfg.Attachments.MinChunkKB) * 1024,
+		MaxChunkBytes:   envInt64("ATTACHMENT_MAX_CHUNK_MB", cfg.Attachments.MaxChunkMB) * 1024 * 1024,
+		UploadTTL:       time.Duration(envInt64("ATTACHMENT_UPLOAD_TTL_HOURS", cfg.Attachments.UploadTTLHours)) * time.Hour,
+		Retention:       time.Duration(envInt64("ATTACHMENT_RETENTION_HOURS", cfg.Attachments.RetentionHours)) * time.Hour,
+		TombstoneTTL:    time.Duration(envInt64("ATTACHMENT_TOMBSTONE_HOURS", cfg.Attachments.TombstoneHours)) * time.Hour,
+	}
+	if cfg.Attachments.MaxFileMB <= 0 && os.Getenv("ATTACHMENT_MAX_FILE_MB") == "" {
+		attachmentConfig.MaxFileBytes = attachmentDefaults.MaxFileBytes
+	}
+	if cfg.Attachments.MaxAccountMB <= 0 && os.Getenv("ATTACHMENT_MAX_ACCOUNT_MB") == "" {
+		attachmentConfig.MaxAccountBytes = attachmentDefaults.MaxAccountBytes
+	}
+	if cfg.Attachments.MinChunkKB <= 0 && os.Getenv("ATTACHMENT_MIN_CHUNK_KB") == "" {
+		attachmentConfig.MinChunkBytes = attachmentDefaults.MinChunkBytes
+	}
+	if cfg.Attachments.MaxChunkMB <= 0 && os.Getenv("ATTACHMENT_MAX_CHUNK_MB") == "" {
+		attachmentConfig.MaxChunkBytes = attachmentDefaults.MaxChunkBytes
+	}
+	if cfg.Attachments.UploadTTLHours <= 0 && os.Getenv("ATTACHMENT_UPLOAD_TTL_HOURS") == "" {
+		attachmentConfig.UploadTTL = attachmentDefaults.UploadTTL
+	}
+	if cfg.Attachments.RetentionHours <= 0 && os.Getenv("ATTACHMENT_RETENTION_HOURS") == "" {
+		attachmentConfig.Retention = attachmentDefaults.Retention
+	}
+	if cfg.Attachments.TombstoneHours <= 0 && os.Getenv("ATTACHMENT_TOMBSTONE_HOURS") == "" {
+		attachmentConfig.TombstoneTTL = attachmentDefaults.TombstoneTTL
+	}
+	if err := service.ValidateAttachmentConfig(attachmentConfig); err != nil {
+		log.Fatalf("attachment configuration: %v", err)
+	}
+	attachmentStorage, err := service.NewLocalAttachmentStorage(attachmentStoragePath)
+	if err != nil {
+		log.Fatalf("attachment storage: %v", err)
+	}
+	attachmentSvc := service.NewAttachmentService(db, attachmentStorage, attachmentConfig)
+	identSvc.SetAttachmentCleanup(func(ctx context.Context, attachmentIDs []string) error {
+		for _, attachmentID := range attachmentIDs {
+			if cleanupErr := attachmentStorage.DeleteAttachment(ctx, attachmentID); cleanupErr != nil {
+				return cleanupErr
+			}
+		}
+		return nil
+	})
+
 	hub := ws.NewHub(rdb, friendSvc, identSvc, messageReadSvc)
 
 	// IronFistHandler needs the hub to push PVP matching notifications, so it is constructed after the hub
@@ -205,6 +283,7 @@ func main() {
 		cfg.Version.Notes,
 	)
 	adminHandler := handler.NewAdminHandler(adminSvc)
+	attachmentHandler := handler.NewAttachmentHandler(attachmentSvc)
 
 	// Current limiting (mainly mobile phone + operator CGNAT: relax the threshold by IP, the main line of defense is based on user authRL):
 	// - publicRL: Unauthenticated public interface 100 times/minute/IP (version check/login burst for multiple phones with the same IP)
@@ -258,6 +337,14 @@ func main() {
 		auth.GET("/friends/:peerId/read-receipts", messagesHandler.GetReadReceipts)
 		auth.POST("/device/token", deviceHandler.SaveToken)
 		auth.DELETE("/device/token", deviceHandler.DeleteTokens)
+		auth.POST("/attachments", attachmentHandler.Init)
+		auth.GET("/attachments/quota", attachmentHandler.Quota)
+		auth.GET("/attachments/:id", attachmentHandler.Get)
+		auth.PUT("/attachments/:id/chunks/:index", attachmentHandler.PutChunk)
+		auth.GET("/attachments/:id/chunks/:index", attachmentHandler.DownloadChunk)
+		auth.POST("/attachments/:id/complete", attachmentHandler.Complete)
+		auth.POST("/attachments/:id/ack", attachmentHandler.Acknowledge)
+		auth.DELETE("/attachments/:id", attachmentHandler.Cancel)
 
 		// Legacy points-account compatibility endpoints; authoritative games settle internally.
 		auth.GET("/fist/account", fistHandler.GetAccount)
@@ -301,6 +388,26 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			autoReject()
+		}
+	}()
+
+	// Remove incomplete uploads after 24 hours, unclaimed attachments after 7
+	// days, and ciphertext immediately after a recipient acknowledgement.
+	go func() {
+		cleanup := func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			if count, cleanupErr := attachmentSvc.CleanupExpired(ctx, 500); cleanupErr != nil {
+				log.Printf("[cron] cleanup encrypted attachments: %v", cleanupErr)
+			} else if count > 0 {
+				log.Printf("[cron] cleaned up %d encrypted attachments", count)
+			}
+		}
+		cleanup()
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			cleanup()
 		}
 	}()
 
@@ -399,7 +506,8 @@ func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
 			c.Header("Vary", "Origin")
 		}
 		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type,Authorization")
+		c.Header("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Chunk-SHA256")
+		c.Header("Access-Control-Expose-Headers", "Content-Length,X-Chunk-SHA256")
 		c.Header("Access-Control-Allow-Credentials", "true")
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)

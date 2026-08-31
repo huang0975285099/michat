@@ -147,6 +147,19 @@
                 </q-item-section>
             </q-item>
 
+            <q-item clickable @click="router.push('/attachment-storage')">
+                <q-item-section avatar>
+                    <q-icon name="storage" color="blue-grey" />
+                </q-item-section>
+                <q-item-section>
+                    <q-item-label>{{ t("profile.attachmentStorage") }}</q-item-label>
+                    <q-item-label caption>{{ t("profile.attachmentStorageHint") }}</q-item-label>
+                </q-item-section>
+                <q-item-section side>
+                    <q-icon name="chevron_right" color="grey-6" />
+                </q-item-section>
+            </q-item>
+
             <q-item clickable @click="confirmClear">
                 <q-item-section avatar
                     ><q-icon name="delete_forever" color="negative"

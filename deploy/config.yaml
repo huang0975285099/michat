@@ -20,6 +20,16 @@ jpush:
   master_secret: ""
   enabled: true
 
+attachments:
+  storage_path: "/app/data/attachments"
+  max_file_mb: 500
+  max_account_mb: 5120
+  min_chunk_kb: 256
+  max_chunk_mb: 2
+  upload_ttl_hours: 24
+  retention_hours: 168
+  tombstone_hours: 168
+
 allowed_origins:
   - "https://m.yzs88.com:8088"
   - "https://localhost"

@@ -104,7 +104,9 @@ onActivated(async () => {
     for (const f of data) {
         friendMap.value[f.chat_id] = f;
         onlineMap.value[f.chat_id] = !!f.online;
+        identity.cacheFriendPubKey(f.chat_id, f.public_key);
     }
+    await chatStore.recoverOfflineUploads(data);
     friendsLoaded.value = true;
     on("status", handleStatus);
 });

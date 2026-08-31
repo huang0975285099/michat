@@ -29,6 +29,7 @@
     "test:image-compression": "node --test src/services/image-compression.test.mjs",
     "test:file-metadata": "node --test src/services/file-metadata.test.mjs",
     "test:file-download": "node --test src/services/file-download.test.mjs",
+    "test:offline-attachment": "node --test src/services/offline-attachment.test.mjs",
     "test:voice": "node --test src/services/voice-recorder.test.mjs",
     "test:i18n": "node --test src/i18n/index.test.mjs"
   },

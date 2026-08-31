@@ -119,9 +119,16 @@ test('validates decrypted filenames using UTF-8 length and final extension', () 
   assert.doesNotThrow(() => validateFileMetadata('archive.tar.gz', 'application/gzip', 123))
 })
 
-test('accepts files up to 100MB and rejects larger files', () => {
-  assert.doesNotThrow(() => validateFileMetadata('archive.zip', 'application/zip', 100 * 1024 * 1024))
-  assert.throws(() => validateFileMetadata('archive.zip', 'application/zip', 100 * 1024 * 1024 + 1))
+test('accepts files up to 500MB and rejects larger files', () => {
+  assert.doesNotThrow(() => validateFileMetadata('archive.zip', 'application/zip', 500 * 1024 * 1024))
+  assert.throws(
+    () => validateFileMetadata('archive.zip', 'application/zip', 500 * 1024 * 1024 + 1),
+    error => error.code === 'attachment_file_too_large' && error.maxBytes === 500 * 1024 * 1024,
+  )
+  assert.throws(
+    () => validateFileMetadata('archive.zip', 'application/zip', 0),
+    error => error.code === 'attachment_file_empty',
+  )
 })
 
 test('accepts legacy plaintext metadata during the compatibility window', async () => {

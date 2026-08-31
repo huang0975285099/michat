@@ -1,6 +1,6 @@
 import { decryptMessage, encryptMessage } from './crypto.js'
 
-const MAX_FILE_SIZE = 100 * 1024 * 1024
+const MAX_FILE_SIZE = 500 * 1024 * 1024
 const MAX_FILENAME_BYTES = 255
 const MAX_FILETYPE_BYTES = 255
 const ALLOWED_FILE_EXTENSIONS = new Set([
@@ -13,25 +13,38 @@ const ALLOWED_FILE_EXTENSIONS = new Set([
 
 const MAX_VOICE_DURATION_MS = 5 * 60 * 1000
 
+function fileMetadataError(code, message, details = {}) {
+  const error = new Error(message)
+  error.code = code
+  Object.assign(error, details)
+  return error
+}
+
 function validateNameAndType(filename, filetype) {
   if (typeof filename !== 'string' || !filename ||
       new TextEncoder().encode(filename).length > MAX_FILENAME_BYTES) {
-    throw new Error('File metadata is invalid')
+    throw fileMetadataError('attachment_filename_invalid', 'The file name is empty or too long')
   }
   if (typeof filetype !== 'string' ||
       new TextEncoder().encode(filetype).length > MAX_FILETYPE_BYTES) {
-    throw new Error('File metadata is invalid')
+    throw fileMetadataError('attachment_filetype_invalid', 'The file type is invalid')
   }
   const ext = filename.split('.').pop()?.toLowerCase() ?? ''
   if (!ALLOWED_FILE_EXTENSIONS.has(ext)) {
-    throw new Error('File metadata is invalid')
+    throw fileMetadataError('attachment_filetype_unsupported', 'This file format is not supported', { extension: ext })
   }
 }
 
 export function validateFileMetadata(filename, filetype, filesize) {
   validateNameAndType(filename, filetype)
-  if (!Number.isInteger(filesize) || filesize <= 0 || filesize > MAX_FILE_SIZE) {
-    throw new Error('File metadata is invalid')
+  if (!Number.isInteger(filesize) || filesize <= 0) {
+    throw fileMetadataError('attachment_file_empty', 'The file is empty or its size is invalid')
+  }
+  if (filesize > MAX_FILE_SIZE) {
+    throw fileMetadataError('attachment_file_too_large', 'The file exceeds the 500 MB limit', {
+      fileSize: filesize,
+      maxBytes: MAX_FILE_SIZE,
+    })
   }
 }
 

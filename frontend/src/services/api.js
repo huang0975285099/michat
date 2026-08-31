@@ -75,6 +75,33 @@ export const deviceApi = {
   remove: () => api.delete('/device/token')
 }
 
+// Offline encrypted attachments. These endpoints only receive opaque AES-GCM
+// chunks and operational sizes; the file key/name/type remain inside chat E2EE.
+export const attachmentApi = {
+  quota: () => api.get('/attachments/quota'),
+  init: (metadata, signal) => api.post('/attachments', metadata, { signal }),
+  get: (id, signal) => api.get(`/attachments/${encodeURIComponent(id)}`, { signal }),
+  putChunk: (id, index, ciphertext, sha256, signal) => api.put(
+    `/attachments/${encodeURIComponent(id)}/chunks/${index}`,
+    ciphertext,
+    {
+      signal,
+      timeout: 120000,
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Chunk-SHA256': sha256,
+      },
+    },
+  ),
+  complete: (id, signal) => api.post(`/attachments/${encodeURIComponent(id)}/complete`, null, { signal }),
+  downloadChunk: (id, index, signal) => api.get(
+    `/attachments/${encodeURIComponent(id)}/chunks/${index}`,
+    { signal, timeout: 120000, responseType: 'arraybuffer' },
+  ),
+  acknowledge: (id, signal) => api.post(`/attachments/${encodeURIComponent(id)}/ack`, null, { signal }),
+  cancel: (id, signal) => api.delete(`/attachments/${encodeURIComponent(id)}`, { signal }),
+}
+
 // $FIST Token
 export const fistApi = {
   getAccount: () => api.get('/fist/account'),

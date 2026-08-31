@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { burnModeStorageKey, loadBurnMode, saveBurnMode } from './chat-preferences.mjs'
+import {
+  attachmentAutoCleanStorageKey,
+  burnModeStorageKey,
+  loadAttachmentAutoClean,
+  loadBurnMode,
+  saveAttachmentAutoClean,
+  saveBurnMode,
+} from './chat-preferences.mjs'
 
 function memoryStorage() {
   const values = new Map()
@@ -28,4 +35,15 @@ test('removes the saved preference when burn mode is disabled', () => {
 
   assert.equal(loadBurnMode('1000-AAAA', '2000-BBBB', storage), false)
   assert.match(burnModeStorageKey('1000-AAAA', '2000-BBBB'), /1000-AAAA\.2000-BBBB$/)
+})
+
+test('remembers automatic sender attachment cleanup per account and defaults off', () => {
+  const storage = memoryStorage()
+  assert.equal(loadAttachmentAutoClean('1000-AAAA', storage), false)
+  saveAttachmentAutoClean('1000-AAAA', true, storage)
+  assert.equal(loadAttachmentAutoClean('1000-AAAA', storage), true)
+  assert.equal(loadAttachmentAutoClean('2000-BBBB', storage), false)
+  saveAttachmentAutoClean('1000-AAAA', false, storage)
+  assert.equal(loadAttachmentAutoClean('1000-AAAA', storage), false)
+  assert.match(attachmentAutoCleanStorageKey('1000-AAAA'), /1000-AAAA$/)
 })

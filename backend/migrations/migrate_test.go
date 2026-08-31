@@ -17,6 +17,22 @@ func TestReliableMessageInboxMigrationRegistered(t *testing.T) {
 	}
 }
 
+func TestEncryptedAttachmentsMigrationRegisteredWithoutPlaintextMetadata(t *testing.T) {
+	if strings.TrimSpace(encryptedAttachmentsSQL) == "" {
+		t.Fatal("encrypted attachments migration is not embedded")
+	}
+	for _, required := range []string{"attachments", "attachment_chunks", "ciphertext_sha256", "expires_at", "acknowledged_at"} {
+		if !strings.Contains(encryptedAttachmentsSQL, required) {
+			t.Fatalf("encrypted attachments migration is missing %s", required)
+		}
+	}
+	for _, forbidden := range []string{"\n  file_key ", "\n  filename ", "\n  mime_type "} {
+		if strings.Contains(encryptedAttachmentsSQL, forbidden) {
+			t.Fatalf("encrypted attachments migration must not store %s", forbidden)
+		}
+	}
+}
+
 func TestSplitStatementsIgnoresSemicolonsInComments(t *testing.T) {
 	src := `
 -- Friend mode is separate; it is not included in total games.

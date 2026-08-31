@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(ChatServicePlugin.class);
+        registerPlugin(FileSavePlugin.class);
         super.onCreate(savedInstanceState);
 
         // JPush initialization

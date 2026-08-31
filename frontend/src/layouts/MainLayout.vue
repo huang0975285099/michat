@@ -218,7 +218,7 @@ const showNav = computed(() => {
 
 // Chat details use the full available height; the global header remains visible.
 const showFooter = computed(
-    () => showNav.value && !route.path.startsWith("/chat/"),
+    () => showNav.value && !route.path.startsWith("/chat/") && route.path !== "/attachment-storage",
 );
 
 const chatStore = useChatStore();
@@ -316,7 +316,16 @@ onMounted(() => {
 watch(
     () => identity.isLocked,
     (locked, wasLocked) => {
-        if (wasLocked && !locked) chatStore.processPendingMessages();
+        if (locked) {
+            chatStore.pauseAllOfflineUploads();
+            chatStore.pauseAllOfflineDownloads();
+        }
+        if (wasLocked && !locked) {
+            chatStore.resumeLockedOfflineUploads();
+            chatStore.resumeLockedOfflineDownloads();
+            chatStore.processPendingMessages();
+            chatStore.recoverOfflineUploads();
+        }
     },
 );
 onUnmounted(() => {
@@ -346,7 +355,7 @@ watch(wsConnected, (connected) => {
     }
 });
 
-const canGoBack = computed(() => route.path.startsWith("/chat/"));
+const canGoBack = computed(() => route.path.startsWith("/chat/") || route.path === "/attachment-storage");
 
 function doLockNow() {
     identity.lockNow();
@@ -382,6 +391,7 @@ const pageTitle = computed(() => {
     if (route.path === "/friends") return t("header.friends");
     if (route.path === "/games") return t("header.games");
     if (route.path === "/profile") return t("header.profile");
+    if (route.path === "/attachment-storage") return t("attachmentStorage.title");
     return t("header.app");
 });
 </script>

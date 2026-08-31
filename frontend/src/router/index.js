@@ -13,7 +13,8 @@ const routes = [
       { path: 'games', component: () => import('src/pages/GamesPage.vue') },
       { path: 'games/ironfist', component: () => import('src/games/ironfist/IronFistPage.vue') },
       { path: 'games/sugar-pop', component: () => import('src/games/sugar-pop/SugarPopPage.vue') },
-      { path: 'profile', component: () => import('src/pages/ProfilePage.vue') }
+      { path: 'profile', component: () => import('src/pages/ProfilePage.vue') },
+      { path: 'attachment-storage', component: () => import('src/pages/AttachmentStoragePage.vue') }
     ]
   },
   {

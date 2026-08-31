@@ -70,12 +70,20 @@ var (
 )
 
 type IdentityService struct {
-	db    *sql.DB
-	redis *rdb.Client
+	db                *sql.DB
+	redis             *rdb.Client
+	attachmentCleanup func(context.Context, []string) error
 }
 
 func NewIdentityService(db *sql.DB, redis *rdb.Client) *IdentityService {
 	return &IdentityService{db: db, redis: redis}
+}
+
+// SetAttachmentCleanup removes opaque ciphertext directories after the account
+// transaction commits. Database rows are still protected by ON DELETE CASCADE;
+// the hourly orphan cleanup remains a fallback if filesystem deletion fails.
+func (s *IdentityService) SetAttachmentCleanup(cleanup func(context.Context, []string) error) {
+	s.attachmentCleanup = cleanup
 }
 
 // Init creates a new identity and returns (user, sessionToken, error)
@@ -241,6 +249,26 @@ func (s *IdentityService) DeleteAccount(ctx context.Context, chatID string) erro
 	if err = s.eraseIronFistAccountTx(ctx, tx, userID, chatID); err != nil {
 		return err
 	}
+	attachmentIDs := make([]string, 0)
+	if s.attachmentCleanup != nil {
+		rows, queryErr := tx.QueryContext(ctx, `SELECT id FROM attachments WHERE owner_user_id = ? OR recipient_user_id = ?`, userID, userID)
+		if queryErr != nil {
+			return queryErr
+		}
+		for rows.Next() {
+			var attachmentID string
+			if queryErr = rows.Scan(&attachmentID); queryErr != nil {
+				rows.Close()
+				return queryErr
+			}
+			attachmentIDs = append(attachmentIDs, attachmentID)
+		}
+		if queryErr = rows.Err(); queryErr != nil {
+			rows.Close()
+			return queryErr
+		}
+		rows.Close()
+	}
 
 	// Read receipts are tombstones that disappear after the sender reads them. After the reader logs out, it still needs to be retained until the sender
 	// Go online again and synchronize; only if the current account itself is the sender, it can be deleted together.
@@ -264,6 +292,11 @@ func (s *IdentityService) DeleteAccount(ctx context.Context, chatID string) erro
 	}
 	if err = tx.Commit(); err != nil {
 		return err
+	}
+	if s.attachmentCleanup != nil && len(attachmentIDs) > 0 {
+		if cleanupErr := s.attachmentCleanup(ctx, attachmentIDs); cleanupErr != nil {
+			log.Printf("[identity] deleted account attachment cleanup failed: %v", cleanupErr)
+		}
 	}
 
 	if err := s.revokeAllSessions(ctx, chatID); err != nil {

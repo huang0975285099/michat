@@ -13,7 +13,7 @@
 
       <q-item v-if="canRetry" clickable v-close-popup class="text-primary" @click="emit('retry')">
         <q-item-section avatar><q-icon name="refresh" size="20px" /></q-item-section>
-        <q-item-section>{{ t('chat.resend') }}</q-item-section>
+        <q-item-section>{{ retryLabel || t('chat.resend') }}</q-item-section>
       </q-item>
 
       <q-separator v-if="canDelete || canRecall" />
@@ -40,6 +40,7 @@ defineProps({
   canRetry: Boolean,
   canDelete: Boolean,
   canRecall: Boolean,
+  retryLabel: { type: String, default: '' },
 })
 
 const emit = defineEmits(['reply', 'copy', 'retry', 'delete', 'recall'])
