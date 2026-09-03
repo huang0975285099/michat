@@ -252,15 +252,21 @@ func main() {
 		}
 	}()
 	go func() {
-		ticker := time.NewTicker(time.Second)
+		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 		for range ticker.C {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if _, err := ironFistSvc.SweepDueAuthoritativeGames(ctx); err != nil {
 				log.Printf("[ironfist] sweep authoritative deadlines: %v", err)
 			}
+			if _, err := ironFistSvc.SweepDragonTiger(ctx); err != nil {
+				log.Printf("[ironfist-dragon-tiger] sweep: %v", err)
+			}
 			if _, err := ironFistSvc.PublishIronFistOutbox(ctx, 50); err != nil {
 				log.Printf("[ironfist] publish outbox: %v", err)
+			}
+			if _, err := ironFistSvc.PublishDragonTigerOutbox(ctx, 50); err != nil {
+				log.Printf("[ironfist-dragon-tiger] publish outbox: %v", err)
 			}
 			cancel()
 		}
@@ -360,6 +366,10 @@ func main() {
 		auth.GET("/games/ironfist/games/:id", ironFistHandler.GetAuthoritativeGame)
 		auth.POST("/games/ironfist/games/:id/actions", ironFistHandler.SubmitAuthoritativeAction)
 		auth.POST("/games/ironfist/games/:id/resign", ironFistHandler.ResignAuthoritativeGame)
+		auth.GET("/games/ironfist/dragon-tiger/current", ironFistHandler.GetDragonTigerCurrent)
+		auth.POST("/games/ironfist/dragon-tiger/rounds/:id/bets", ironFistHandler.PlaceDragonTigerBet)
+		auth.GET("/games/ironfist/dragon-tiger/rounds", ironFistHandler.ListDragonTigerRounds)
+		auth.GET("/games/ironfist/dragon-tiger/rounds/:id", ironFistHandler.GetDragonTigerRound)
 
 		// PVP matchmaking queue (join/cancel)
 		auth.POST("/games/ironfist/pvp/queue", ironFistHandler.EnqueuePVP)

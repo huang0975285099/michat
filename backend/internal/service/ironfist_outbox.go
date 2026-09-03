@@ -15,6 +15,8 @@ type IronFistOutboxEvent struct {
 	EventID          string          `json:"event_id"`
 	Type             string          `json:"type"`
 	GameID           string          `json:"game_id"`
+	RoundID          uint64          `json:"round_id,omitempty"`
+	Audience         string          `json:"audience,omitempty"`
 	StateVersion     uint64          `json:"state_version"`
 	ServerTime       time.Time       `json:"server_time"`
 	RecipientChatIDs []string        `json:"recipient_chat_ids"`

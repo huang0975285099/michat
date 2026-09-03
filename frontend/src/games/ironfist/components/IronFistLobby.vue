@@ -114,6 +114,15 @@
             <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
         </div>
 
+        <div class="mode-card mode-card--dragon" @click="$emit('open-dragon-tiger')">
+            <div class="mode-emoji">🐉</div>
+            <div class="mode-text">
+                <div class="mode-name">龙虎斗 <span class="mode-tag mode-tag--earn">实时下注</span></div>
+                <div class="mode-desc">观战 AI 对战，龙 / 虎 / 平三方下注</div>
+            </div>
+            <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
+        </div>
+
         <div
             class="mode-card mode-card--friend"
             @click="showFriends = true"
@@ -250,6 +259,7 @@ defineEmits([
     "start-pve",
     "start-practice",
     "open-pvp",
+    "open-dragon-tiger",
     "invite",
 ]);
 

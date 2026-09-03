@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -145,6 +146,90 @@ func writeAuthorityError(c *gin.Context, err error) {
 	}
 	log.Printf("[ironfist] authority request failed")
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+}
+
+func writeDragonTigerError(c *gin.Context, err error) {
+	var gameErr *service.DragonTigerError
+	if !errors.As(err, &gameErr) {
+		log.Printf("[ironfist-dragon-tiger] request failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+		return
+	}
+	status := http.StatusConflict
+	switch gameErr.Code {
+	case "invalid_amount", "invalid_selection", "invalid_request_id":
+		status = http.StatusBadRequest
+	case "insufficient_balance":
+		status = http.StatusPaymentRequired
+	case "not_found":
+		status = http.StatusNotFound
+	}
+	c.JSON(status, gin.H{"error": gameErr.Code})
+}
+
+func (h *IronFistHandler) GetDragonTigerCurrent(c *gin.Context) {
+	view, err := h.svc.GetDragonTigerCurrent(c.Request.Context(), c.GetUint64(middleware.CtxUserID))
+	if err != nil {
+		writeDragonTigerError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, view)
+}
+
+func (h *IronFistHandler) PlaceDragonTigerBet(c *gin.Context) {
+	roundID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || roundID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "stale_round"})
+		return
+	}
+	var command service.DragonTigerBetCommand
+	if err := decodeStrictAuthorityJSON(c.Request.Body, &command); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+		return
+	}
+	response, err := h.svc.PlaceDragonTigerBet(c.Request.Context(), c.GetUint64(middleware.CtxUserID), roundID, command)
+	if err != nil {
+		writeDragonTigerError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *IronFistHandler) ListDragonTigerRounds(c *gin.Context) {
+	beforeID, _ := strconv.ParseUint(c.Query("before_id"), 10, 64)
+	limit := 20
+	if parsed, err := strconv.Atoi(c.Query("limit")); err == nil && parsed > 0 {
+		limit = parsed
+	}
+	rounds, bets, err := h.svc.ListDragonTigerRounds(c.Request.Context(), c.GetUint64(middleware.CtxUserID), beforeID, limit)
+	if err != nil {
+		writeDragonTigerError(c, err)
+		return
+	}
+	// Keep the public round fields flat for lightweight clients while including the private summary.
+	flat := make([]any, 0, len(rounds))
+	for _, round := range rounds {
+		encoded, _ := json.Marshal(round)
+		item := map[string]any{}
+		_ = json.Unmarshal(encoded, &item)
+		item["my_bet"] = bets[round.ID]
+		flat = append(flat, item)
+	}
+	c.JSON(http.StatusOK, gin.H{"rounds": flat, "has_more": len(rounds) == limit})
+}
+
+func (h *IronFistHandler) GetDragonTigerRound(c *gin.Context) {
+	roundID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || roundID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "not_found"})
+		return
+	}
+	round, bet, err := h.svc.GetDragonTigerRound(c.Request.Context(), c.GetUint64(middleware.CtxUserID), roundID)
+	if err != nil {
+		writeDragonTigerError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"round": round, "my_bet": bet, "server_time": time.Now().UTC()})
 }
 
 // GET /api/games/ironfist/matches?before_id=xxx&limit=20

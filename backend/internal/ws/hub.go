@@ -329,6 +329,21 @@ func (h *Hub) DeliverIronFistEvent(raw string) {
 	if err != nil {
 		return
 	}
+	if event.Audience == "all" {
+		h.mu.RLock()
+		clients := make([]*Client, 0, len(h.clients))
+		for _, client := range h.clients {
+			clients = append(clients, client)
+		}
+		h.mu.RUnlock()
+		for _, client := range clients {
+			select {
+			case client.send <- message:
+			default:
+			}
+		}
+		return
+	}
 	for _, chatID := range event.RecipientChatIDs {
 		h.mu.RLock()
 		client := h.clients[chatID]

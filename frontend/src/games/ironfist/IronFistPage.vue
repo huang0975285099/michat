@@ -10,6 +10,7 @@
             @start-pve="startPve"
             @start-practice="startPractice"
             @open-pvp="view = 'pvp'"
+            @open-dragon-tiger="view = 'dragon-tiger'"
             @invite="startInvite"
         />
         <IronFistLedger v-else-if="view === 'ledger'" @back="view = 'lobby'" />
@@ -23,6 +24,7 @@
             @back="view = 'lobby'"
             @matched="onPVPMatched"
         />
+        <DragonTigerPage v-else-if="view === 'dragon-tiger'" @back="view = 'lobby'" />
 
         <!-- ── Inviting ───────────────────────────────────── -->
         <div
@@ -368,6 +370,7 @@ import IronFistLedger from "./components/IronFistLedger.vue";
 import IronFistRecords from "./components/IronFistRecords.vue";
 import IronFistAchievements from "./components/IronFistAchievements.vue";
 import IronFistPvpLobby from "./components/IronFistPvpLobby.vue";
+import DragonTigerPage from "./components/dragon-tiger/DragonTigerPage.vue";
 import HealthBar from "./components/HealthBar.vue";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
 import { useI18n } from "src/i18n";

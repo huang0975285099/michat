@@ -33,6 +33,21 @@ func TestEncryptedAttachmentsMigrationRegisteredWithoutPlaintextMetadata(t *test
 	}
 }
 
+func TestDragonTigerMigrationRegistered(t *testing.T) {
+	if strings.TrimSpace(ironfistDragonTigerSQL) == "" {
+		t.Fatal("dragon tiger migration is not embedded")
+	}
+	for _, required := range []string{
+		"ironfist_dragon_tiger_rounds", "ironfist_dragon_tiger_bets",
+		"ironfist_dragon_tiger_bet_commands", "ironfist_dragon_tiger_outbox",
+		"dragon_tiger_bet", "dragon_tiger_payout", "dragon_tiger_refund",
+	} {
+		if !strings.Contains(ironfistDragonTigerSQL, required) {
+			t.Fatalf("dragon tiger migration is missing %s", required)
+		}
+	}
+}
+
 func TestSplitStatementsIgnoresSemicolonsInComments(t *testing.T) {
 	src := `
 -- Friend mode is separate; it is not included in total games.

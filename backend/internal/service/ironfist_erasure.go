@@ -12,6 +12,9 @@ import (
 // every game/FIST row that can retain the deleted user's identity. It runs in
 // the caller's account-deletion transaction.
 func (s *IdentityService) eraseIronFistAccountTx(ctx context.Context, tx *sql.Tx, userID uint64, chatID string) error {
+	if err := refundDragonTigerBetsForDeletion(ctx, tx, userID); err != nil {
+		return err
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT game_id FROM ironfist_games
 		WHERE player_a_user_id = ? OR player_b_user_id = ?
@@ -80,6 +83,66 @@ func (s *IdentityService) eraseIronFistAccountTx(ctx context.Context, tx *sql.Tx
 	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement.query, statement.args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func refundDragonTigerBetsForDeletion(ctx context.Context, tx *sql.Tx, userID uint64) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT round_id, selection, stake_amount
+		FROM ironfist_dragon_tiger_bets
+		WHERE user_id=? AND status='active' ORDER BY round_id`, userID)
+	if err != nil {
+		return err
+	}
+	type activeBet struct {
+		roundID   uint64
+		selection string
+		stake     int64
+	}
+	var bets []activeBet
+	for rows.Next() {
+		var bet activeBet
+		if err := rows.Scan(&bet.roundID, &bet.selection, &bet.stake); err != nil {
+			rows.Close()
+			return err
+		}
+		bets = append(bets, bet)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, bet := range bets {
+		var roundStatus string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM ironfist_dragon_tiger_rounds WHERE id=? FOR UPDATE`, bet.roundID).Scan(&roundStatus); err != nil {
+			return err
+		}
+		if roundStatus == "settled" || roundStatus == "voided" {
+			continue
+		}
+		var status string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM ironfist_dragon_tiger_bets WHERE round_id=? AND user_id=? FOR UPDATE`, bet.roundID, userID).Scan(&status); err != nil {
+			return err
+		}
+		if status != "active" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE fist_accounts SET balance=balance+? WHERE user_id=?`, bet.stake, userID); err != nil {
+			return err
+		}
+		if err := writeDragonTigerFistTx(ctx, tx, userID, bet.stake, "dragon_tiger_refund", fmt.Sprintf("dt:refund:%d:%d", bet.roundID, userID), "账号删除前龙虎斗退款"); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE ironfist_dragon_tiger_bets SET payout_amount=stake_amount,status='refunded',settled_at=UTC_TIMESTAMP(3) WHERE round_id=? AND user_id=?`, bet.roundID, userID); err != nil {
+			return err
+		}
+		column := map[string]string{"dragon": "dragon_bet_total", "tiger": "tiger_bet_total", "draw": "draw_bet_total"}[bet.selection]
+		if column == "" {
+			return fmt.Errorf("invalid dragon tiger selection %q", bet.selection)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE ironfist_dragon_tiger_rounds SET `+column+`=GREATEST(0,`+column+`-?),state_version=state_version+1 WHERE id=?`, bet.stake, bet.roundID); err != nil {
 			return err
 		}
 	}

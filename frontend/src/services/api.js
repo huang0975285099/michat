@@ -125,6 +125,10 @@ export const ironfistApi = {
   getGame: (id) => api.get(`/games/ironfist/games/${encodeURIComponent(id)}`),
   submitAction: (id, body) => api.post(`/games/ironfist/games/${encodeURIComponent(id)}/actions`, body),
   resignGame: (id) => api.post(`/games/ironfist/games/${encodeURIComponent(id)}/resign`),
+  dragonTigerCurrent: () => api.get('/games/ironfist/dragon-tiger/current'),
+  dragonTigerBet: (roundId, body) => api.post(`/games/ironfist/dragon-tiger/rounds/${encodeURIComponent(roundId)}/bets`, body),
+  dragonTigerHistory: (beforeId, limit = 20) => api.get('/games/ironfist/dragon-tiger/rounds', { params: { before_id: beforeId || undefined, limit } }),
+  dragonTigerDetail: (roundId) => api.get(`/games/ironfist/dragon-tiger/rounds/${encodeURIComponent(roundId)}`),
 }
 
 // Version information (public interface, returns the latest online version)
