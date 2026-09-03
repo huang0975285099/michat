@@ -1191,6 +1191,12 @@ async function finishVoiceRecording(cancelled) {
   voiceStopping = true
   const recorder = mediaRecorder
   const durationMs = Math.min(MAX_VOICE_DURATION_MS, Math.max(0, Date.now() - voiceStartedAt))
+  // Releasing the button ends the recording interaction immediately.  File
+  // finalisation and encrypted upload may take longer, but must not leave the
+  // recording overlay or microphone UI visible during that work.
+  voiceRecording.value = false
+  voicePreparing.value = false
+  voiceCancelling.value = false
   clearVoiceTimers()
 
   try {
@@ -1199,6 +1205,7 @@ async function finishVoiceRecording(cancelled) {
         resolve(new Blob(voiceChunks, { type: recorder.mimeType || voiceFormat.mimeType }))
       }, { once: true })
       recorder.stop()
+      stopVoiceCaptureResources()
     })
 
     if (cancelled) {
@@ -1228,9 +1235,6 @@ async function finishVoiceRecording(cancelled) {
   } finally {
     mediaRecorder = null
     voiceChunks = []
-    voiceRecording.value = false
-    voicePreparing.value = false
-    voiceCancelling.value = false
     voiceSending.value = false
     voiceDurationMs.value = 0
     stopVoiceCaptureResources()

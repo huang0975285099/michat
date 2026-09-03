@@ -41,6 +41,7 @@ func validFileMetadata(filename, _ string) bool {
 
 const (
 	writeWait       = 10 * time.Second
+	recallQueueWait = 2 * time.Second
 	pongWait        = 60 * time.Second
 	pingPeriod      = 30 * time.Second
 	maxMessageSize  = 256 * 1024 //256KB (supports file block transfer)
@@ -52,6 +53,33 @@ const (
 	maxTotalChunks  = (maxFileSize + aesGCMTagSize + fileChunkSize - 1) / fileChunkSize
 	fileTransferTTL = 3 * time.Minute
 )
+
+// enqueueLiveRecall applies brief backpressure instead of silently dropping a
+// durable recall when the recipient's live send buffer is momentarily full.
+// If the connection cannot drain, closing it makes the client reconnect and
+// FlushPersistentInbox will replay the recall tombstone from the database.
+func enqueueLiveRecall(c *Client, message []byte) bool {
+	if c == nil || c.send == nil {
+		return false
+	}
+	var closed <-chan struct{}
+	if c.closed != nil {
+		closed = c.closed
+	}
+	timer := time.NewTimer(recallQueueWait)
+	defer timer.Stop()
+	select {
+	case c.send <- message:
+		return true
+	case <-closed:
+		return false
+	case <-timer.C:
+		if c.closed != nil {
+			c.signalClose()
+		}
+		return false
+	}
+}
 
 func expectedFileChunks(filesize int64) int {
 	ciphertextSize := filesize + aesGCMTagSize
@@ -1093,14 +1121,12 @@ func (h *Hub) handleRecall(from *Client, payload json.RawMessage) {
 	c, ok := h.clients[p.To]
 	h.mu.RUnlock()
 	if ok {
-		select {
-		case c.send <- fwd:
+		if enqueueLiveRecall(c, fwd) {
 			if !c.ReliableInbox {
 				if ackErr := h.messageReadSvc.MarkRecallsApplied(ctx, []string{p.MsgID}, from.ChatID, p.To); ackErr != nil {
 					log.Printf("[ws] clear legacy live recall failed: %v", ackErr)
 				}
 			}
-		default:
 		}
 	}
 	h.sendRecallResult(from, p.MsgID, "accepted", "", false)

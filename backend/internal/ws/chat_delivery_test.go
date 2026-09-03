@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"e2eechat/internal/service"
 )
@@ -312,6 +313,88 @@ func TestRecallPersistsForOfflineRecipient(t *testing.T) {
 	}
 	if response.Type != "recall_ack" {
 		t.Fatalf("response type = %q, want recall_ack", response.Type)
+	}
+}
+
+func TestRecallWaitsForBusyOnlineRecipientInsteadOfDropping(t *testing.T) {
+	recipient := &Client{
+		ChatID:        testPeerChatID,
+		ReliableInbox: true,
+		send:          make(chan []byte, 1),
+		closed:        make(chan struct{}),
+	}
+	recipient.send <- []byte(`{"type":"busy"}`)
+	sender := &Client{ChatID: testCallerChatID, UserID: 7, send: make(chan []byte, 1)}
+	store := &fakeMessageReadStore{delivery: service.MessageDelivery{
+		MsgID: testMessageID, MsgFrom: testCallerChatID, MsgTo: testPeerChatID,
+	}}
+	hub := &Hub{
+		clients:        map[string]*Client{testPeerChatID: recipient},
+		friendSvc:      fakeFriendChecker{friends: true},
+		messageReadSvc: store,
+	}
+
+	drained := make(chan struct{})
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		<-recipient.send
+		close(drained)
+	}()
+	payload, _ := json.Marshal(RecallPayload{To: testPeerChatID, MsgID: testMessageID})
+	hub.handleRecall(sender, payload)
+	<-drained
+
+	select {
+	case raw := <-recipient.send:
+		var message Message
+		if err := json.Unmarshal(raw, &message); err != nil {
+			t.Fatal(err)
+		}
+		if message.Type != "recall" {
+			t.Fatalf("message type = %q, want recall", message.Type)
+		}
+	default:
+		t.Fatal("live recall was dropped while the recipient buffer was briefly busy")
+	}
+}
+
+func TestConsecutiveRecallsReachOnlineRecipient(t *testing.T) {
+	recipient := &Client{
+		ChatID:        testPeerChatID,
+		ReliableInbox: true,
+		send:          make(chan []byte, 2),
+		closed:        make(chan struct{}),
+	}
+	sender := &Client{ChatID: testCallerChatID, UserID: 7, send: make(chan []byte, 2)}
+	store := &fakeMessageReadStore{delivery: service.MessageDelivery{
+		MsgFrom: testCallerChatID, MsgTo: testPeerChatID,
+	}}
+	hub := &Hub{
+		clients:        map[string]*Client{testPeerChatID: recipient},
+		friendSvc:      fakeFriendChecker{friends: true},
+		messageReadSvc: store,
+	}
+
+	for _, msgID := range []string{testMessageID, testMessageID2} {
+		payload, _ := json.Marshal(RecallPayload{To: testPeerChatID, MsgID: msgID})
+		hub.handleRecall(sender, payload)
+	}
+
+	got := make(map[string]bool, 2)
+	for range 2 {
+		raw := <-recipient.send
+		var message Message
+		if err := json.Unmarshal(raw, &message); err != nil {
+			t.Fatal(err)
+		}
+		var payload service.PendingRecall
+		if message.Type != "recall" || json.Unmarshal(message.Payload, &payload) != nil {
+			t.Fatalf("unexpected recall envelope: %s", raw)
+		}
+		got[payload.MsgID] = true
+	}
+	if !got[testMessageID] || !got[testMessageID2] {
+		t.Fatalf("consecutive recalls received = %v", got)
 	}
 }
 

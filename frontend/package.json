@@ -19,7 +19,6 @@
     "test:call": "node --test src/stores/call.test.mjs src/stores/call-media.test.mjs src/services/websocket-call-offer.test.mjs src/components/video-call-status.test.mjs",
     "test:message-reliability": "node --test src/services/websocket-call-offer.test.mjs",
     "test:ironfist": "node --test src/games/ironfist/game/*.test.mjs",
-    "test:sugar-pop": "node --test src/games/sugar-pop/game/*.test.mjs",
     "test:version": "node --test src/services/version-compare.test.mjs",
     "test:update": "node --test src/services/native-update.test.mjs",
     "test:chat-preferences": "node --test src/services/chat-preferences.test.mjs",

@@ -156,7 +156,6 @@ try {
             'test:voice',
             'test:call',
             'test:ironfist',
-            'test:sugar-pop'
         )
         foreach ($testScript in $testScripts) {
             Invoke-Checked -Label "Running $testScript" -Command { & $pnpmPath run $testScript }

@@ -265,8 +265,6 @@ export const messages = {
             ironFist: "铁拳 3D",
             ironFistDesc: "区块链技术 · 零作弊 · 公开透明",
             strategy: "策略",
-            sugarPop: "糖果消消乐",
-            sugarPopDesc: "甜蜜的三消冒险",
             match3: "三消",
         },
         chat: {
@@ -461,16 +459,6 @@ export const messages = {
             inviteTitle: "获取邀请码",
             inviteHint: "云密采用邀请注册，请向现有用户获取邀请链接。",
             haveAccount: "已有账号？",
-        },
-        sugarPop: {
-            hammer: "锤子", shuffle: "洗牌", extraMoves: "+5 步", pause: "暂停",
-            level: "关卡 {id}", moves: "步数", score: "分数 {score}", jelly: "果冻", frosting: "糖霜", ready: "准备！",
-            rewards: "奖励：{rewards}", noRewards: "没有新的道具奖励",
-            paused: "游戏已暂停", pausedBody: "休息一下，棋盘会在这里等你。", resume: "继续", map: "地图",
-            next: "下一关", playAgain: "再玩一次", win: "甜蜜胜利！", outOfMoves: "步数用完了",
-            targetsRemain: "棋盘上还有目标未完成。", useExtraMoves: "使用 +5 步",
-            saveRecovered: "存档已恢复", saveRecoveredBody: "存档数据无法读取，糖果消消乐已从新存档开始。", continue: "继续",
-            trail: "糖果小镇之旅", locked: "锁定", sweetFinish: "甜蜜收尾！", movesBonus: "{moves} 步 · +{score}",
         },
         ironFist: {
             howToPlay: "玩法说明", myInfo: "我的信息", details: "明细", records: "战绩", recordDetails: "对战详情",
@@ -819,8 +807,6 @@ export const messages = {
             ironFist: "Iron Fist 3D",
             ironFistDesc: "Blockchain-powered · Cheat-resistant · Transparent",
             strategy: "Strategy",
-            sugarPop: "Sugar Pop",
-            sugarPopDesc: "A sweet match-3 adventure",
             match3: "Match-3",
         },
         chat: {
@@ -1015,16 +1001,6 @@ export const messages = {
             inviteTitle: "Get an invitation",
             inviteHint: "Yunmi uses invitation-only registration. Ask an existing user for an invitation link.",
             haveAccount: "Already have an account?",
-        },
-        sugarPop: {
-            hammer: "Hammer", shuffle: "Shuffle", extraMoves: "+5 Moves", pause: "Pause",
-            level: "Level {id}", moves: "Moves", score: "Score {score}", jelly: "Jelly", frosting: "Frosting", ready: "Ready!",
-            rewards: "Rewards: {rewards}", noRewards: "No new booster rewards",
-            paused: "Paused", pausedBody: "Take a breather. Your board is waiting.", resume: "Resume", map: "Map",
-            next: "Next level", playAgain: "Play again", win: "Sugar Sweet!", outOfMoves: "Out of moves",
-            targetsRemain: "The targets are still on the board.", useExtraMoves: "Use +5 moves",
-            saveRecovered: "Save recovered", saveRecoveredBody: "Your saved data could not be read, so Sugar Pop started fresh.", continue: "Continue",
-            trail: "Candy Town Trail", locked: "LOCK", sweetFinish: "Sweet finish!", movesBonus: "{moves} moves · +{score}",
         },
         ironFist: {
             howToPlay: "How to play", myInfo: "My profile", details: "Details", records: "Battle record", recordDetails: "Match details",

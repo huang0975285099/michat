@@ -18,22 +18,6 @@
                     </q-card-actions>
                 </q-card>
             </div>
-
-            <!-- sugar pop -->
-            <div class="col-6 col-sm-4 col-md-3">
-                <q-card class="game-card cursor-pointer" @click="router.push('/games/sugar-pop')">
-                    <q-card-section class="text-center q-pa-lg">
-                        <div style="font-size: 52px">🍬</div>
-                        <div class="text-subtitle1 text-bold q-mt-sm">{{ t("games.sugarPop") }}</div>
-                        <div class="text-caption text-grey-6">{{ t("games.sugarPopDesc") }}</div>
-                    </q-card-section>
-                    <q-separator />
-                    <q-card-actions align="center" class="q-py-sm">
-                        <q-chip dense color="pink" text-color="white" icon="grid_view" :label="t('games.match3')" />
-                        <q-chip dense color="teal" text-color="white" icon="wifi_off" :label="t('common.offline')" />
-                    </q-card-actions>
-                </q-card>
-            </div>
         </div>
     </q-page>
 </template>
