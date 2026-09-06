@@ -12,7 +12,7 @@ import { Fighter3D, PAL_ME_3D, PAL_OPP_3D } from './Fighter3D.js'
 // (Electron is loaded using file://, the absolute path '/games' will point to the root of the disk and the loading will fail)
 const GLB_ROOT = import.meta.env.BASE_URL + 'games/ironfist/'
 const GLB_FILE = 'fighter.glb'       //Our model (Vanguard)
-const GLB_FILE_OPP = 'fighter.glb'  //Opponent model (Mutant); default falls back to fighter.glb
+const GLB_FILE_OPP = 'fighter2.glb' //Opponent model (Mutant); falls back to fighter.glb if loading fails
 
 const CRIT_THRESHOLD = 18
 
