@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  bindFetchTo,
   sanitizeDownloadFilename,
   saveChunkReaderWithBrowserPicker,
   saveChunkReaderWithCapacitor,
@@ -72,6 +73,16 @@ test('does not open or fetch the file when the save dialog is canceled', async (
   }, adapters)
 
   assert.deepEqual(result, { canceled: true })
+})
+
+test('binds native fetch to its Window-like receiver', async () => {
+  const windowLike = { marker: 'window' }
+  const nativeFetch = function (url) {
+    assert.equal(this, windowLike)
+    return { url }
+  }
+  const fetch = bindFetchTo(windowLike, nativeFetch)
+  assert.deepEqual(fetch('blob:test'), { url: 'blob:test' })
 })
 
 function chunkDescriptor() {

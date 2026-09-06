@@ -15,13 +15,21 @@ export function triggerBrowserDownload(objectUrl, filename, documentRef = docume
   anchor.remove()
 }
 
+export function bindFetchTo(receiver, fetchFn = receiver?.fetch) {
+  if (typeof fetchFn !== 'function') throw new Error('Fetch is unavailable')
+  return (...args) => Reflect.apply(fetchFn, receiver, args)
+}
+
 async function loadTauriAdapters() {
   const [{ save }, { open, remove }, { downloadDir, join }] = await Promise.all([
     import('@tauri-apps/plugin-dialog'),
     import('@tauri-apps/plugin-fs'),
     import('@tauri-apps/api/path'),
   ])
-  return { save, open, remove, downloadDir, join, fetch: globalThis.fetch }
+  // Chromium/WebView requires fetch to be invoked with Window as its receiver.
+  // Storing the native function directly on this adapter makes `api.fetch()` use
+  // the adapter object as `this`, which throws "Illegal invocation" in Tauri.
+  return { save, open, remove, downloadDir, join, fetch: bindFetchTo(globalThis) }
 }
 
 async function writeAll(file, bytes, onWritten) {
