@@ -13,19 +13,28 @@
     </q-banner>
 
     <section class="dt-card hero" aria-live="polite">
-      <div class="phase">{{ phaseText }} <strong>{{ countdown }}</strong></div>
-      <div v-if="round.result" class="verdict" :class="round.result">{{ resultLabel(round.result) }}</div>
-      <div class="fighters">
-        <div class="fighter fighter--dragon">
-          <span class="fighter-emoji">🐉</span><b>龙</b>
-          <q-linear-progress rounded :value="dragonHp / 100" color="red-6" track-color="grey-9" />
-          <small>{{ dragonHp }} HP · 下注 {{ formatPoints(totals.dragon) }}</small>
+      <div class="arena-stage">
+        <BattleArena3D
+          :result="arenaResult"
+          :player-charged="dragonCharged"
+          :opponent-charged="tigerCharged"
+        />
+        <div class="arena-phase">
+          <div class="phase">{{ phaseText }} <strong>{{ countdown }}</strong></div>
+          <div v-if="round.result" class="verdict" :class="round.result">{{ resultLabel(round.result) }}</div>
         </div>
-        <div class="vs">VS<small>公平对战</small></div>
-        <div class="fighter fighter--tiger">
-          <span class="fighter-emoji">🐅</span><b>虎</b>
-          <q-linear-progress rounded :value="tigerHp / 100" color="blue-6" track-color="grey-9" />
-          <small>{{ tigerHp }} HP · 下注 {{ formatPoints(totals.tiger) }}</small>
+        <div class="fighters">
+          <div class="fighter fighter--dragon">
+            <div class="fighter-name"><span>🐉</span><b>龙</b></div>
+            <q-linear-progress rounded :value="dragonHp / 100" color="red-6" track-color="grey-9" />
+            <small>{{ dragonHp }} HP · 下注 {{ formatPoints(totals.dragon) }}</small>
+          </div>
+          <div class="vs">VS<small>公平对战</small></div>
+          <div class="fighter fighter--tiger">
+            <div class="fighter-name"><span>🐅</span><b>虎</b></div>
+            <q-linear-progress rounded :value="tigerHp / 100" color="blue-6" track-color="grey-9" />
+            <small>{{ tigerHp }} HP · 下注 {{ formatPoints(totals.tiger) }}</small>
+          </div>
         </div>
       </div>
       <div v-if="latestBattleRound" class="battle-line">
@@ -192,12 +201,13 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Notify } from 'quasar'
 import { ironfistApi } from 'src/services/api'
 import { useFistStore } from 'src/stores/fist'
 import { connect as wsConnect, off as wsOff, on as wsOn } from 'src/services/websocket'
+import BattleArena3D from '../BattleArena3D.vue'
 import {
   calculateDragonTigerPayout,
   calculateDragonTigerStreak,
@@ -242,6 +252,7 @@ const selection = ref(null)
 const balance = ref(0)
 const submitting = ref(false)
 const error = ref('')
+const arenaResult = ref(null)
 const monotonicNow = ref(performance.now())
 let serverClock = null
 let currentLoading = null
@@ -282,6 +293,8 @@ const visibleBattleRounds = computed(() => {
 const latestBattleRound = computed(() => visibleBattleRounds.value.at(-1) || null)
 const dragonHp = computed(() => Number(latestBattleRound.value?.dragon_hp ?? round.value.dragon_hp ?? 100))
 const tigerHp = computed(() => Number(latestBattleRound.value?.tiger_hp ?? round.value.tiger_hp ?? 100))
+const dragonCharged = computed(() => Boolean(latestBattleRound.value?.dragon_charged))
+const tigerCharged = computed(() => Boolean(latestBattleRound.value?.tiger_charged))
 const shortCommitment = computed(() => {
   const value = round.value.seed_commitment
   return value ? `${value.slice(0, 10)}…${value.slice(-8)}` : '等待中'
@@ -298,6 +311,35 @@ const detailFinalHp = computed(() => {
   }
 })
 const recentStreak = computed(() => calculateDragonTigerStreak(history.value, historyHasMore.value))
+
+let animatedBattleRoundKey = ''
+watch(() => [round.value.id, latestBattleRound.value], ([roundId, battleRound]) => {
+  if (!battleRound) {
+    animatedBattleRoundKey = ''
+    arenaResult.value = null
+    return
+  }
+  const key = `${roundId || 'unknown'}:${battleRound.round || visibleBattleRounds.value.length}`
+  if (key === animatedBattleRoundKey) return
+  animatedBattleRoundKey = key
+  const dragonHP = Number(battleRound.dragon_hp ?? 100)
+  const tigerHP = Number(battleRound.tiger_hp ?? 100)
+  const battleFinished = dragonHP <= 0 || tigerHP <= 0 || Number(battleRound.round) >= 10
+  arenaResult.value = {
+    playerAction: battleRound.dragon_action,
+    opponentAction: battleRound.tiger_action,
+    playerDmg: Number(battleRound.dragon_damage || 0),
+    opponentDmg: Number(battleRound.tiger_damage || 0),
+    envDmg: Number(battleRound.environment_damage || 0),
+    playerHP: dragonHP,
+    opponentHP: tigerHP,
+    playerCharged: Boolean(battleRound.dragon_charged),
+    opponentCharged: Boolean(battleRound.tiger_charged),
+    gameResult: battleFinished
+      ? (dragonHP > tigerHP ? 'win' : tigerHP > dragonHP ? 'lose' : 'draw')
+      : null,
+  }
+})
 
 function unwrap(response) {
   const body = response?.data ?? response ?? {}
@@ -475,25 +517,29 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.dt-page { max-width: 720px; margin: auto; color: #fff; }
+.dt-page { min-height: 100dvh; max-width: 720px; margin: auto; background: #0f0f1a; color: #fff; }
 .dt-card { padding: 18px; border: 1px solid #3c3563; border-radius: 18px; background: linear-gradient(145deg, #17152d, #242044); }
-.hero { text-align: center; }
-.phase { color: #ffcb6b; font-size: 16px; }
+.hero { padding: 0 0 14px; overflow: hidden; text-align: center; }
+.arena-stage { position: relative; height: clamp(230px, 58vw, 330px); background: #080711; }
+.arena-stage::after { position: absolute; inset: 0; z-index: 1; background: linear-gradient(180deg, rgb(5 5 13 / 30%) 0%, transparent 32%, transparent 56%, rgb(7 6 18 / 88%) 100%); content: ''; pointer-events: none; }
+.arena-phase { position: absolute; top: 10px; right: 0; left: 0; z-index: 3; pointer-events: none; }
+.phase { color: #ffcb6b; font-size: 16px; text-shadow: 0 2px 8px #000; }
 .phase strong { margin-left: 12px; font-size: 28px; }
-.verdict { margin-top: 10px; font-size: 24px; font-weight: 900; }
-.fighters { display: flex; align-items: center; justify-content: space-around; gap: 20px; margin: 24px 0; }
-.fighter { display: flex; flex: 1; flex-direction: column; gap: 7px; min-width: 0; }
-.fighter-emoji { font-size: 46px; }
+.verdict { margin-top: 2px; font-size: 24px; font-weight: 900; text-shadow: 0 2px 10px #000; }
+.fighters { position: absolute; right: 14px; bottom: 10px; left: 14px; z-index: 3; display: flex; align-items: flex-end; justify-content: space-around; gap: 12px; margin: 0; }
+.fighter { display: flex; flex: 1; flex-direction: column; gap: 6px; min-width: 0; padding: 8px 9px; border: 1px solid rgb(255 255 255 / 10%); border-radius: 10px; background: rgb(10 9 25 / 72%); backdrop-filter: blur(4px); }
+.fighter-name { display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 17px; }
+.fighter-name span { font-size: 23px; line-height: 1; }
 .fighter b { font-size: 18px; }
-.fighter small, .fairness { color: #9e96b6; }
+.fighter small, .fairness { overflow: hidden; color: #b8b0ce; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .fighter--dragon b, .dragon { color: #ff7373; }
 .fighter--tiger b, .tiger { color: #72aaff; }
 .draw { color: #d19cff; }
 .void { color: #aaa; }
-.vs { color: #ffcb6b; font-weight: 900; }
+.vs { padding-bottom: 17px; color: #ffcb6b; font-weight: 900; text-shadow: 0 2px 8px #000; }
 .vs small { display: block; color: #8f87aa; font-weight: 400; white-space: nowrap; }
-.battle-line { margin-bottom: 10px; color: #ddd5ef; }
-.fairness { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.battle-line { margin: 12px 14px 8px; color: #ddd5ef; }
+.fairness { margin: 0 14px; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .balance { color: #ffcb6b; font-size: 13px; }
 .choices { display: flex; gap: 8px; }
 .choices .q-btn { flex: 1; }
@@ -524,7 +570,15 @@ onUnmounted(() => {
 @media (max-width: 420px) {
   .dt-page { padding: 12px; }
   .dt-card { padding: 14px; }
-  .fighter-emoji { font-size: 38px; }
+  .hero { padding: 0 0 12px; }
+  .arena-stage { height: 230px; }
+  .fighters { right: 8px; bottom: 8px; left: 8px; gap: 7px; }
+  .fighter { padding: 7px 6px; }
+  .fighter-name { font-size: 15px; }
+  .fighter-name span { font-size: 20px; }
+  .fighter b { font-size: 16px; }
+  .vs { padding-bottom: 16px; font-size: 12px; }
+  .vs small { font-size: 10px; }
   .history-row { font-size: 11px; }
   .history-public { grid-template-columns: .9fr .7fr 3fr; }
 }

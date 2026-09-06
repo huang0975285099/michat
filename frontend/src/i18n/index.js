@@ -196,6 +196,7 @@ export const messages = {
             requestAccepted: "好友申请已接受",
             requestRejected: "好友申请已拒绝",
             newRequest: "收到新的好友申请",
+            loadFailed: "好友列表加载失败，请检查网络后重试",
         },
         call: {
             video: "视频通话",
@@ -741,6 +742,7 @@ export const messages = {
             requestAccepted: "Friend request accepted",
             requestRejected: "Friend request rejected",
             newRequest: "New friend request received",
+            loadFailed: "Unable to load friends. Check your connection and retry.",
         },
         call: {
             video: "Video call",

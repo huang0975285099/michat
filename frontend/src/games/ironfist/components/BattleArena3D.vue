@@ -53,7 +53,11 @@ onUnmounted(() => {
 })
 
 watch(() => props.result, (r) => {
-  if (!r) return
+  if (!r) {
+    pendingResult = null
+    if (ctrl?.ready) ctrl.reset()
+    return
+  }
   if (ctrl?.ready) ctrl.playRound(r)
   else pendingResult = r
 })

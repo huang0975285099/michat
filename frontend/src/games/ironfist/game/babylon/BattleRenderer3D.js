@@ -1,5 +1,5 @@
 // Tekken - Phase 3 3D combat renderer (Babylon.js, Option B)
-// The factory returns the controller: { setCharge, playRound, resize, dispose, ready }.
+// The factory returns the controller: { setCharge, playRound, reset, resize, dispose, ready }.
 // The rendering-independent engine (IronFistGame) and HUD remain unchanged; this controller only consumes the settlement result + charging state of each round.
 // See docs/ironfist.md Section 13/22.
 
@@ -384,6 +384,7 @@ export function createBattleRenderer3D(canvas, { playerCharged = false, opponent
     engine, scene, ready: false,
     setCharge(p, o) { me.setCharged(!!p); opp.setCharged(!!o) },
     playRound(r) { _play(r) },
+    reset() { me.resetForBattle(); opp.resetForBattle() },
     resize() { engine.resize() },
     dispose() {
       try { engine.stopRenderLoop() } catch { /* noop */ }

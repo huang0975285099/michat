@@ -1,5 +1,11 @@
 <template>
-    <q-page class="q-pa-md">
+    <q-page class="friends-page q-pa-md">
+        <q-banner v-if="loadError" dense rounded class="q-mb-md bg-red-1 text-negative">
+            {{ t('friends.loadFailed') }}
+            <template #action>
+                <q-btn flat dense :label="t('common.retry')" @click="loadData" />
+            </template>
+        </q-banner>
         <!-- search bar -->
         <q-input
             :model-value="searchId"
@@ -193,6 +199,7 @@ const requests = ref([]);
 const outgoing = ref([]);
 const friends = ref([]);
 const cancelingId = ref(null);
+const loadError = ref(false);
 
 // Sorted friends list: online first, then descending by last online time
 const sortedFriends = computed(() => {
@@ -226,17 +233,23 @@ function formatLastSeen(lastSeen, online) {
 }
 
 async function loadData() {
-    const [reqRes, outRes, friendRes] = await Promise.all([
-        friendApi.getRequests(),
-        friendApi.getOutgoing(),
-        friendApi.getFriends(),
-    ]);
-    requests.value = reqRes.data;
-    outgoing.value = outRes.data;
-    friends.value = friendRes.data;
-    identityStore.setPendingRequestCount(
-        requests.value.filter((r) => r.status === "pending").length
-    );
+    loadError.value = false;
+    try {
+        const [reqRes, outRes, friendRes] = await Promise.all([
+            friendApi.getRequests(),
+            friendApi.getOutgoing(),
+            friendApi.getFriends(),
+        ]);
+        requests.value = reqRes.data || [];
+        outgoing.value = outRes.data || [];
+        friends.value = friendRes.data || [];
+        identityStore.setPendingRequestCount(
+            requests.value.filter((r) => r.status === "pending").length
+        );
+    } catch (error) {
+        loadError.value = true;
+        console.warn('[FriendsPage] failed to load friends', error);
+    }
 }
 
 async function search() {
@@ -347,6 +360,13 @@ onDeactivated(() => {
 </script>
 
 <style scoped>
+.friends-page {
+    display: block;
+    min-height: calc(100vh - 112px);
+    overflow-y: auto;
+    box-sizing: border-box;
+}
+
 .border-top {
     border-top: 1px solid rgba(0, 0, 0, 0.18);
 }

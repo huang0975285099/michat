@@ -163,7 +163,8 @@ export class Fighter3D {
     this.home = pos.clone()
     this.baseRotY = rotY
     this.root.position.copyFrom(pos)
-    this.root.rotation.y = rotY
+    this.root.rotation.set(0, rotY, 0)
+    this.root.scaling.setAll(1)
   }
 
   // ── Status ────────────────────────────────────────────
@@ -204,6 +205,23 @@ export class Fighter3D {
     tween(s, this.root, 'position.z', [{ frame: 0, value: this.root.position.z }, { frame: 10, value: h.z }])
     tween(s, this.root, 'scaling.y', [{ frame: 0, value: this.root.scaling.y }, { frame: 10, value: 1 }])
     tween(s, this.root, 'rotation.z', [{ frame: 0, value: this.root.rotation.z }, { frame: 10, value: 0 }])
+  }
+
+  // Start a new battle from a clean pose. Unlike resetToIdle(), this is allowed
+  // to lift a fighter that was deliberately kept down after a K.O.
+  resetForBattle() {
+    if (!this.root) return
+    this._down = false
+    this.scene.stopAnimation(this.root)
+    if (this._current) {
+      this._current.onAnimationGroupEndObservable.clear()
+      this._current.stop()
+      this._current = null
+    }
+    this.root.position.copyFrom(this.home)
+    this.root.rotation.set(0, this.baseRotY, 0)
+    this.root.scaling.setAll(1)
+    this.resetToIdle()
   }
 
   // ──Action ────────────────────────────────────────────
