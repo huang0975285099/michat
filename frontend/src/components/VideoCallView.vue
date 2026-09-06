@@ -1,5 +1,15 @@
 <template>
-    <div v-if="visible" class="video-call">
+    <div
+        v-if="visible"
+        class="video-call"
+        :class="{ 'is-minimized': minimized }"
+        :role="minimized ? 'button' : undefined"
+        :tabindex="minimized ? 0 : undefined"
+        :aria-label="minimized ? t('call.restore') : undefined"
+        @click="restoreIfMinimized"
+        @keydown.enter.prevent="restoreIfMinimized"
+        @keydown.space.prevent="restoreIfMinimized"
+    >
         <!-- Remote screen (full) -->
         <video
             ref="remoteEl"
@@ -28,8 +38,20 @@
             </div>
         </div>
 
+        <q-btn
+            v-if="!minimized"
+            class="minimize-button"
+            flat round dense
+            icon="picture_in_picture_alt"
+            color="white"
+            :aria-label="t('call.minimize')"
+            @click.stop="minimized = true"
+        >
+            <q-tooltip>{{ t("call.minimize") }}</q-tooltip>
+        </q-btn>
+
         <!-- Local screen (small window) -->
-        <div class="local-preview">
+        <div v-if="!minimized" class="local-preview">
             <video
                 ref="localEl"
                 class="local-video"
@@ -44,7 +66,7 @@
         </div>
 
         <!-- bottom control bar -->
-        <div class="controls">
+        <div v-if="!minimized" class="controls">
             <q-btn
                 round size="lg"
                 :icon="muted ? 'mic_off' : 'mic'"
@@ -94,6 +116,7 @@ const remoteEl = ref(null);
 const localEl = ref(null);
 const muted = ref(false);
 const duration = ref(0);
+const minimized = ref(false);
 let timer = null;
 
 // Shown only for video calls and during a call/conversation (incoming calls are handled by IncomingCallDialog)
@@ -135,7 +158,18 @@ watch(
 // Bind the existing stream after the component is mounted/displayed (srcObject cannot be bound using templates and needs to be assigned manually)
 watch(visible, async (v) => {
     if (v) {
+        minimized.value = false;
         // Wait for the DOM to render the video element and then bind the existing stream.
+        await nextTick();
+        if (localEl.value) localEl.value.srcObject = callStore.localStream;
+        if (remoteEl.value) remoteEl.value.srcObject = callStore.remoteStream;
+    }
+});
+
+// The local <video> is removed while minimized. Rebind the same live stream
+// after restoring the full view; this does not restart media capture.
+watch(minimized, async (isMinimized) => {
+    if (!isMinimized && visible.value) {
         await nextTick();
         if (localEl.value) localEl.value.srcObject = callStore.localStream;
         if (remoteEl.value) remoteEl.value.srcObject = callStore.remoteStream;
@@ -170,6 +204,10 @@ async function toggleCamera() {
     await callStore.setCameraEnabled(!callStore.localVideoOn);
 }
 
+function restoreIfMinimized() {
+    if (minimized.value) minimized.value = false;
+}
+
 function formatDuration(secs) {
     const m = Math.floor(secs / 60).toString().padStart(2, "0");
     const s = (secs % 60).toString().padStart(2, "0");
@@ -183,6 +221,22 @@ function formatDuration(secs) {
     inset: 0;
     background: #000;
     z-index: 3000;
+}
+.video-call.is-minimized {
+    inset: auto;
+    top: max(12px, env(safe-area-inset-top));
+    right: 12px;
+    width: clamp(136px, 36vw, 200px);
+    aspect-ratio: 4 / 3;
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    border-radius: 12px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.42);
+    overflow: hidden;
+    cursor: pointer;
+}
+.video-call.is-minimized:focus-visible {
+    outline: 3px solid var(--q-primary);
+    outline-offset: 2px;
 }
 .remote-video {
     width: 100%;
@@ -206,6 +260,36 @@ function formatDuration(secs) {
     padding-top: max(16px, env(safe-area-inset-top));
     background: linear-gradient(to bottom, rgba(0, 0, 0, 0.5), transparent);
     text-align: center;
+}
+.minimize-button {
+    position: absolute;
+    top: max(8px, env(safe-area-inset-top));
+    right: 10px;
+    z-index: 1;
+    background: rgba(0, 0, 0, 0.28);
+}
+.is-minimized .top-bar {
+    top: auto;
+    bottom: 0;
+    padding: 24px 8px 8px;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.8), transparent);
+    text-align: left;
+}
+.is-minimized .top-bar .text-subtitle1 {
+    overflow: hidden;
+    font-size: 13px;
+    line-height: 16px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.is-minimized .placeholder {
+    padding: 8px;
+    text-align: center;
+}
+.is-minimized .placeholder .q-mt-md {
+    margin-top: 6px;
+    font-size: 10px;
+    line-height: 13px;
 }
 .local-preview {
     position: absolute;

@@ -1,8 +1,18 @@
 <template>
-    <div v-if="callStore.state !== 'idle' && callStore.media !== 'video'" class="call-bar">
+    <div
+        v-if="visible"
+        class="call-bar"
+        :class="{ 'is-minimized': minimized }"
+        :role="minimized ? 'button' : undefined"
+        :tabindex="minimized ? 0 : undefined"
+        :aria-label="minimized ? t('call.restore') : undefined"
+        @click="restoreIfMinimized"
+        @keydown.enter.prevent="restoreIfMinimized"
+        @keydown.space.prevent="restoreIfMinimized"
+    >
         <audio ref="audioEl" autoplay playsinline />
         <q-icon name="call" color="positive" size="20px" />
-        <div class="q-ml-sm">
+        <div class="call-details q-ml-sm">
             <div class="text-caption text-white">{{ statusText }}</div>
             <div v-if="callStore.state === 'active'" class="text-caption text-grey-4">
                 {{ formatDuration(duration) }}
@@ -10,7 +20,7 @@
         </div>
         <div class="col" />
         <q-btn
-            v-if="callStore.state === 'active'"
+            v-if="!minimized && callStore.state === 'active'"
             flat round dense size="sm"
             :icon="muted ? 'mic_off' : 'mic'"
             :color="muted ? 'negative' : 'white'"
@@ -19,6 +29,16 @@
             <q-tooltip>{{ muted ? t("call.unmute") : t("call.mute") }}</q-tooltip>
         </q-btn>
         <q-btn
+            v-if="!minimized"
+            flat round dense size="sm"
+            icon="picture_in_picture_alt" color="white"
+            :aria-label="t('call.minimize')"
+            @click.stop="minimized = true"
+        >
+            <q-tooltip>{{ t("call.minimize") }}</q-tooltip>
+        </q-btn>
+        <q-btn
+            v-if="!minimized"
             flat round dense size="sm"
             icon="call_end" color="negative"
             @click="callStore.hangup()"
@@ -38,7 +58,10 @@ const { t } = useI18n();
 const audioEl = ref(null);
 const muted = ref(false);
 const duration = ref(0);
+const minimized = ref(false);
 let timer = null;
+
+const visible = computed(() => callStore.state !== "idle" && callStore.media !== "video");
 
 const statusText = computed(() => {
     const name = callStore.peerNickname || callStore.peerId;
@@ -59,6 +82,10 @@ watch(
         if (audioEl.value) audioEl.value.srcObject = stream || null;
     }
 );
+
+watch(visible, (isVisible) => {
+    if (isVisible) minimized.value = false;
+});
 
 watch(
     () => [callStore.state, callStore.connectionStatus],
@@ -84,6 +111,10 @@ function toggleMute() {
     callStore.setMuted(muted.value);
 }
 
+function restoreIfMinimized() {
+    if (minimized.value) minimized.value = false;
+}
+
 function formatDuration(secs) {
     const m = Math.floor(secs / 60).toString().padStart(2, "0");
     const s = (secs % 60).toString().padStart(2, "0");
@@ -104,5 +135,27 @@ function formatDuration(secs) {
     padding: 0 12px;
     z-index: 2000;
     gap: 4px;
+}
+.call-bar.is-minimized {
+    top: max(12px, env(safe-area-inset-top));
+    left: auto;
+    right: 12px;
+    width: min(190px, calc(100vw - 24px));
+    height: 54px;
+    border-radius: 27px;
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.3);
+    cursor: pointer;
+}
+.call-bar.is-minimized:focus-visible {
+    outline: 3px solid var(--q-primary);
+    outline-offset: 2px;
+}
+.call-details {
+    min-width: 0;
+}
+.call-details > div {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 </style>
