@@ -40,10 +40,25 @@ func TestDragonTigerMigrationRegistered(t *testing.T) {
 	for _, required := range []string{
 		"ironfist_dragon_tiger_rounds", "ironfist_dragon_tiger_bets",
 		"ironfist_dragon_tiger_bet_commands", "ironfist_dragon_tiger_outbox",
-		"dragon_tiger_bet", "dragon_tiger_payout", "dragon_tiger_refund",
+		"VARCHAR(64)",
 	} {
 		if !strings.Contains(ironfistDragonTigerSQL, required) {
 			t.Fatalf("dragon tiger migration is missing %s", required)
+		}
+	}
+}
+
+func TestReplayedFistLedgerMigrationsDoNotNarrowTransactionTypes(t *testing.T) {
+	for name, migration := range map[string]string{
+		"pvp refund":    fistTxPvpRefundSQL,
+		"points ledger": ironfistPointsLedgerFixSQL,
+		"dragon tiger":  ironfistDragonTigerSQL,
+	} {
+		if !strings.Contains(migration, "MODIFY COLUMN type VARCHAR(64) NOT NULL") {
+			t.Fatalf("%s migration must keep transaction types extensible", name)
+		}
+		if strings.Contains(migration, "MODIFY COLUMN type ENUM") {
+			t.Fatalf("%s migration must not narrow transaction types to an ENUM", name)
 		}
 	}
 }

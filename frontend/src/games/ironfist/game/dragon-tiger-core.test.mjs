@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { calculateDragonTigerPayout, isValidDragonTigerAmount, phaseDeadline, shouldApplyDragonTigerEvent } from './dragon-tiger-core.mjs'
+import { calculateDragonTigerPayout, calculateDragonTigerStreak, isValidDragonTigerAmount, phaseDeadline, shouldApplyDragonTigerEvent } from './dragon-tiger-core.mjs'
 
 test('validates documented stake increments', () => {
   assert.equal(isValidDragonTigerAmount(20), true)
@@ -13,6 +13,25 @@ test('calculates integer payouts', () => {
   assert.equal(calculateDragonTigerPayout(100, 'dragon'), 195)
   assert.equal(calculateDragonTigerPayout(20, 'tiger'), 39)
   assert.equal(calculateDragonTigerPayout(100, 'draw'), 800)
+})
+
+test('counts the latest consecutive result', () => {
+  assert.deepEqual(calculateDragonTigerStreak([
+    { result: 'dragon' },
+    { result: 'dragon' },
+    { result: 'dragon' },
+    { result: 'tiger' },
+  ]), { result: 'dragon', count: 3, truncated: false })
+  assert.deepEqual(calculateDragonTigerStreak([{ result: 'tiger' }]), { result: 'tiger', count: 1, truncated: false })
+})
+
+test('ignores void rounds and marks a streak that exceeds the loaded page', () => {
+  assert.deepEqual(calculateDragonTigerStreak([
+    { result: 'void' },
+    { result: 'draw' },
+    { result: 'draw' },
+  ], true), { result: 'draw', count: 2, truncated: true })
+  assert.equal(calculateDragonTigerStreak([]), null)
 })
 
 test('uses only the current phase deadline', () => {

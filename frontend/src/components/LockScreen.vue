@@ -86,6 +86,11 @@ import { useRouter } from "vue-router";
 import { useIdentityStore } from "src/stores/identity";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
 import { useI18n } from "src/i18n";
+import {
+    MAX_SECURITY_CODE_ATTEMPTS,
+    registerSecurityCodeFailure,
+    securityCodeCooldownSeconds,
+} from "src/services/security-lock.mjs";
 
 const $q = useQuasar();
 const router = useRouter();
@@ -103,16 +108,12 @@ const isCoolingDown = ref(false);
 const cooldownSeconds = ref(0);
 let cooldownTimer = null;
 
-// Error count (sessionStorage, cleared by page refresh)
-const MAX_ATTEMPTS = 5;
-const COOLDOWN_SEC = 30 * 60; //30 minutes
-
 // Error count (persistent in localStorage, not lost when closing the browser)
 const errorCount = ref(
     parseInt(localStorage.getItem("sec_code_errors") || "0"),
 );
 const remainingAttempts = computed(() =>
-    Math.max(0, MAX_ATTEMPTS - errorCount.value),
+    Math.max(0, MAX_SECURITY_CODE_ATTEMPTS - errorCount.value),
 );
 
 // Check if it is cooling during initialization
@@ -122,6 +123,8 @@ onMounted(() => {
     );
     if (cooldownEnd > Date.now()) {
         startCooldown(cooldownEnd);
+    } else if (cooldownEnd) {
+        clearFailedAttempts();
     }
 });
 
@@ -136,8 +139,7 @@ watch(
         if (!locked) {
             resetPin();
             showError.value = false;
-            errorCount.value = 0;
-            sessionStorage.removeItem("sec_code_errors");
+            clearFailedAttempts();
         }
     },
 );
@@ -176,29 +178,41 @@ async function tryUnlock() {
         return;
 
     isUnlocking.value = true;
-    const success = await identity.unlockWithCode(pinCode.value);
-    isUnlocking.value = false;
+    try {
+        const success = await identity.unlockWithCode(pinCode.value);
+        if (success) {
+            clearFailedAttempts();
+            return;
+        }
 
-    if (success) {
-        // Reset error count
-        errorCount.value = 0;
-        localStorage.removeItem("sec_code_errors");
-        return;
-    }
+        const failure = registerSecurityCodeFailure(errorCount.value);
+        errorCount.value = failure.errorCount;
+        localStorage.setItem("sec_code_errors", errorCount.value.toString());
+        showError.value = true;
 
-    // failed
-    errorCount.value++;
-    localStorage.setItem("sec_code_errors", errorCount.value.toString());
-    showError.value = true;
-
-    if (errorCount.value >= MAX_ATTEMPTS) {
-        // Enter cooling
-        const cooldownEnd = Date.now() + COOLDOWN_SEC * 1000;
-        localStorage.setItem("sec_code_cooldown_end", cooldownEnd.toString());
-        startCooldown(cooldownEnd);
-    } else {
+        if (failure.cooldownEnd) {
+            localStorage.setItem(
+                "sec_code_cooldown_end",
+                failure.cooldownEnd.toString(),
+            );
+            startCooldown(failure.cooldownEnd);
+        } else {
+            resetPin();
+        }
+    } catch (error) {
+        console.warn("[lock] Unable to unlock security code", error);
+        showError.value = false;
         resetPin();
+        $q.notify({ type: "negative", message: t("lock.unlockFailed") });
+    } finally {
+        isUnlocking.value = false;
     }
+}
+
+function clearFailedAttempts() {
+    errorCount.value = 0;
+    localStorage.removeItem("sec_code_errors");
+    localStorage.removeItem("sec_code_cooldown_end");
 }
 
 // Confirm logout (when you forget your password)
@@ -235,11 +249,13 @@ function startCooldown(endTime) {
     pinValues.value = ["", "", "", "", "", ""];
 
     const update = () => {
-        const remaining = Math.ceil((endTime - Date.now()) / 1000);
+        const remaining = securityCodeCooldownSeconds(endTime);
         if (remaining <= 0) {
             isCoolingDown.value = false;
             cooldownSeconds.value = 0;
-            localStorage.removeItem("sec_code_cooldown_end");
+            showError.value = false;
+            clearFailedAttempts();
+            resetPin();
             return;
         }
         cooldownSeconds.value = remaining;

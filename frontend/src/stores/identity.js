@@ -109,7 +109,13 @@ export const useIdentityStore = defineStore('identity', () => {
       serverReady.value = true
       // Mark the current session as unlocked (not lost on refresh)
       sessionStorage.setItem('sec_code_unlocked', '1')
-      await connect()
+      // A correct local security code must unlock even when the network layer
+      // fails synchronously. WebSocket reconnection continues independently.
+      try {
+        await connect()
+      } catch (error) {
+        console.warn('[identity] reconnect after unlock failed:', error)
+      }
       await loadFriendPubKeys()
       // Start auto-lock (clean old one first)
       if (autoLockCleanup) autoLockCleanup()

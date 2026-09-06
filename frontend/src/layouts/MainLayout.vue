@@ -88,16 +88,16 @@
                     />
                 </q-tab>
                 <q-tab
-                    name="games"
-                    icon="sports_esports"
-                    :label="t('nav.games')"
-                    @click="router.push('/games')"
-                />
-                <q-tab
                     name="profile"
                     icon="person"
                     :label="t('nav.profile')"
                     @click="router.push('/profile')"
+                />
+                <q-tab
+                    name="games"
+                    icon="sports_esports"
+                    :label="t('nav.games')"
+                    @click="router.push('/games')"
                 />
             </q-tabs>
         </q-footer>
@@ -194,6 +194,7 @@ import IncomingGameDialog from "src/components/IncomingGameDialog.vue";
 import { useGameStore } from "src/stores/game";
 import { useI18n } from "src/i18n";
 import { openUpdateUrl, selectUpdateUrl } from "src/services/native-update.mjs";
+import { applySecurityLockEffects } from "src/services/security-lock.mjs";
 
 const { t } = useI18n();
 
@@ -317,8 +318,7 @@ watch(
     () => identity.isLocked,
     (locked, wasLocked) => {
         if (locked) {
-            chatStore.pauseAllOfflineUploads();
-            chatStore.pauseAllOfflineDownloads();
+            applySecurityLockEffects(callStore, chatStore);
         }
         if (wasLocked && !locked) {
             chatStore.resumeLockedOfflineUploads();

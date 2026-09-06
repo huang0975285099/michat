@@ -978,7 +978,7 @@ function backToLobby() {
 }
 
 function goHome() {
-    router.push("/games");
+    router.push("/chats");
 }
 </script>
 

@@ -5,22 +5,9 @@
 
 USE e2eechat;
 
-ALTER TABLE fist_transactions MODIFY COLUMN type ENUM(
-  'pve_reward',
-  'pvp_stake',
-  'pvp_win',
-  'pvp_loss',
-  'pvp_refund',
-  'pvp_fee',
-  'tournament_entry',
-  'tournament_prize',
-  'referral_reward',
-  'staking_reward',
-  'nft_mint',
-  'withdraw',
-  'deposit',
-  'system_adjust'
-) NOT NULL;
+-- Do not narrow this back to an ENUM. Newer game modes add transaction types,
+-- and startup migrations may be replayed after those values already exist.
+ALTER TABLE fist_transactions MODIFY COLUMN type VARCHAR(64) NOT NULL;
 
 UPDATE fist_transactions
 SET type = 'pvp_stake'

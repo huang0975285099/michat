@@ -88,9 +88,6 @@ ALTER TABLE ironfist_dragon_tiger_bet_commands DROP FOREIGN KEY fk_ifdtbc_user;
 ALTER TABLE ironfist_dragon_tiger_bet_commands MODIFY COLUMN user_id BIGINT UNSIGNED NULL;
 ALTER TABLE ironfist_dragon_tiger_bet_commands ADD CONSTRAINT fk_ifdtbc_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL;
 
-ALTER TABLE fist_transactions MODIFY COLUMN type ENUM(
-  'pve_reward','pvp_stake','pvp_win','pvp_loss','pvp_refund','pvp_fee',
-  'tournament_entry','tournament_prize','referral_reward','staking_reward',
-  'nft_mint','withdraw','deposit','system_adjust',
-  'dragon_tiger_bet','dragon_tiger_payout','dragon_tiger_refund'
-) NOT NULL;
+-- Transaction types are application-validated strings. Using VARCHAR avoids
+-- old replayed migrations rejecting values introduced by newer game modes.
+ALTER TABLE fist_transactions MODIFY COLUMN type VARCHAR(64) NOT NULL;

@@ -1,6 +1,6 @@
 <template>
-    <div class="q-pa-md">
-        <div class="row items-center q-mb-md">
+    <div class="ironfist-lobby q-pa-md">
+        <div class="lobby-header row items-center">
             <q-btn
                 flat
                 round
@@ -30,6 +30,23 @@
                 <span class="q-ml-xs">{{ t("ironFist.howToPlay") }}</span>
             </div>
         </div>
+
+        <section class="dragon-hero" role="button" tabindex="0" @click="$emit('open-dragon-tiger')" @keydown.enter.prevent="$emit('open-dragon-tiger')" @keydown.space.prevent="$emit('open-dragon-tiger')">
+            <div class="dragon-glow dragon-glow--one"></div>
+            <div class="dragon-glow dragon-glow--two"></div>
+            <div class="dragon-hero-icon">🐉</div>
+            <div class="dragon-hero-content">
+                <div class="dragon-eyebrow"><span class="live-dot"></span> 实时进行中</div>
+                <div class="dragon-title">龙虎斗</div>
+                <div class="dragon-subtitle">观战 AI 公平对决，预测龙、虎或平局</div>
+                <div class="dragon-odds">
+                    <span>龙胜 1.95×</span>
+                    <span>虎胜 1.95×</span>
+                    <span>平局 8.00×</span>
+                </div>
+            </div>
+            <div class="dragon-cta">立即观战 <q-icon name="arrow_forward" size="18px" /></div>
+        </section>
 
         <div class="section-title">{{ t("ironFist.myInfo") }}</div>
         <div class="mini-grid">
@@ -88,18 +105,6 @@
             <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
         </div>
 
-        <div class="mode-card" @click="$emit('start-practice')">
-            <div class="mode-emoji">🎯</div>
-            <div class="mode-text">
-                <div class="mode-name">
-                    {{ t("ironFist.practice") }}
-                    <span class="mode-tag mode-tag--fun">{{ t("ironFist.noRewards") }}</span>
-                </div>
-                <div class="mode-desc">{{ t("ironFist.practiceDesc", { currency }) }}</div>
-            </div>
-            <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
-        </div>
-
         <div class="mode-card mode-card--pvp" @click="$emit('open-pvp')">
             <div class="mode-emoji">⚔️</div>
             <div class="mode-text">
@@ -110,15 +115,6 @@
                 <div class="mode-desc">
                     {{ t("ironFist.pvpDesc", { currency }) }}
                 </div>
-            </div>
-            <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
-        </div>
-
-        <div class="mode-card mode-card--dragon" @click="$emit('open-dragon-tiger')">
-            <div class="mode-emoji">🐉</div>
-            <div class="mode-text">
-                <div class="mode-name">龙虎斗 <span class="mode-tag mode-tag--earn">实时下注</span></div>
-                <div class="mode-desc">观战 AI 对战，龙 / 虎 / 平三方下注</div>
             </div>
             <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
         </div>
@@ -134,6 +130,18 @@
                     <span class="mode-tag mode-tag--fun">{{ t("ironFist.entertainment") }}</span>
                 </div>
                 <div class="mode-desc">{{ t("ironFist.friendsDesc", { currency }) }}</div>
+            </div>
+            <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
+        </div>
+
+        <div class="mode-card" @click="$emit('start-practice')">
+            <div class="mode-emoji">🎯</div>
+            <div class="mode-text">
+                <div class="mode-name">
+                    {{ t("ironFist.practice") }}
+                    <span class="mode-tag mode-tag--fun">{{ t("ironFist.noRewards") }}</span>
+                </div>
+                <div class="mode-desc">{{ t("ironFist.practiceDesc", { currency }) }}</div>
             </div>
             <q-icon name="chevron_right" size="24px" class="q-ml-auto" />
         </div>
@@ -310,11 +318,140 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.ironfist-lobby {
+    position: relative;
+    width: min(100%, 880px);
+    min-height: 100dvh;
+    margin: 0 auto;
+}
+.lobby-header {
+    margin-bottom: 18px;
+}
 .rules-link {
     transition: opacity 0.2s;
 }
 .rules-link:hover {
     opacity: 0.8;
+}
+
+/* The only game's primary live mode gets the strongest visual hierarchy. */
+.dragon-hero {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 18px;
+    min-height: 170px;
+    padding: 24px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 188, 82, 0.32);
+    border-radius: 22px;
+    background:
+        linear-gradient(120deg, rgba(56, 24, 73, 0.98), rgba(30, 29, 75, 0.98) 55%, rgba(18, 56, 79, 0.98));
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+    cursor: pointer;
+    isolation: isolate;
+    transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+.dragon-hero:hover,
+.dragon-hero:focus-visible {
+    outline: none;
+    border-color: rgba(255, 203, 107, 0.68);
+    box-shadow: 0 20px 56px rgba(0, 0, 0, 0.36), 0 0 28px rgba(255, 170, 60, 0.1);
+    transform: translateY(-2px);
+}
+.dragon-hero:active {
+    transform: scale(0.988);
+}
+.dragon-glow {
+    position: absolute;
+    z-index: -1;
+    border-radius: 50%;
+    filter: blur(8px);
+    pointer-events: none;
+}
+.dragon-glow--one {
+    width: 180px;
+    height: 180px;
+    top: -92px;
+    left: -36px;
+    background: rgba(255, 65, 91, 0.22);
+}
+.dragon-glow--two {
+    width: 190px;
+    height: 190px;
+    right: -54px;
+    bottom: -116px;
+    background: rgba(39, 169, 255, 0.24);
+}
+.dragon-hero-icon {
+    display: grid;
+    width: 84px;
+    height: 84px;
+    place-items: center;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 24px;
+    background: rgba(6, 7, 22, 0.34);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    font-size: 52px;
+}
+.dragon-hero-content {
+    min-width: 0;
+}
+.dragon-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: #ffce69;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+}
+.live-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #73ef9f;
+    box-shadow: 0 0 0 4px rgba(115, 239, 159, 0.12);
+}
+.dragon-title {
+    margin-top: 5px;
+    font-size: 27px;
+    font-weight: 900;
+    letter-spacing: 0.04em;
+}
+.dragon-subtitle {
+    margin-top: 2px;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 13px;
+}
+.dragon-odds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-top: 13px;
+}
+.dragon-odds span {
+    padding: 4px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.07);
+    color: rgba(255, 255, 255, 0.82);
+    font-size: 10px;
+}
+.dragon-cta {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    align-self: end;
+    padding: 9px 12px;
+    border-radius: 11px;
+    background: linear-gradient(135deg, #ff9f43, #ff5b45);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 800;
+    white-space: nowrap;
+    box-shadow: 0 8px 20px rgba(255, 91, 69, 0.2);
 }
 
 /* Group title */
@@ -562,5 +699,29 @@ onMounted(() => {
     font-size: 11px;
     color: #9e9e9e;
     margin-left: auto;
+}
+
+@media (max-width: 560px) {
+    .dragon-hero {
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 14px;
+        min-height: 158px;
+        padding: 20px;
+    }
+    .dragon-hero-icon {
+        width: 68px;
+        height: 68px;
+        border-radius: 20px;
+        font-size: 43px;
+    }
+    .dragon-title {
+        font-size: 23px;
+    }
+    .dragon-cta {
+        grid-column: 1 / -1;
+        justify-content: center;
+        align-self: auto;
+        margin-top: 2px;
+    }
 }
 </style>

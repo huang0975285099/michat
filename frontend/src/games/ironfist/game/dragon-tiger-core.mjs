@@ -15,6 +15,18 @@ export function calculateDragonTigerPayout(stake, selection) {
   return Math.trunc(stake * odds[0] / odds[1])
 }
 
+export function calculateDragonTigerStreak(rounds, hasMore = false) {
+  if (!Array.isArray(rounds)) return null
+  const outcomes = rounds
+    .map(round => round?.result)
+    .filter(result => result === 'dragon' || result === 'tiger' || result === 'draw')
+  if (!outcomes.length) return null
+  const result = outcomes[0]
+  let count = 0
+  while (outcomes[count] === result) count++
+  return { result, count, truncated: hasMore && count === outcomes.length }
+}
+
 export function phaseDeadline(round) {
   if (!round) return null
   if (round.status === 'betting') return round.betting_ends_at || null

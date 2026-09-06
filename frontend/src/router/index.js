@@ -10,7 +10,9 @@ const routes = [
       { path: 'chats', component: () => import('src/pages/ChatsPage.vue') },
       { path: 'chat/:chatId', component: () => import('src/pages/ChatPage.vue') },
       { path: 'friends', component: () => import('src/pages/FriendsPage.vue') },
-      { path: 'games', component: () => import('src/pages/GamesPage.vue') },
+      // The app currently ships a single game, so the Entertainment tab opens
+      // its hub directly instead of showing a one-card catalogue first.
+      { path: 'games', redirect: '/games/ironfist' },
       { path: 'games/ironfist', component: () => import('src/games/ironfist/IronFistPage.vue') },
       { path: 'games/ironfist/dragon-tiger', component: () => import('src/games/ironfist/components/dragon-tiger/DragonTigerPage.vue') },
       { path: 'profile', component: () => import('src/pages/ProfilePage.vue') },

@@ -90,20 +90,20 @@
 
     <div class="section-title">{{ t("ironFist.selectTier") }}</div>
     <div
-      v-for="t in localizedTiers"
-      :key="t.key"
+      v-for="tier in localizedTiers"
+      :key="tier.key"
       class="tier-card"
-      :class="`tier-card--${t.key}`"
-      @click="startMatch(t)"
+      :class="`tier-card--${tier.key}`"
+      @click="startMatch(tier)"
     >
-      <div class="tier-icon">{{ t.icon }}</div>
+      <div class="tier-icon">{{ tier.icon }}</div>
       <div class="tier-text">
-        <div class="tier-name">{{ t.name }}</div>
-        <div class="tier-desc">{{ t.desc }}</div>
+        <div class="tier-name">{{ tier.name }}</div>
+        <div class="tier-desc">{{ tier.desc }}</div>
       </div>
       <div class="tier-stake">
         <div class="tier-stake-amount">
-          {{ t.stake.toLocaleString() }}
+          {{ tier.stake.toLocaleString() }}
         </div>
         <div class="tier-stake-unit">{{ t("ironFist.perMatch", { currency }) }}</div>
       </div>
