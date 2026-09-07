@@ -36,16 +36,16 @@
             <div class="dragon-glow dragon-glow--two"></div>
             <div class="dragon-hero-icon">🐉</div>
             <div class="dragon-hero-content">
-                <div class="dragon-eyebrow"><span class="live-dot"></span> 实时进行中</div>
-                <div class="dragon-title">龙虎斗</div>
-                <div class="dragon-subtitle">观战 AI 公平对决，预测龙、虎或平局</div>
+                <div class="dragon-eyebrow"><span class="live-dot"></span> {{ t("ironFist.dragonTiger.liveNow") }}</div>
+                <div class="dragon-title">{{ t("ironFist.dragonTiger.title") }}</div>
+                <div class="dragon-subtitle">{{ t("ironFist.dragonTiger.subtitle") }}</div>
                 <div class="dragon-odds">
-                    <span>龙胜 1.95×</span>
-                    <span>虎胜 1.95×</span>
-                    <span>平局 8.00×</span>
+                    <span>{{ t("ironFist.dragonTiger.oddsDragon") }}</span>
+                    <span>{{ t("ironFist.dragonTiger.oddsTiger") }}</span>
+                    <span>{{ t("ironFist.dragonTiger.oddsDraw") }}</span>
                 </div>
             </div>
-            <div class="dragon-cta">立即观战 <q-icon name="arrow_forward" size="18px" /></div>
+            <div class="dragon-cta">{{ t("ironFist.dragonTiger.watchNow") }} <q-icon name="arrow_forward" size="18px" /></div>
         </section>
 
         <div class="section-title">{{ t("ironFist.myInfo") }}</div>

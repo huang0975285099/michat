@@ -1,15 +1,15 @@
 <template>
   <q-page class="dt-page q-pa-md">
     <header class="row items-center q-mb-md">
-      <q-btn flat round icon="arrow_back" aria-label="返回" @click="goBack" />
-      <div class="text-h6 q-ml-sm">🐉 龙虎斗</div>
+      <q-btn flat round icon="arrow_back" :aria-label="dt('back')" @click="goBack" />
+      <div class="text-h6 q-ml-sm">🐉 {{ dt('title') }}</div>
       <q-space />
-      <span class="text-caption text-grey-5">第 {{ round.id || "—" }} 轮</span>
+      <span class="text-caption text-grey-5">{{ dt('round', { id: round.id || '—' }) }}</span>
     </header>
 
     <q-banner v-if="error" class="bg-negative text-white q-mb-md" rounded>
       {{ error }}
-      <template #action><q-btn flat label="重试" @click="refreshAll" /></template>
+      <template #action><q-btn flat :label="dt('retry')" @click="refreshAll" /></template>
     </q-banner>
 
     <section class="dt-card hero" aria-live="polite">
@@ -25,33 +25,33 @@
         </div>
         <div class="fighters">
           <div class="fighter fighter--dragon">
-            <div class="fighter-name"><span>🐉</span><b>龙</b></div>
+            <div class="fighter-name"><span>🐉</span><b>{{ dt('dragon') }}</b></div>
             <q-linear-progress rounded :value="dragonHp / 100" color="red-6" track-color="grey-9" />
-            <small>{{ dragonHp }} HP · 下注 {{ formatPoints(totals.dragon) }}</small>
+            <small>{{ dragonHp }} HP · {{ dt('betAmount', { amount: formatPoints(totals.dragon) }) }}</small>
           </div>
-          <div class="vs">VS<small>公平对战</small></div>
+          <div class="vs">VS<small>{{ dt('fairBattle') }}</small></div>
           <div class="fighter fighter--tiger">
-            <div class="fighter-name"><span>🐅</span><b>虎</b></div>
+            <div class="fighter-name"><span>🐅</span><b>{{ dt('tiger') }}</b></div>
             <q-linear-progress rounded :value="tigerHp / 100" color="blue-6" track-color="grey-9" />
-            <small>{{ tigerHp }} HP · 下注 {{ formatPoints(totals.tiger) }}</small>
+            <small>{{ tigerHp }} HP · {{ dt('betAmount', { amount: formatPoints(totals.tiger) }) }}</small>
           </div>
         </div>
       </div>
       <div v-if="latestBattleRound" class="battle-line">
-        第 {{ latestBattleRound.round || visibleBattleRounds.length }} 回合：
-        龙 {{ actionLabel(latestBattleRound.dragon_action) }} · 虎 {{ actionLabel(latestBattleRound.tiger_action) }}
+        {{ dt('battleRound', { round: latestBattleRound.round || visibleBattleRounds.length }) }}
+        {{ dt('battleActions', { dragon: actionLabel(latestBattleRound.dragon_action), tiger: actionLabel(latestBattleRound.tiger_action) }) }}
       </div>
       <div class="fairness">
-        平局池 {{ formatPoints(totals.draw) }} · 承诺
+        {{ dt('drawPool', { amount: formatPoints(totals.draw) }) }}
         <span :title="round.seed_commitment">{{ shortCommitment }}</span>
       </div>
     </section>
 
     <section class="dt-card q-mt-md">
       <div class="row items-center">
-        <div class="text-subtitle1">选择结果并下注</div>
+        <div class="text-subtitle1">{{ dt('chooseAndBet') }}</div>
         <q-space />
-        <span class="balance">余额 {{ formatPoints(balance) }}</span>
+        <span class="balance">{{ dt('balance', { amount: formatPoints(balance) }) }}</span>
       </div>
       <div class="choices q-mt-sm">
         <q-btn
@@ -69,12 +69,12 @@
           v-model.number="amount"
           type="number"
           outlined dense dark
-          label="积分（20 的倍数）"
+          :label="dt('amountLabel')"
           min="20" step="20"
           :disable="round.status !== 'betting' || submitting"
         />
         <q-btn
-          :label="lockedChoice ? '继续加注' : '确认下注'"
+          :label="lockedChoice ? dt('addBet') : dt('confirmBet')"
           color="deep-orange"
           :loading="submitting"
           :disable="!canBet"
@@ -83,25 +83,25 @@
       </div>
       <div v-if="amountError" class="validation-error q-mt-xs">{{ amountError }}</div>
       <div v-if="myBet" class="my-bet q-mt-sm">
-        已押{{ selectionLabel(myBet.selection) }} {{ formatPoints(myBet.stake_amount) }}，
-        中奖返还 {{ formatPoints(expectedPayout) }}
-        <template v-if="myBet.payout_amount != null"> · 实际返还 {{ formatPoints(myBet.payout_amount) }}</template>
+        {{ dt('betPlaced', { selection: selectionLabel(myBet.selection), amount: formatPoints(myBet.stake_amount) }) }}
+        {{ dt('winningPayout', { amount: formatPoints(expectedPayout) }) }}
+        <template v-if="myBet.payout_amount != null"> · {{ dt('actualPayout', { amount: formatPoints(myBet.payout_amount) }) }}</template>
       </div>
     </section>
 
     <section class="dt-card q-mt-md">
       <div class="row items-center">
         <div>
-          <div class="text-subtitle1">开奖记录</div>
+          <div class="text-subtitle1">{{ dt('history') }}</div>
           <div v-if="recentStreak" class="history-streak">
-            <span>最近：</span>
+            <span>{{ dt('recent') }}</span>
             <b :class="recentStreak.result">{{ resultLabel(recentStreak.result) }}</b>
-            <span>· {{ recentStreak.result === 'draw' ? '连续' : '连胜' }}</span>
+            <span>· {{ recentStreak.result === 'draw' ? dt('consecutive') : dt('winningStreak') }}</span>
             <strong>×{{ recentStreak.count }}{{ recentStreak.truncated ? '+' : '' }}</strong>
           </div>
         </div>
         <q-space />
-        <q-btn flat dense label="刷新" icon="refresh" :loading="historyLoading" @click="loadHistory(true)" />
+        <q-btn flat dense :label="dt('refresh')" icon="refresh" :loading="historyLoading" @click="loadHistory(true)" />
       </div>
       <div
         v-for="item in history"
@@ -109,46 +109,45 @@
         class="history-row history-row--clickable"
         role="button"
         tabindex="0"
-        :aria-label="`查看第 ${item.id} 轮战报`"
+        :aria-label="dt('viewReportAria', { id: item.id })"
         @click="openHistoryDetail(item)"
         @keydown.enter.prevent="openHistoryDetail(item)"
         @keydown.space.prevent="openHistoryDetail(item)"
       >
         <div class="history-public">
-          <span>第 {{ item.id }} 轮</span>
+          <span>{{ dt('round', { id: item.id }) }}</span>
           <b :class="item.result">{{ resultLabel(item.result) }}</b>
-          <span v-if="historyHasBets(item)">投注池：龙 {{ formatPoints(item.dragon_bet_total) }} · 虎 {{ formatPoints(item.tiger_bet_total) }} · 平 {{ formatPoints(item.draw_bet_total) }}</span>
-          <span v-else class="text-grey-6">本轮无人下注</span>
+          <span v-if="historyHasBets(item)">{{ dt('poolSummary', { dragon: formatPoints(item.dragon_bet_total), tiger: formatPoints(item.tiger_bet_total), draw: formatPoints(item.draw_bet_total) }) }}</span>
+          <span v-else class="text-grey-6">{{ dt('noBets') }}</span>
         </div>
         <div v-if="item.my_bet" class="history-my-bet">
-          <b>我的投注</b>
-          <span>押{{ selectionLabel(item.my_bet.selection) }} {{ formatPoints(item.my_bet.stake_amount) }}</span>
-          <span v-if="item.my_bet.status === 'active'">待结算</span>
+          <b>{{ dt('myBet') }}</b>
+          <span>{{ dt('betSelection', { selection: selectionLabel(item.my_bet.selection), amount: formatPoints(item.my_bet.stake_amount) }) }}</span>
+          <span v-if="item.my_bet.status === 'active'">{{ dt('pendingSettlement') }}</span>
           <span v-else-if="item.my_bet.status === 'refunded'">
-            已退款 {{ formatPoints(item.my_bet.payout_amount || item.my_bet.stake_amount) }}（净收益 0）
+            {{ dt('refundedNetZero', { amount: formatPoints(item.my_bet.payout_amount || item.my_bet.stake_amount) }) }}
           </span>
           <span v-else>
-            返还 {{ formatPoints(item.my_bet.payout_amount) }}（净收益
-            <strong :class="historyProfit(item.my_bet) >= 0 ? 'profit' : 'loss'">{{ formatSignedPoints(historyProfit(item.my_bet)) }}</strong>）
+            {{ dt('payoutNetStart', { amount: formatPoints(item.my_bet.payout_amount) }) }}<strong :class="historyProfit(item.my_bet) >= 0 ? 'profit' : 'loss'">{{ formatSignedPoints(historyProfit(item.my_bet)) }}</strong>{{ dt('payoutNetEnd') }}
           </span>
         </div>
-        <div class="history-detail-link">查看战报 <q-icon name="chevron_right" /></div>
+        <div class="history-detail-link">{{ dt('viewReport') }} <q-icon name="chevron_right" /></div>
       </div>
-      <div v-if="!historyLoading && !history.length" class="text-grey-6 q-pa-md text-center">暂无已结算记录</div>
-      <q-btn v-if="historyHasMore" flat class="full-width q-mt-sm" label="加载更多" :loading="historyLoading" @click="loadHistory(false)" />
+      <div v-if="!historyLoading && !history.length" class="text-grey-6 q-pa-md text-center">{{ dt('noSettledRounds') }}</div>
+      <q-btn v-if="historyHasMore" flat class="full-width q-mt-sm" :label="dt('loadMore')" :loading="historyLoading" @click="loadHistory(false)" />
     </section>
 
     <q-dialog v-model="detailOpen">
       <q-card dark class="battle-report-card">
         <q-card-section class="row items-center">
           <div>
-            <div class="text-h6">第 {{ detailRound?.id || '—' }} 轮战报</div>
+            <div class="text-h6">{{ dt('reportTitle', { id: detailRound?.id || '—' }) }}</div>
             <div v-if="detailRound" class="text-caption text-grey-5">
-              {{ resultLabel(detailRound.result) }} · 最终龙 {{ detailFinalHp.dragon }} HP / 虎 {{ detailFinalHp.tiger }} HP
+              {{ dt('reportSummary', { result: resultLabel(detailRound.result), dragon: detailFinalHp.dragon, tiger: detailFinalHp.tiger }) }}
             </div>
           </div>
           <q-space />
-          <q-btn flat round dense icon="close" aria-label="关闭战报" v-close-popup />
+          <q-btn flat round dense icon="close" :aria-label="dt('closeReport')" v-close-popup />
         </q-card-section>
 
         <q-separator dark />
@@ -158,40 +157,40 @@
         <q-card-section v-else-if="detailError">
           <q-banner class="bg-negative text-white" rounded>
             {{ detailError }}
-            <template #action><q-btn flat label="重试" @click="reloadHistoryDetail" /></template>
+            <template #action><q-btn flat :label="dt('retry')" @click="reloadHistoryDetail" /></template>
           </q-banner>
         </q-card-section>
         <template v-else-if="detailRound">
           <q-card-section v-if="detailMyBet" class="report-my-bet">
-            <b>我的投注</b>
-            <span>押{{ selectionLabel(detailMyBet.selection) }} {{ formatPoints(detailMyBet.stake_amount) }}</span>
-            <span v-if="detailMyBet.status === 'refunded'">退款 {{ formatPoints(detailMyBet.payout_amount || detailMyBet.stake_amount) }}</span>
+            <b>{{ dt('myBet') }}</b>
+            <span>{{ dt('betSelection', { selection: selectionLabel(detailMyBet.selection), amount: formatPoints(detailMyBet.stake_amount) }) }}</span>
+            <span v-if="detailMyBet.status === 'refunded'">{{ dt('refund', { amount: formatPoints(detailMyBet.payout_amount || detailMyBet.stake_amount) }) }}</span>
             <span v-else>
-              返还 {{ formatPoints(detailMyBet.payout_amount) }} · 净收益
+              {{ dt('payoutNetShortStart', { amount: formatPoints(detailMyBet.payout_amount) }) }}
               <strong :class="historyProfit(detailMyBet) >= 0 ? 'profit' : 'loss'">{{ formatSignedPoints(historyProfit(detailMyBet)) }}</strong>
             </span>
           </q-card-section>
 
           <q-card-section>
-            <div class="report-section-title">回合记录</div>
+            <div class="report-section-title">{{ dt('roundRecords') }}</div>
             <div v-for="battleRound in detailBattleRounds" :key="battleRound.round" class="battle-round-row">
-              <div class="battle-round-number">第 {{ battleRound.round }} 回合</div>
-              <div>龙 {{ actionLabel(battleRound.dragon_action) }} · 虎 {{ actionLabel(battleRound.tiger_action) }}</div>
+              <div class="battle-round-number">{{ dt('battleRound', { round: battleRound.round }) }}</div>
+              <div>{{ dt('roundActions', { dragon: actionLabel(battleRound.dragon_action), tiger: actionLabel(battleRound.tiger_action) }) }}</div>
               <div class="battle-round-damage">
-                受伤：龙 -{{ battleRound.dragon_damage }} · 虎 -{{ battleRound.tiger_damage }}
-                <template v-if="battleRound.environment_damage"> · 环境 -{{ battleRound.environment_damage }}</template>
+                {{ dt('damage', { dragon: battleRound.dragon_damage, tiger: battleRound.tiger_damage }) }}
+                <template v-if="battleRound.environment_damage"> · {{ dt('environmentDamage', { damage: battleRound.environment_damage }) }}</template>
               </div>
-              <div class="battle-round-hp">回合后：龙 {{ battleRound.dragon_hp }} HP · 虎 {{ battleRound.tiger_hp }} HP</div>
+              <div class="battle-round-hp">{{ dt('afterRound', { dragon: battleRound.dragon_hp, tiger: battleRound.tiger_hp }) }}</div>
             </div>
-            <div v-if="!detailBattleRounds.length" class="text-grey-6 text-center q-py-md">本轮没有可用的回合记录</div>
+            <div v-if="!detailBattleRounds.length" class="text-grey-6 text-center q-py-md">{{ dt('noRoundRecords') }}</div>
           </q-card-section>
 
           <q-card-section class="fairness-report">
-            <div class="report-section-title">公平验证</div>
-            <div>规则版本：{{ detailRound.rules_version }}</div>
-            <div>种子承诺</div>
+            <div class="report-section-title">{{ dt('fairnessVerification') }}</div>
+            <div>{{ dt('rulesVersion', { version: detailRound.rules_version }) }}</div>
+            <div>{{ dt('seedCommitment') }}</div>
             <code>{{ detailRound.seed_commitment || '—' }}</code>
-            <div class="q-mt-sm">服务器种子</div>
+            <div class="q-mt-sm">{{ dt('serverSeed') }}</div>
             <code>{{ detailRound.server_seed || '—' }}</code>
           </q-card-section>
         </template>
@@ -206,6 +205,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { Notify } from 'quasar'
 import { ironfistApi } from 'src/services/api'
 import { useFistStore } from 'src/stores/fist'
+import { useI18n } from 'src/i18n'
 import { connect as wsConnect, off as wsOff, on as wsOn } from 'src/services/websocket'
 import BattleArena3D from '../BattleArena3D.vue'
 import {
@@ -220,12 +220,14 @@ const emit = defineEmits(['back'])
 const router = useRouter()
 const route = useRoute()
 const fistStore = useFistStore()
+const { locale, t } = useI18n()
+const dt = (key, params = {}) => t(`ironFist.dragonTiger.${key}`, params)
 
-const choices = [
-  { key: 'dragon', label: '押龙 1.95', color: 'red-8' },
-  { key: 'draw', label: '押平 8.00', color: 'purple-7' },
-  { key: 'tiger', label: '押虎 1.95', color: 'blue-8' },
-]
+const choices = computed(() => [
+  { key: 'dragon', label: dt('betDragon'), color: 'red-8' },
+  { key: 'draw', label: dt('betDraw'), color: 'purple-7' },
+  { key: 'tiger', label: dt('betTiger'), color: 'blue-8' },
+])
 const eventTypes = [
   'ironfist_dragon_tiger_round_opened',
   'ironfist_dragon_tiger_bet_totals_changed',
@@ -264,24 +266,25 @@ let disposed = false
 let detailRequestVersion = 0
 
 const phaseText = computed(() => ({
-  betting: '下注中', locked: '等待开战', playing: '对战中', settling: '结算中',
-  settled: '结果展示', voided: '无效局退款',
-}[round.value.status] || '连接中'))
+  betting: dt('phaseBetting'), locked: dt('phaseLocked'), playing: dt('phasePlaying'), settling: dt('phaseSettling'),
+  settled: dt('phaseSettled'), voided: dt('phaseVoided'),
+}[round.value.status] || dt('phaseConnecting')))
 const estimatedServerNow = computed(() => serverClock
   ? serverClock.epochMs + monotonicNow.value - serverClock.monotonicMs
   : Date.now())
 const countdown = computed(() => {
   const deadline = phaseDeadline(round.value)
   if (!deadline) return '—'
-  return `${Math.max(0, Math.ceil((Date.parse(deadline) - estimatedServerNow.value) / 1000))}s`
+  const seconds = Math.max(0, Math.ceil((Date.parse(deadline) - estimatedServerNow.value) / 1000))
+  return dt('countdownSeconds', { seconds })
 })
 const lockedChoice = computed(() => Boolean(myBet.value))
 const numericAmount = computed(() => Number(amount.value))
 const totalAfterBet = computed(() => Number(myBet.value?.stake_amount || 0) + numericAmount.value)
 const amountError = computed(() => {
-  if (!isValidDragonTigerAmount(numericAmount.value)) return '每次至少 20 积分，且必须为 20 的整数倍'
-  if (totalAfterBet.value > 10_000) return '单轮累计下注不能超过 10,000 积分'
-  if (numericAmount.value > balance.value) return '积分余额不足'
+  if (!isValidDragonTigerAmount(numericAmount.value)) return dt('amountInvalid')
+  if (totalAfterBet.value > 10_000) return dt('roundLimit')
+  if (numericAmount.value > balance.value) return dt('insufficientBalance')
   return ''
 })
 const canBet = computed(() => round.value.status === 'betting' && selection.value && !amountError.value && !submitting.value && (!lockedChoice.value || selection.value === myBet.value.selection))
@@ -297,7 +300,7 @@ const dragonCharged = computed(() => Boolean(latestBattleRound.value?.dragon_cha
 const tigerCharged = computed(() => Boolean(latestBattleRound.value?.tiger_charged))
 const shortCommitment = computed(() => {
   const value = round.value.seed_commitment
-  return value ? `${value.slice(0, 10)}…${value.slice(-8)}` : '等待中'
+  return value ? `${value.slice(0, 10)}…${value.slice(-8)}` : dt('waiting')
 })
 const detailBattleRounds = computed(() => {
   const value = detailRound.value?.battle?.rounds || detailRound.value?.revealed_rounds || []
@@ -353,7 +356,7 @@ function normalizeTotals(data, activeRound) {
     draw: Number(source.draw ?? source.draw_bet_total ?? 0),
   }
 }
-function formatPoints(value) { return Number(value || 0).toLocaleString() }
+function formatPoints(value) { return Number(value || 0).toLocaleString(locale.value) }
 function historyHasBets(item) {
   return Number(item.dragon_bet_total || 0) + Number(item.tiger_bet_total || 0) + Number(item.draw_bet_total || 0) > 0
 }
@@ -362,12 +365,30 @@ function formatSignedPoints(value) {
   const amount = Number(value || 0)
   return `${amount > 0 ? '+' : ''}${formatPoints(amount)}`
 }
-function selectionLabel(value) { return ({ dragon: '龙', tiger: '虎', draw: '平局' }[value] || '—') }
-function resultLabel(value) { return ({ dragon: '龙胜', tiger: '虎胜', draw: '平局', void: '无效退款' }[value] || '—') }
-function actionLabel(value) { return ({ attack: '攻击', defend: '防御', charge: '蓄力', counter: '反击' }[value] || '等待') }
+function selectionLabel(value) { return ({ dragon: dt('dragon'), tiger: dt('tiger'), draw: dt('draw') }[value] || '—') }
+function resultLabel(value) { return ({ dragon: dt('resultDragon'), tiger: dt('resultTiger'), draw: dt('resultDraw'), void: dt('resultVoid') }[value] || '—') }
+function actionLabel(value) { return ({ attack: dt('actionAttack'), defend: dt('actionDefend'), charge: dt('actionCharge'), counter: dt('actionCounter') }[value] || dt('actionWaiting')) }
 function choiceDisabled(value) { return round.value.status !== 'betting' || submitting.value || (lockedChoice.value && myBet.value.selection !== value) }
 function errorCode(err) { return err?.response?.data?.code || err?.response?.data?.error || '' }
 function errorMessage(err, fallback) { return err?.response?.data?.message || fallback }
+function betErrorMessage(err, receivedResponse) {
+  const messages = {
+    invalid_request: 'invalidRequest',
+    invalid_request_id: 'invalidRequest',
+    invalid_selection: 'invalidSelection',
+    invalid_amount: 'amountInvalid',
+    insufficient_balance: 'insufficientBalance',
+    betting_closed: 'bettingClosed',
+    stale_round: 'staleRound',
+    selection_locked: 'selectionLocked',
+    round_limit_exceeded: 'roundLimit',
+    idempotency_conflict: 'requestConflict',
+    not_found: 'roundNotFound',
+    internal_error: 'internalError',
+  }
+  const translatedKey = messages[errorCode(err)]
+  return errorMessage(err, translatedKey ? dt(translatedKey) : (receivedResponse ? dt('betFailed') : dt('networkRetry')))
+}
 function createRequestId() {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   const bytes = crypto.getRandomValues(new Uint8Array(16))
@@ -404,7 +425,7 @@ async function loadCurrent() {
       applyCurrent(data)
       error.value = ''
     } catch (err) {
-      if (!disposed) error.value = errorMessage(err, '龙虎斗服务暂不可用')
+      if (!disposed) error.value = errorMessage(err, dt('serviceUnavailable'))
     } finally {
       currentLoading = null
     }
@@ -422,7 +443,7 @@ async function loadHistory(reset = false) {
     history.value = reset ? list : [...history.value, ...list]
     historyHasMore.value = data.has_more ?? list.length === 20
   } catch (err) {
-    Notify.create({ type: 'negative', message: errorMessage(err, '开奖记录加载失败') })
+    Notify.create({ type: 'negative', message: errorMessage(err, dt('historyLoadFailed')) })
   } finally {
     historyLoading.value = false
   }
@@ -441,7 +462,7 @@ async function openHistoryDetail(item) {
     detailRound.value = data.round || data
     detailMyBet.value = data.my_bet || null
   } catch (err) {
-    if (requestVersion === detailRequestVersion) detailError.value = errorMessage(err, '战报详情加载失败')
+    if (requestVersion === detailRequestVersion) detailError.value = errorMessage(err, dt('reportLoadFailed'))
   } finally {
     if (requestVersion === detailRequestVersion) detailLoading.value = false
   }
@@ -473,13 +494,14 @@ async function submitBet() {
       fistStore.balance = balance.value
     }
     await loadCurrent()
-    Notify.create({ type: 'positive', message: '下注成功' })
+    Notify.create({ type: 'positive', message: dt('betSuccess') })
   } catch (err) {
     const code = errorCode(err)
     const receivedResponse = Boolean(err?.response)
     if (receivedResponse) pendingCommand = null
-    error.value = errorMessage(err, receivedResponse ? '下注失败，请检查金额和轮次状态' : '网络异常，可点击按钮使用同一请求编号重试')
+    const message = betErrorMessage(err, receivedResponse)
     if (code === 'betting_closed' || code === 'stale_round') await loadCurrent()
+    error.value = message
   } finally {
     submitting.value = false
   }
@@ -542,7 +564,8 @@ onUnmounted(() => {
 .fairness { margin: 0 14px; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .balance { color: #ffcb6b; font-size: 13px; }
 .choices { display: flex; gap: 8px; }
-.choices .q-btn { flex: 1; }
+.choices .q-btn { flex: 1; padding-right: 8px; padding-left: 8px; font-size: 12px; }
+.choices .q-btn :deep(.q-btn__content) { flex-wrap: nowrap; white-space: nowrap; }
 .stake-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .validation-error { color: #ff8b8b; font-size: 12px; }
 .my-bet { color: #bdb4d1; font-size: 12px; }

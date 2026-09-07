@@ -1,8 +1,8 @@
 import { ref, computed } from 'vue'
+import { useI18n } from '../../../i18n/index.js'
 
-// Currently, only the Chinese version is open, and in-game assets are displayed as “points”.
+// The game currently uses one points system; only its display name follows the app language.
 const region = ref('cn')
-const currency = computed(() => 'Points')
 
 // The international version region switching is temporarily disabled. The original implementation comments are retained and can be restored when reopened later.
 // const LS_REGION_KEY = 'ironfist_region'
@@ -10,6 +10,9 @@ const currency = computed(() => 'Points')
 // International token mode is intentionally disabled; current currency is always points.
 
 export function useRegion() {
+    const { locale } = useI18n()
+    const currency = computed(() => locale.value === 'zh-CN' ? '积分' : 'Points')
+
     // function setRegion(r) {
     //     try { localStorage.setItem(LS_REGION_KEY, r) } catch {}
     //     region.value = r
