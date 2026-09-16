@@ -85,6 +85,15 @@ async function notifyTauri() {
   // Same guard the Electron main process applied: stay quiet while the user is looking at us.
   if (await win.isFocused()) return
 
+  // The Rust side checks that the window is actually hidden before blinking;
+  // visible background windows continue to use taskbar attention only.
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('start_tray_flashing')
+  } catch {
+    // A tray failure must not suppress the normal system notification.
+  }
+
   const notification = await import('@tauri-apps/plugin-notification')
   let granted = await notification.isPermissionGranted()
   if (!granted) granted = (await notification.requestPermission()) === 'granted'
