@@ -46,7 +46,7 @@
 
         <q-page-container>
             <router-view v-slot="{ Component }">
-                <keep-alive :include="['ChatsPage', 'FriendsPage', 'GamesPage', 'ProfilePage']">
+                <keep-alive :include="['ChatsPage', 'FriendsPage', 'ProfilePage']">
                     <component :is="Component" :key="$route.path" />
                 </keep-alive>
             </router-view>
@@ -94,10 +94,10 @@
                     @click="router.push('/profile')"
                 />
                 <q-tab
-                    name="games"
-                    icon="sports_esports"
-                    :label="t('nav.games')"
-                    @click="router.push('/games')"
+                    name="robot"
+                    icon="smart_toy"
+                    :label="t('nav.robot')"
+                    @click="router.push('/robot')"
                 />
             </q-tabs>
         </q-footer>
@@ -108,8 +108,6 @@
         <call-bar />
         <video-call-view />
         <incoming-call-dialog />
-        <!-- Game invitation pop-up window -->
-        <incoming-game-dialog />
 
         <!-- Forced update: blocked when the current version is lower than min_supported -->
         <q-dialog v-model="forceUpdate" persistent no-esc-dismiss no-backdrop-dismiss>
@@ -190,8 +188,6 @@ import LockScreen from "src/components/LockScreen.vue";
 import CallBar from "src/components/CallBar.vue";
 import VideoCallView from "src/components/VideoCallView.vue";
 import IncomingCallDialog from "src/components/IncomingCallDialog.vue";
-import IncomingGameDialog from "src/components/IncomingGameDialog.vue";
-import { useGameStore } from "src/stores/game";
 import { useI18n } from "src/i18n";
 import { openUpdateUrl, selectUpdateUrl } from "src/services/native-update.mjs";
 import { applySecurityLockEffects } from "src/services/security-lock.mjs";
@@ -205,7 +201,7 @@ const identity = useIdentityStore();
 function pathToTab(path) {
     if (path.startsWith("/chat/")) return "chats";
     if (path === "/friends") return "friends";
-    if (path === "/games") return "games";
+    if (path.startsWith("/robot")) return "robot";
     if (path === "/profile") return "profile";
     return "chats";
 }
@@ -213,7 +209,6 @@ function pathToTab(path) {
 // The home page and game battle page do not display the navigation bar (the battle page needs to be full screen)
 const showNav = computed(() => {
     if (route.path === "/") return false;
-    if (route.path.startsWith("/games/")) return false; ///games/bomberman and other battle pages are full screen
     return identity.isReady;
 });
 
@@ -224,11 +219,8 @@ const showFooter = computed(
 
 const chatStore = useChatStore();
 const callStore = useCallStore();
-const gameStore = useGameStore();
-gameStore.setRouter(router);
 let stopListening = null;
 let stopCallListening = null;
-let stopGameListening = null;
 let stopConnectionRecovery = null;
 function onFriendRequestGlobal() {
     identity.incPendingRequestCount();
@@ -301,7 +293,6 @@ onMounted(() => {
     stopConnectionRecovery = startConnectionRecovery();
     stopListening = chatStore.startListening();
     stopCallListening = callStore.startListening();
-    stopGameListening = gameStore.startListening();
     on("friend_request", onFriendRequestGlobal);
     initNotifications();
     checkAppUpdate();
@@ -332,7 +323,6 @@ onUnmounted(() => {
     off("friend_request", onFriendRequestGlobal);
     stopListening?.();
     stopCallListening?.();
-    stopGameListening?.();
     stopConnectionRecovery?.();
     chatStore.stopBurnTimer();
 });
@@ -389,7 +379,7 @@ const pageTitle = computed(() => {
     if (route.path === "/") return t("header.app");
     if (route.path.startsWith("/chat/")) return route.query.nickname || t("header.chat");
     if (route.path === "/friends") return t("header.friends");
-    if (route.path === "/games") return t("header.games");
+    if (route.path.startsWith("/robot")) return t("header.robot");
     if (route.path === "/profile") return t("header.profile");
     if (route.path === "/attachment-storage") return t("attachmentStorage.title");
     return t("header.app");

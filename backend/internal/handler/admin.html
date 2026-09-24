@@ -81,11 +81,16 @@
   #gate h2 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
   #gate p { margin: 0 0 16px; color: var(--text-secondary); font-size: 13px; }
   #gate code { background: var(--page); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
-  input[type=password], input[type=text] {
+  input[type=password], input[type=text], textarea {
     width: 100%; font: inherit; font-size: 14px; padding: 9px 11px;
     border: 1px solid var(--border); border-radius: 6px;
     background: var(--page); color: var(--text-primary); margin-bottom: 12px;
   }
+  .editor-tools { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+  .editor { min-height:220px; padding:12px; border:1px solid var(--border); border-radius:6px; background:var(--page); outline:none; overflow-wrap:anywhere; }
+  .editor:focus { border-color:var(--series-1); }
+  .editor:empty::before { content:attr(data-placeholder); color:var(--text-muted); }
+  .editor img, .editor video { display:block; max-width:100%; max-height:400px; margin:12px 0; }
   .err { color: var(--critical); font-size: 13px; margin-top: 10px; }
 
   /* ── Cards & tiles ──────────────────────────────────── */
@@ -148,12 +153,12 @@
 <body>
 <div class="wrap">
 
-  <!-- Token gate -->
+  <!-- Admin sign in -->
   <div id="gate">
     <h2>Yunmi admin</h2>
-    <p>Paste a session token from an account with <code>is_admin = 1</code>.
-       In the app it is stored under <code>session_token</code> in localStorage.</p>
-    <input type="password" id="token" placeholder="Session token" autocomplete="off">
+    <p>Sign in with the administrator account configured in docker-compose.yml.</p>
+    <input type="text" id="username" placeholder="Username" autocomplete="username">
+    <input type="password" id="password" placeholder="Password" autocomplete="current-password">
     <button id="signin">View dashboard</button>
     <div class="err" id="gateErr" hidden></div>
   </div>
@@ -173,6 +178,31 @@
       Messages are end-to-end encrypted, so their contents never reach the server and cannot
       appear here. Every messaging figure below is a count derived from delivery metadata only.
     </p>
+
+    <section>
+      <h2 class="sec">Robot articles</h2>
+      <div class="card">
+        <input id="articleTitle" type="text" maxlength="200" placeholder="Title">
+        <input id="articleSummary" type="text" maxlength="500" placeholder="Summary">
+        <div class="editor-tools" id="editorTools">
+          <button type="button" data-command="bold">Bold</button>
+          <button type="button" data-command="italic">Italic</button>
+          <button type="button" data-command="underline">Underline</button>
+          <button type="button" data-command="formatBlock" data-value="h2">Heading</button>
+          <button type="button" data-command="insertUnorderedList">Bullets</button>
+          <button type="button" data-command="createLink">Link</button>
+          <button type="button" id="uploadImage">Image</button>
+          <button type="button" id="uploadVideo">Video</button>
+        </div>
+        <input id="mediaInput" type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm" hidden>
+        <div id="articleContent" class="editor" contenteditable="true" role="textbox" aria-label="Article content" aria-multiline="true" data-placeholder="Write the article here..."></div>
+        <div id="mediaStatus" class="meta"></div>
+        <label><input id="articlePublished" type="checkbox"> Published</label>
+        <div class="err" id="articleErr" hidden></div>
+        <div style="margin-top:12px"><button id="articleSave">Create article</button> <button id="articleCancel" hidden>Cancel edit</button></div>
+        <div id="articleList" class="tablewrap"></div>
+      </div>
+    </section>
 
     <section>
       <div class="tiles">
@@ -254,12 +284,12 @@
 
 <script>
 (() => {
-  const KEY = 'yunmi_admin_token';
   const $ = (id) => document.getElementById(id);
   const nf = new Intl.NumberFormat();
   const fmt = (n) => (n === null || n === undefined) ? '—' : nf.format(n);
 
-  let token = localStorage.getItem(KEY) || '';
+  let editingArticle = null;
+  let articles = [];
 
   // ── Auth gate ────────────────────────────────────────
   function showGate(msg) {
@@ -270,18 +300,19 @@
     err.textContent = msg || '';
   }
 
-  $('signin').addEventListener('click', () => {
-    const v = $('token').value.trim();
-    if (!v) return showGate('Enter a token.');
-    token = v;
-    localStorage.setItem(KEY, token);
-    load();
+  $('signin').addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/admin/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:$('username').value,password:$('password').value})});
+      $('password').value = '';
+      if (!res.ok) return showGate('Invalid username or password.');
+      load();
+    } catch {
+      showGate('Could not reach the server.');
+    }
   });
-  $('token').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('signin').click(); });
-  $('signout').addEventListener('click', () => {
-    localStorage.removeItem(KEY);
-    token = '';
-    $('token').value = '';
+  $('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('signin').click(); });
+  $('signout').addEventListener('click', async () => {
+    await fetch('/api/admin/logout', {method:'POST'});
     showGate('');
   });
   $('refresh').addEventListener('click', () => load());
@@ -297,20 +328,109 @@
 
   // ── Fetch ────────────────────────────────────────────
   async function load() {
-    if (!token) return showGate('');
     try {
-      const res = await fetch('/api/admin/stats', {
-        headers: { Authorization: 'Bearer ' + token },
-        cache: 'no-store'
-      });
-      if (res.status === 401) return showGate('Token is invalid or expired.');
-      if (res.status === 404) return showGate('That account is not an administrator.');
-      if (!res.ok) return showGate('Server error (' + res.status + ').');
-      render(await res.json());
+      const res = await fetch('/api/admin/stats', {cache: 'no-store'});
+      if (res.status === 401) return showGate('Please sign in.');
+      if (res.ok) render(await res.json());
+      else { $('gate').hidden = true; $('dash').hidden = false; }
+      loadArticles();
     } catch (e) {
       showGate('Could not reach the server.');
     }
   }
+
+  function resetArticle() {
+    editingArticle = null;
+    $('articleTitle').value = '';
+    $('articleSummary').value = '';
+    $('articleContent').replaceChildren();
+    $('articlePublished').checked = false;
+    $('articleSave').textContent = 'Create article';
+    $('articleCancel').hidden = true;
+  }
+  $('articleCancel').addEventListener('click', resetArticle);
+  $('articleSave').addEventListener('click', async () => {
+    const body = {title:$('articleTitle').value,summary:$('articleSummary').value,content:$('articleContent').innerHTML,published:$('articlePublished').checked};
+    const path = '/api/admin/robot/articles' + (editingArticle ? '/' + editingArticle : '');
+    const res = await fetch(path,{method:editingArticle ? 'PUT' : 'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    $('articleErr').hidden = res.ok;
+    $('articleErr').textContent = res.ok ? '' : (res.status === 403 ? 'Session or origin rejected. Reload /admin and sign in again.' : 'Could not save article. Check title and content.');
+    if (res.ok) { resetArticle(); loadArticles(); }
+  });
+  async function loadArticles() {
+    const res = await fetch('/api/admin/robot/articles',{cache:'no-store'});
+    if (!res.ok) return;
+    articles = (await res.json()).articles || [];
+    const list = $('articleList');
+    list.replaceChildren();
+    articles.forEach(article => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--gridline);padding:8px 0';
+      const title = document.createElement('span');
+      title.style.flex = '1';
+      title.textContent = article.title + (article.published ? ' · Published' : ' · Draft');
+      const edit = document.createElement('button'); edit.textContent = 'Edit';
+      edit.onclick = async () => {
+        const detail = await fetch('/api/admin/robot/articles/' + article.id);
+        if (!detail.ok) return;
+        const a = await detail.json(); editingArticle = a.id;
+        $('articleTitle').value = a.title; $('articleSummary').value = a.summary;
+        $('articleContent').innerHTML = a.content; $('articlePublished').checked = a.published;
+        $('articleSave').textContent = 'Save changes'; $('articleCancel').hidden = false;
+        $('articleTitle').focus();
+      };
+      const del = document.createElement('button'); del.textContent = 'Delete';
+      del.onclick = async () => { if (confirm('Delete this article?')) { await fetch('/api/admin/robot/articles/' + article.id,{method:'DELETE'}); loadArticles(); } };
+      row.append(title,edit,del); list.append(row);
+    });
+  }
+
+  let savedRange = null;
+  $('articleContent').addEventListener('keyup', rememberSelection);
+  $('articleContent').addEventListener('mouseup', rememberSelection);
+  function rememberSelection() {
+    const selection = getSelection();
+    if (selection.rangeCount && $('articleContent').contains(selection.anchorNode)) savedRange = selection.getRangeAt(0).cloneRange();
+  }
+  $('editorTools').addEventListener('mousedown', e => { if (e.target.closest('button')) e.preventDefault(); });
+  $('editorTools').addEventListener('click', e => {
+    const button = e.target.closest('[data-command]');
+    if (!button) return;
+    $('articleContent').focus();
+    if (button.dataset.command === 'createLink') {
+      const url = prompt('Link URL (https:// or http://)');
+      if (url && /^https?:\/\//i.test(url)) document.execCommand('createLink', false, url);
+    } else document.execCommand(button.dataset.command, false, button.dataset.value || null);
+    rememberSelection();
+  });
+  $('uploadImage').onclick = () => { $('mediaInput').accept = 'image/jpeg,image/png,image/gif,image/webp'; $('mediaInput').click(); };
+  $('uploadVideo').onclick = () => { $('mediaInput').accept = 'video/mp4,video/webm'; $('mediaInput').click(); };
+  $('mediaInput').onchange = async () => {
+    const file = $('mediaInput').files[0];
+    if (!file) return;
+    $('mediaStatus').textContent = 'Uploading ' + file.name + '...';
+    const body = new FormData(); body.append('file', file);
+    try {
+      const res = await fetch('/api/admin/robot/media', {method:'POST', body});
+      if (!res.ok) throw new Error('Upload failed (' + res.status + ')');
+      const media = await res.json();
+      const element = document.createElement(media.mime.startsWith('video/') ? 'video' : 'img');
+      element.src = media.url;
+      if (element.tagName === 'VIDEO') { element.controls = true; element.preload = 'metadata'; }
+      const editor = $('articleContent'); editor.focus();
+      const selection = getSelection();
+      if (savedRange && editor.contains(savedRange.commonAncestorContainer)) {
+        selection.removeAllRanges(); selection.addRange(savedRange);
+      }
+      const range = selection.rangeCount && editor.contains(selection.anchorNode) ? selection.getRangeAt(0) : null;
+      if (range) { range.deleteContents(); range.insertNode(element); range.setStartAfter(element); range.collapse(true); }
+      else editor.append(element);
+      editor.append(document.createElement('p'));
+      $('mediaStatus').textContent = 'Uploaded: ' + file.name;
+      rememberSelection();
+    } catch (error) { $('mediaStatus').textContent = error.message; }
+    $('mediaInput').value = '';
+  };
 
   // ── Render ───────────────────────────────────────────
   function render(d) {
@@ -492,7 +612,7 @@
   }
 
   // Boot
-  if (token) load(); else showGate('');
+  load();
 })();
 </script>
 </body>

@@ -47,6 +47,8 @@ services:
     environment:
       CONFIG: /app/config.yaml
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      ADMIN_USERNAME: "admin"
+      ADMIN_PASSWORD: "123@123qwe"
       MYSQL_DSN: ${MYSQL_USER:-e2eechat}:${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}@tcp(mysql:3306)/e2eechat?charset=utf8mb4&parseTime=True&loc=Local
       TURN_SECRET: ${TURN_SECRET:?TURN_SECRET is required}
       JPUSH_APP_KEY: ${JPUSH_APP_KEY:-}
@@ -58,9 +60,11 @@ services:
       APP_APK_UPDATE_URL: "https://m.yzs88.com:8088/download/yunChat.apk"
       APP_VERSION_NOTES: ""
       ATTACHMENT_STORAGE_PATH: "/app/data/attachments"
+      ROBOT_MEDIA_PATH: "/app/data/robot-media"
     volumes:
       - ./deploy/config.yaml:/app/config.yaml:ro
       - attachment-data:/app/data/attachments
+      - robot-media-data:/app/data/robot-media
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8888/api/version"]
       interval: 15s
@@ -127,3 +131,4 @@ volumes:
   mysql-data:
   redis-data:
   attachment-data:
+  robot-media-data:

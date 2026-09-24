@@ -784,13 +784,11 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 		h.handleCallRelay(c, msg.Type, msg.Payload)
 	case "game_invite", "game_accept", "game_reject", "game_ready",
 		"game_move", "game_bomb", "game_powerup", "game_death", "game_resign":
-		h.handleGameRelay(c, msg.Type, msg.Payload)
+		// Game service is retired.
 	case "ironfist_lobby_join":
-		// Join the PVP lobby online list and broadcast updates
-		h.handleIronFistLobbyJoin(c)
+		// Game service is retired.
 	case "ironfist_lobby_leave":
-		// Take the initiative to leave the PVP lobby
-		h.handleIronFistLobbyLeave(c)
+		// Game service is retired.
 	default:
 		log.Printf("[ws] unknown message type")
 	}

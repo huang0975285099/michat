@@ -75,6 +75,11 @@ export const deviceApi = {
   remove: () => api.delete('/device/token')
 }
 
+export const robotApi = {
+  list: () => api.get('/robot/articles'),
+  get: (id) => api.get(`/robot/articles/${encodeURIComponent(id)}`),
+}
+
 // Offline encrypted attachments. These endpoints only receive opaque AES-GCM
 // chunks and operational sizes; the file key/name/type remain inside chat E2EE.
 export const attachmentApi = {

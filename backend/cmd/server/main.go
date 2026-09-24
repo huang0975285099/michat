@@ -157,15 +157,6 @@ func main() {
 	friendSvc := service.NewFriendService(db, rdb)
 	messageReadSvc := service.NewMessageReadService(db)
 	inviteSvc := service.NewInviteService(rdb, friendSvc)
-	fistSvc := service.NewFistService(db)
-	fistHandler := handler.NewFistHandler(fistSvc)
-	ironFistSvc := service.NewIronFistService(db)
-	if err := ironFistSvc.MigrateLegacyIronFist(context.Background()); err != nil {
-		log.Fatalf("migrate legacy IronFist state: %v", err)
-	}
-	if err := service.ClearLegacyIronFistRedis(context.Background(), rdb); err != nil {
-		log.Printf("[ironfist] legacy Redis cleanup will retry on restart: %v", err)
-	}
 	adminSvc := service.NewAdminService(db, rdb)
 
 	attachmentDefaults := service.DefaultAttachmentConfig()
@@ -225,52 +216,12 @@ func main() {
 
 	hub := ws.NewHub(rdb, friendSvc, identSvc, messageReadSvc)
 
-	// IronFistHandler needs the hub to push PVP matching notifications, so it is constructed after the hub
-	ironFistHandler := handler.NewIronFistHandler(ironFistSvc, hub)
-	fistStatsHandler := handler.NewFistStatsHandler(fistSvc, ironFistSvc)
-
 	// Aurora Push (enabled when both AppKey and MasterSecret are configured)
 	if cfg.JPush.AppKey != "" && cfg.JPush.MasterSecret != "" {
 		pushSvc := service.NewPushService(db, cfg.JPush.AppKey, cfg.JPush.MasterSecret, cfg.JPush.Enabled)
 		hub.SetPushService(pushSvc)
 		log.Println("JPush push notification enabled")
 	}
-
-	// Enable the PVP lobby online list function (lobby users can view each other’s avatars/balances/games)
-	hub.SetIronFistService(ironFistSvc)
-	ironFistSvc.SetIronFistOutboxPublisher(func(ctx context.Context, payload string) error {
-		return rdb.Publish(ctx, pkgredis.IronFistEventsChannel, payload).Err()
-	})
-
-	// Redis carries only disposable post-commit notifications. Each server fans
-	// events out to its local sockets; clients recover gaps from MySQL over HTTP.
-	go func() {
-		sub := rdb.Subscribe(context.Background(), pkgredis.IronFistEventsChannel)
-		defer sub.Close()
-		for message := range sub.Channel() {
-			hub.DeliverIronFistEvent(message.Payload)
-		}
-	}()
-	go func() {
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-		for range ticker.C {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if _, err := ironFistSvc.SweepDueAuthoritativeGames(ctx); err != nil {
-				log.Printf("[ironfist] sweep authoritative deadlines: %v", err)
-			}
-			if _, err := ironFistSvc.SweepDragonTiger(ctx); err != nil {
-				log.Printf("[ironfist-dragon-tiger] sweep: %v", err)
-			}
-			if _, err := ironFistSvc.PublishIronFistOutbox(ctx, 50); err != nil {
-				log.Printf("[ironfist] publish outbox: %v", err)
-			}
-			if _, err := ironFistSvc.PublishDragonTigerOutbox(ctx, 50); err != nil {
-				log.Printf("[ironfist-dragon-tiger] publish outbox: %v", err)
-			}
-			cancel()
-		}
-	}()
 
 	identHandler := handler.NewIdentityHandler(identSvc, inviteSvc, friendSvc, hub)
 	userHandler := handler.NewUserHandler(identSvc)
@@ -289,6 +240,16 @@ func main() {
 		cfg.Version.Notes,
 	)
 	adminHandler := handler.NewAdminHandler(adminSvc)
+	adminAuth := handler.NewAdminAuth(os.Getenv("ADMIN_USERNAME"), os.Getenv("ADMIN_PASSWORD"))
+	robotHandler := handler.NewRobotHandler(db)
+	robotMediaPath := os.Getenv("ROBOT_MEDIA_PATH")
+	if robotMediaPath == "" {
+		robotMediaPath = "./data/robot-media"
+	}
+	robotMediaHandler, err := handler.NewRobotMediaHandler(robotMediaPath)
+	if err != nil {
+		log.Fatalf("robot media storage: %v", err)
+	}
 	attachmentHandler := handler.NewAttachmentHandler(attachmentSvc)
 
 	// Current limiting (mainly mobile phone + operator CGNAT: relax the threshold by IP, the main line of defense is based on user authRL):
@@ -321,8 +282,10 @@ func main() {
 		open.POST("/identity/reauth", identHandler.Reauth)
 		open.GET("/invite/validate", inviteHandler.Validate)
 		open.GET("/version", versionHandler.Get)
-		// Legacy aggregate statistics; not part of the current China points product.
-		open.GET("/fist/stats", fistStatsHandler.GetStats)
+		open.GET("/robot/articles", robotHandler.List)
+		open.GET("/robot/articles/:id", robotHandler.Get)
+		open.GET("/robot/media/:name", robotMediaHandler.Get)
+		open.POST("/admin/login", adminAuth.Login)
 
 		// Authentication is required (current limit based on user)
 		auth := api.Group("", middleware.Auth(identSvc), authRL.Limit())
@@ -352,34 +315,15 @@ func main() {
 		auth.POST("/attachments/:id/ack", attachmentHandler.Acknowledge)
 		auth.DELETE("/attachments/:id", attachmentHandler.Cancel)
 
-		// Legacy points-account compatibility endpoints; authoritative games settle internally.
-		auth.GET("/fist/account", fistHandler.GetAccount)
-		auth.POST("/fist/pve-reward", fistHandler.ClaimPvEReward)
-		auth.GET("/fist/transactions", fistHandler.GetTransactions)
-
-		// Tekken Battle Statistics and Achievements
-		auth.GET("/games/ironfist/stats", ironFistHandler.GetStats)
-		auth.POST("/games/ironfist/stats", ironFistHandler.ReportMatch)
-		auth.GET("/games/ironfist/matches", ironFistHandler.ListMatches)
-		auth.POST("/games/ironfist/pve/sessions", ironFistHandler.StartPVESession)
-		auth.GET("/games/ironfist/sessions/active", ironFistHandler.GetActivePVESession)
-		auth.GET("/games/ironfist/games/:id", ironFistHandler.GetAuthoritativeGame)
-		auth.POST("/games/ironfist/games/:id/actions", ironFistHandler.SubmitAuthoritativeAction)
-		auth.POST("/games/ironfist/games/:id/resign", ironFistHandler.ResignAuthoritativeGame)
-		auth.GET("/games/ironfist/dragon-tiger/current", ironFistHandler.GetDragonTigerCurrent)
-		auth.POST("/games/ironfist/dragon-tiger/rounds/:id/bets", ironFistHandler.PlaceDragonTigerBet)
-		auth.GET("/games/ironfist/dragon-tiger/rounds", ironFistHandler.ListDragonTigerRounds)
-		auth.GET("/games/ironfist/dragon-tiger/rounds/:id", ironFistHandler.GetDragonTigerRound)
-
-		// PVP matchmaking queue (join/cancel)
-		auth.POST("/games/ironfist/pvp/queue", ironFistHandler.EnqueuePVP)
-		auth.DELETE("/games/ironfist/pvp/queue", ironFistHandler.CancelPVPQueue)
-		auth.GET("/games/ironfist/pvp/queue", ironFistHandler.GetPVPQueueStatus)
-
-		// Operator dashboard data. AdminOnly reads the flag Auth loaded, so it must
-		// stay chained after Auth — on its own it denies everything.
-		admin := api.Group("", middleware.Auth(identSvc), authRL.Limit(), middleware.AdminOnly())
-		admin.GET("/admin/stats", adminHandler.GetStats)
+		admin := api.Group("/admin", adminAuth.Require())
+		admin.GET("/stats", adminHandler.GetStats)
+		admin.POST("/logout", adminAuth.Logout)
+		admin.GET("/robot/articles", robotHandler.List)
+		admin.GET("/robot/articles/:id", robotHandler.Get)
+		admin.POST("/robot/articles", robotHandler.Create)
+		admin.PUT("/robot/articles/:id", robotHandler.Update)
+		admin.DELETE("/robot/articles/:id", robotHandler.Delete)
+		admin.POST("/robot/media", robotMediaHandler.Upload)
 	}
 
 	// The dashboard shell itself. It holds no data — it prompts for a token and then
@@ -441,31 +385,6 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			cleanup()
-		}
-	}()
-
-	// Start a scheduled task: scan overtimed PVP rooms every 1 minute and refund the money
-	// - Matching timeout: client crashes/lost connection but not canceled, full refund to A
-	// - matched timeout: both parties/one party are disconnected and fail to report the results, or the WS matching notification is lost and one party does not start the game.
-	// Refund on a draw basis to avoid permanent lock-in of pledges
-	go func() {
-		sweep := func() {
-			if n, err := ironFistSvc.SweepTimeoutPVPQueues(context.Background()); err != nil {
-				log.Printf("[cron] sweep pvp timeout queues: %v", err)
-			} else if n > 0 {
-				log.Printf("[cron] swept %d timeout pvp queues", n)
-			}
-			if n, err := ironFistSvc.SweepTimeoutPVPMatched(context.Background()); err != nil {
-				log.Printf("[cron] sweep pvp timeout matched: %v", err)
-			} else if n > 0 {
-				log.Printf("[cron] swept %d timeout pvp matched rooms", n)
-			}
-		}
-		// Wait 1 minute after startup before executing it for the first time to avoid misjudgment at startup.
-		ticker := time.NewTicker(1 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			sweep()
 		}
 	}()
 

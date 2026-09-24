@@ -24,16 +24,11 @@
       >
         <q-tooltip>{{ t("call.video") }}</q-tooltip>
       </q-btn>
-      <!-- <q-btn flat round dense icon="more_vert">
-        <q-menu anchor="bottom right" self="top right">
-          <q-list dense style="min-width: 140px">
-            <q-item clickable v-close-popup @click="clearHistory" class="text-negative items-center q-gutter-xs">
-              <q-icon name="delete_sweep" size="sm" />
-              <span>Clear chat history</span>
-            </q-item>
-          </q-list>
-        </q-menu>
-      </q-btn> -->
+      <q-btn flat dense no-caps icon="delete_sweep" color="negative" :aria-label="t('chat.clearTitle')"
+        @click="clearHistory"
+      >
+        <q-tooltip>{{ t("chat.clearButton") }}</q-tooltip>
+      </q-btn>
     </div>
 
     <!-- Message list (virtual scrolling: only render messages within the viewport, long history remains smooth) -->
