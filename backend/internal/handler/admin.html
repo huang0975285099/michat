@@ -148,6 +148,8 @@
   .kv dd { margin: 0; font-size: 13px; font-variant-numeric: tabular-nums;
            text-align: right; padding: 5px 0; border-bottom: 1px solid var(--gridline); }
   .cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(238px, 1fr)); }
+  #readersDialog { width:min(680px,94vw); max-height:80vh; border:1px solid var(--border); border-radius:10px; background:var(--surface-1); color:var(--text-primary); padding:20px; }
+  #readersDialog::backdrop { background:rgba(0,0,0,.6); }
 </style>
 </head>
 <body>
@@ -203,6 +205,12 @@
         <div id="articleList" class="tablewrap"></div>
       </div>
     </section>
+    <dialog id="readersDialog">
+      <div class="card-head"><h3 id="readersTitle">Readers</h3><button id="readersClose">Close</button></div>
+      <div id="readersSummary" class="meta"></div>
+      <div class="tablewrap" style="max-height:55vh"><table><thead><tr><th>Nickname / Chat ID</th><th class="num">Opens</th><th>First opened</th><th>Last opened</th></tr></thead><tbody id="readersList"></tbody></table></div>
+      <button id="readersMore" hidden>Load more</button>
+    </dialog>
 
     <section>
       <div class="tiles">
@@ -290,6 +298,8 @@
 
   let editingArticle = null;
   let articles = [];
+  let readersArticle = null;
+  let readersOffset = 0;
 
   // ── Auth gate ────────────────────────────────────────
   function showGate(msg) {
@@ -370,6 +380,9 @@
       title.style.flex = '1';
       title.textContent = article.title + (article.published ? ' · Published' : ' · Draft');
       const edit = document.createElement('button'); edit.textContent = 'Edit';
+      const readers = document.createElement('button');
+      readers.textContent = 'Readers (' + (article.viewer_count || 0) + ')';
+      readers.onclick = () => openReaders(article);
       edit.onclick = async () => {
         const detail = await fetch('/api/admin/robot/articles/' + article.id);
         if (!detail.ok) return;
@@ -381,8 +394,34 @@
       };
       const del = document.createElement('button'); del.textContent = 'Delete';
       del.onclick = async () => { if (confirm('Delete this article?')) { await fetch('/api/admin/robot/articles/' + article.id,{method:'DELETE'}); loadArticles(); } };
-      row.append(title,edit,del); list.append(row);
+      row.append(title,readers,edit,del); list.append(row);
     });
+  }
+  $('readersClose').onclick = () => $('readersDialog').close();
+  $('readersMore').onclick = () => loadReaders();
+  async function openReaders(article) {
+    readersArticle = article.id;
+    readersOffset = 0;
+    $('readersTitle').textContent = article.title + ' — Readers';
+    $('readersList').replaceChildren();
+    $('readersDialog').showModal();
+    await loadReaders();
+  }
+  async function loadReaders() {
+    if (!readersArticle) return;
+    const res = await fetch('/api/admin/robot/articles/' + readersArticle + '/views?offset=' + readersOffset, {cache:'no-store'});
+    if (!res.ok) { $('readersSummary').textContent = 'Could not load reader records.'; return; }
+    const data = await res.json();
+    $('readersSummary').textContent = data.total_readers + ' readers · ' + data.total_views + ' total opens';
+    for (const reader of data.readers) {
+      const row = document.createElement('tr');
+      for (const value of [reader.nickname + ' (' + reader.chat_id + ')', reader.view_count, new Date(reader.first_viewed_at).toLocaleString(), new Date(reader.last_viewed_at).toLocaleString()]) {
+        const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
+      }
+      $('readersList').append(row);
+    }
+    readersOffset += data.readers.length;
+    $('readersMore').hidden = readersOffset >= data.total_readers || data.readers.length === 0;
   }
 
   let savedRange = null;

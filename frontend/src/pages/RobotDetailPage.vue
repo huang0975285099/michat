@@ -24,7 +24,10 @@ const article = ref(null)
 const loading = ref(true)
 const error = ref(false)
 onMounted(async () => {
-  try { article.value = (await robotApi.get(route.params.id)).data }
+  try {
+    article.value = (await robotApi.get(route.params.id)).data
+    robotApi.recordView(route.params.id).catch(() => {})
+  }
   catch { error.value = true }
   finally { loading.value = false }
 })

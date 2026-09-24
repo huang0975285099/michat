@@ -78,6 +78,7 @@ export const deviceApi = {
 export const robotApi = {
   list: () => api.get('/robot/articles'),
   get: (id) => api.get(`/robot/articles/${encodeURIComponent(id)}`),
+  recordView: (id) => api.post(`/robot/articles/${encodeURIComponent(id)}/view`),
 }
 
 // Offline encrypted attachments. These endpoints only receive opaque AES-GCM
