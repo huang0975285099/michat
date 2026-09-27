@@ -7,7 +7,7 @@
                     dense
                     round
                     icon="arrow_back"
-                    @click="router.back()"
+                    @click="route.path.startsWith('/robot/') ? router.push('/robot') : router.back()"
                     v-if="canGoBack"
                 />
                 <q-toolbar-title>{{ pageTitle }}</q-toolbar-title>
@@ -214,7 +214,7 @@ const showNav = computed(() => {
 
 // Chat details use the full available height; the global header remains visible.
 const showFooter = computed(
-    () => showNav.value && !route.path.startsWith("/chat/") && route.path !== "/attachment-storage",
+    () => showNav.value && !route.path.startsWith("/chat/") && !route.path.startsWith("/robot/") && route.path !== "/attachment-storage",
 );
 
 const chatStore = useChatStore();
@@ -345,7 +345,7 @@ watch(wsConnected, (connected) => {
     }
 });
 
-const canGoBack = computed(() => route.path.startsWith("/chat/") || route.path === "/attachment-storage");
+const canGoBack = computed(() => route.path.startsWith("/chat/") || route.path.startsWith("/robot/") || route.path === "/attachment-storage");
 
 function doLockNow() {
     identity.lockNow();

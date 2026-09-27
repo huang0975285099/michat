@@ -1057,10 +1057,7 @@ function removeVoicePointerListeners() {
 
 async function beginVoiceGesture(event) {
   if (voicePreparing.value || voiceRecording.value || voiceStopping) return
-  if (!friendPubKey.value) {
-    $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
-    return
-  }
+  if (!await ensureFriendPubKey()) return
   if (!navigator.mediaDevices?.getUserMedia) {
     $q.notify({ type: 'warning', message: t('chat.micUnsupported') })
     return
@@ -1563,19 +1560,28 @@ function onMessageImageSettled(message, index) {
 /**
  * Obtain friend's public key through API (fallback)
  */
-async function fetchFriendInfo() {
+async function fetchFriendInfo({ notifyOnFailure = false } = {}) {
   try {
     const { data } = await friendApi.getFriends()
     const friend = data.find(f => f.chat_id === friendChatId)
     if (friend) {
-      friendPubKey.value = friend.public_key
-      identityStore.cacheFriendPubKey(friendChatId, friend.public_key)
+      if (friend.public_key) {
+        friendPubKey.value = friend.public_key
+        identityStore.cacheFriendPubKey(friendChatId, friend.public_key)
+      }
       friendNickname.value = friend.nickname
       friendOnline.value = !!friend.online
     }
+    if (!friendPubKey.value && notifyOnFailure) $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
+    return !!friendPubKey.value
   } catch {
-    $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
+    if (!friendPubKey.value && notifyOnFailure) $q.notify({ type: 'warning', message: t('chat.friendInfoUnavailable') })
+    return !!friendPubKey.value
   }
+}
+
+async function ensureFriendPubKey() {
+  return !!friendPubKey.value || fetchFriendInfo({ notifyOnFailure: true })
 }
 
 /**
@@ -1785,10 +1791,7 @@ async function sendSelectedImages() {
     })
     return
   }
-  if (!friendPubKey.value) {
-    $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
-    return
-  }
+  if (!await ensureFriendPubKey()) return
 
   const queue = selectedImages.value.map(item => ({ ...item, file: selectedImageFile(item) }))
   const recipientKey = friendPubKey.value
@@ -1883,10 +1886,7 @@ function onFileSelected(e) {
 }
 
 async function doSendFile(file) {
-  if (!friendPubKey.value) {
-    $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
-    return
-  }
+  if (!await ensureFriendPubKey()) return
   try {
     await chatStore.sendFile(friendChatId, friendPubKey.value, file, burnMode.value)
   } catch (e) {
@@ -1907,10 +1907,7 @@ async function sendMsg(event) {
     $q.notify({ type: 'warning', message: t('chat.messageTooLong', { count: MAX_MESSAGE_LENGTH }) })
     return
   }
-  if (!friendPubKey.value) {
-    $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
-    return
-  }
+  if (!await ensureFriendPubKey()) return
   sending.value = true
   const pendingReply = replyTarget.value
   inputText.value = ''
@@ -1939,10 +1936,7 @@ async function sendMsg(event) {
 
 async function retryMsg(msg) {
   if (retryingMessageId.value || !msg?.id) return
-  if (!friendPubKey.value) {
-    $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
-    return
-  }
+  if (!await ensureFriendPubKey()) return
   retryingMessageId.value = msg.id
   try {
     const ok = msg.type === 'file' && msg.offlineAttachment
@@ -1971,10 +1965,7 @@ async function toggleOfflineTransfer(transfer) {
     return
   }
   if (transfer.status === 'paused') {
-    if (!friendPubKey.value) {
-      $q.notify({ type: 'warning', message: t('chat.noPublicKey') })
-      return
-    }
+    if (!await ensureFriendPubKey()) return
     try {
       await chatStore.resumeOfflineTransfer(transfer.id, friendPubKey.value)
     } catch (error) {

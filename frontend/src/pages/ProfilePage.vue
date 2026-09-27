@@ -1,5 +1,5 @@
 <template>
-    <q-page class="q-pa-md">
+    <q-page class="profile-page">
         <!-- WeChat browser boot mask (permanent display, cannot be closed) -->
         <div v-if="isWechat" class="wechat-guide-overlay">
             <div class="wechat-guide-content">
@@ -13,36 +13,25 @@
             </div>
         </div>
 
-        <q-card class="q-mb-md">
-            <q-card-section style="display: flex;justify-content: space-evenly;align-items: center;">
-                <deterministic-avatar
-                    :seed="identity.chatId"
-                    :size="60"
-                    class="q-mb-sm"
-                />
-                <div>
-                    <div>
-                        <span class="text-h6">{{ identity.nickname }}</span>
-                        <q-btn
-                            flat round dense size="sm" icon="edit" color="grey-6"
-                            @click="openNicknameDialog"
-                        >
-                            <q-tooltip>{{ t("profile.editNickname") }}</q-tooltip>
-                        </q-btn>
+        <div class="profile-shell">
+        <q-card flat class="profile-hero">
+            <q-card-section class="hero-content">
+                <deterministic-avatar :seed="identity.chatId" :size="58" class="hero-avatar" />
+                <div class="hero-details">
+                    <div class="hero-name-row">
+                        <span class="hero-name">{{ identity.nickname }}</span>
+                        <q-btn flat round dense size="sm" icon="edit" class="hero-edit" :aria-label="t('profile.editNickname')" @click="openNicknameDialog" />
                     </div>
-                    <div class="text-grey-6">
-                        {{ t("profile.myId") }}： {{ identity.chatId }}
-                        <q-btn
-                            flat round dense size="sm" icon="content_copy" color="grey-6"
-                            @click="copyId"
-                        >
-                        </q-btn>
-                    </div>
+                    <div class="hero-id-label">{{ t("profile.myId") }}</div>
+                    <button type="button" class="hero-id-button" :aria-label="t('profile.copyId', { id: identity.chatId })" @click="copyId">
+                        <span>{{ identity.chatId }}</span><q-icon name="content_copy" size="15px" />
+                    </button>
                 </div>
             </q-card-section>
         </q-card>
 
-        <q-list bordered separator rounded-borders>
+        <div class="profile-section-title">{{ t("profile.accountSecurity") }}</div>
+        <q-list separator class="profile-list">
             <!-- <q-item clickable @click="copyId">
                 <q-item-section avatar
                     ><q-icon name="fingerprint"
@@ -114,6 +103,11 @@
                 </q-item-section>
             </q-item>
 
+        </q-list>
+
+        <div class="profile-section-title">{{ t("profile.deviceSettings") }}</div>
+        <q-list separator class="profile-list">
+
             <q-item clickable @click="openMicDialog">
                 <q-item-section avatar
                     ><q-icon name="mic" color="teal"
@@ -160,7 +154,20 @@
                 </q-item-section>
             </q-item>
 
-            <q-item clickable @click="confirmClear">
+        </q-list>
+
+        <div class="profile-section-title">{{ t("profile.accountActions") }}</div>
+        <q-list separator class="profile-list account-list">
+
+            <q-item clickable @click="confirmLogout">
+                <q-item-section avatar><q-icon name="logout" color="primary" /></q-item-section>
+                <q-item-section>
+                    <q-item-label>{{ t("profile.logout") }}</q-item-label>
+                    <q-item-label caption>{{ t("profile.logoutHint") }}</q-item-label>
+                </q-item-section>
+            </q-item>
+
+            <q-item clickable class="danger-item" @click="confirmClear">
                 <q-item-section avatar
                     ><q-icon name="delete_forever" color="negative"
                 /></q-item-section>
@@ -170,13 +177,6 @@
                 </q-item-section>
             </q-item>
 
-            <q-item clickable @click="confirmLogout">
-                <q-item-section avatar><q-icon name="logout" color="primary" /></q-item-section>
-                <q-item-section>
-                    <q-item-label>{{ t("profile.logout") }}</q-item-label>
-                    <q-item-label caption>{{ t("profile.logoutHint") }}</q-item-label>
-                </q-item-section>
-            </q-item>
         </q-list>
 
         <!-- <q-btn
@@ -189,7 +189,7 @@
         /> -->
 
         <!-- Version number + update check -->
-        <div class="text-center text-caption text-grey-6 q-mt-xs">
+        <div class="profile-version">
             <div>v{{ appVersion }}<span v-if="buildDate"> · {{ buildDate }}</span></div>
             <div class="q-mt-xs">
                 <span v-if="updateState === 'checking'" class="text-grey">{{ t("profile.checkingUpdate") }}</span>
@@ -202,6 +202,7 @@
                 >{{ t("profile.outdated", { version: latestVersion }) }}</a>
                 <span v-else class="text-grey">{{ t("profile.checkFailed") }}</span>
             </div>
+        </div>
         </div>
 
         <q-dialog v-model="showLanguageDialog">
@@ -1094,6 +1095,33 @@ function confirmLogout() {
 </script>
 
 <style scoped>
+.profile-page { min-height: 100%; background: #f5f7fa; color: #182536; }
+.profile-shell { max-width: 760px; margin: 0 auto; padding: 18px 16px 30px; }
+.profile-hero { border: 1px solid #e6edf4; border-radius: 17px; background: #fff; box-shadow: 0 4px 16px rgba(26, 52, 82, .045); }
+.hero-content { display: flex; align-items: center; gap: 16px; min-width: 0; padding: 22px 18px; }
+.hero-avatar { flex: none; }
+.hero-details { min-width: 0; flex: 1; }
+.hero-name-row { display: flex; align-items: center; gap: 3px; min-width: 0; }
+.hero-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 20px; font-weight: 700; }
+.hero-edit { flex: none; color: #8da0b4; }
+.hero-id-label { margin-top: 7px; color: #8a9aaa; font-size: 11px; }
+.hero-id-button { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; margin-top: 3px; padding: 0; border: 0; background: transparent; color: #547698; font: inherit; font-size: 13px; cursor: pointer; }
+.hero-id-button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hero-id-button:focus-visible { outline: 2px solid #1976d2; outline-offset: 3px; }
+.profile-section-title { margin: 24px 3px 10px; color: #647a90; font-size: 12px; font-weight: 700; letter-spacing: .3px; }
+.profile-list { overflow: hidden; border: 1px solid #e6edf4; border-radius: 15px; background: #fff; box-shadow: 0 3px 12px rgba(26, 52, 82, .025); }
+.profile-list :deep(.q-item) { min-height: 68px; padding: 11px 14px; }
+.profile-list :deep(.q-item__section--avatar) { align-self: center; flex: none; width: 38px; min-width: 38px; height: 38px; margin-right: 12px; border-radius: 11px; background: #edf5fd; align-items: center; justify-content: center; }
+.profile-list :deep(.q-item__section--avatar .q-icon) { font-size: 21px; }
+.profile-list :deep(.q-item__label:not(.q-item__label--caption)) { color: #243448; font-size: 14px; font-weight: 600; line-height: 1.35; }
+.profile-list :deep(.q-item__label--caption) { margin-top: 3px; color: #8797a8; font-size: 11px; line-height: 1.4; }
+.profile-list :deep(.q-item__section--side) { padding-left: 7px; color: #8a9cad; font-size: 12px; white-space: nowrap; }
+.profile-list :deep(.q-separator) { margin-left: 64px; background: #eef1f5; }
+.profile-list :deep(.text-orange) { color: #c7781e !important; }
+.profile-list .danger-item :deep(.q-item__section--avatar) { background: #fff1f1; }
+.profile-list .danger-item :deep(.q-item__label:not(.q-item__label--caption)) { color: #cf3d49; }
+.profile-version { margin: 26px 0 8px; text-align: center; color: #98a6b5; font-size: 11px; line-height: 1.6; }
+@media (min-width: 640px) { .profile-shell { padding: 28px 28px 48px; } .hero-content { padding: 26px 24px; } }
 /* WeChat browser boot mask */
 .wechat-guide-overlay {
     position: fixed;

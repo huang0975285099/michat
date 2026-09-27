@@ -25,6 +25,7 @@ type robotArticle struct {
 	ID          int64      `json:"id"`
 	Title       string     `json:"title"`
 	Summary     string     `json:"summary"`
+	Source      string     `json:"source"`
 	Content     string     `json:"content,omitempty"`
 	Published   bool       `json:"published"`
 	PublishedAt *time.Time `json:"published_at"`
@@ -64,7 +65,7 @@ func (h *RobotHandler) List(c *gin.Context) {
 		}
 		offset = parsed
 	}
-	query := `SELECT a.id,a.title,a.summary,a.published,a.published_at,a.category,a.tags,a.cover_url,a.pinned`
+	query := `SELECT a.id,a.title,a.summary,a.source,a.published,a.published_at,a.category,a.tags,a.cover_url,a.pinned`
 	args := make([]any, 0)
 	if admin {
 		query += `,(SELECT COUNT(*) FROM robot_article_views WHERE article_id=a.id)`
@@ -90,9 +91,9 @@ func (h *RobotHandler) List(c *gin.Context) {
 			c.JSON(400, gin.H{"error": "search too long"})
 			return
 		}
-		query += ` AND (a.title LIKE ? OR a.summary LIKE ?)`
+		query += ` AND (a.title LIKE ? OR a.summary LIKE ? OR a.source LIKE ?)`
 		pattern := "%" + search + "%"
-		args = append(args, pattern, pattern)
+		args = append(args, pattern, pattern, pattern)
 	}
 	if c.Query("bookmarked") == "1" {
 		if userID == 0 {
@@ -119,7 +120,7 @@ func (h *RobotHandler) List(c *gin.Context) {
 		var date sql.NullTime
 		var tags string
 		var pinned int
-		fields := []any{&a.ID, &a.Title, &a.Summary, &published, &date, &a.Category, &tags, &a.CoverURL, &pinned}
+		fields := []any{&a.ID, &a.Title, &a.Summary, &a.Source, &published, &date, &a.Category, &tags, &a.CoverURL, &pinned}
 		if admin {
 			fields = append(fields, &a.ViewerCount)
 		}
@@ -256,7 +257,7 @@ func (h *RobotHandler) Get(c *gin.Context) {
 		c.Status(404)
 		return
 	}
-	query := "SELECT id,title,summary,content,published,published_at,category,tags,cover_url,pinned FROM robot_articles WHERE id=?"
+	query := "SELECT id,title,summary,source,content,published,published_at,category,tags,cover_url,pinned FROM robot_articles WHERE id=?"
 	if c.FullPath() != "/api/admin/robot/articles/:id" {
 		query += " AND published=1"
 	}
@@ -265,7 +266,7 @@ func (h *RobotHandler) Get(c *gin.Context) {
 	var pinned int
 	var tags string
 	var date sql.NullTime
-	err = h.db.QueryRowContext(c.Request.Context(), query, id).Scan(&a.ID, &a.Title, &a.Summary, &a.Content, &published, &date, &a.Category, &tags, &a.CoverURL, &pinned)
+	err = h.db.QueryRowContext(c.Request.Context(), query, id).Scan(&a.ID, &a.Title, &a.Summary, &a.Source, &a.Content, &published, &date, &a.Category, &tags, &a.CoverURL, &pinned)
 	if err == sql.ErrNoRows {
 		c.Status(404)
 		return
@@ -287,11 +288,11 @@ func (h *RobotHandler) Get(c *gin.Context) {
 type robotInput struct {
 	Title     string   `json:"title"`
 	Summary   string   `json:"summary"`
+	Source    string   `json:"source"`
 	Content   string   `json:"content"`
 	Published bool     `json:"published"`
 	Category  string   `json:"category"`
 	Tags      []string `json:"tags"`
-	CoverURL  string   `json:"cover_url"`
 	Pinned    bool     `json:"pinned"`
 }
 
@@ -303,14 +304,10 @@ func readRobotInput(c *gin.Context) (robotInput, bool) {
 	}
 	input.Title = strings.TrimSpace(input.Title)
 	input.Summary = strings.TrimSpace(input.Summary)
+	input.Source = strings.TrimSpace(input.Source)
 	input.Content = strings.TrimSpace(input.Content)
 	input.Content = sanitizeRobotContent(input.Content)
 	input.Category = strings.TrimSpace(input.Category)
-	input.CoverURL = strings.TrimSpace(input.CoverURL)
-	if input.CoverURL != "" && (!validRobotMediaURL(input.CoverURL) || strings.HasSuffix(input.CoverURL, ".mp4") || strings.HasSuffix(input.CoverURL, ".webm")) {
-		c.JSON(400, gin.H{"error": "invalid cover"})
-		return input, false
-	}
 	if len([]rune(input.Category)) > 64 || strings.Contains(input.Category, ",") || len(input.Tags) > 10 {
 		c.JSON(400, gin.H{"error": "invalid category or tags"})
 		return input, false
@@ -329,7 +326,7 @@ func readRobotInput(c *gin.Context) (robotInput, bool) {
 		}
 	}
 	input.Tags = cleanTags
-	if input.Title == "" || input.Content == "" || len([]rune(input.Title)) > 200 || len([]rune(input.Summary)) > 500 || len(input.Content) > 100000 {
+	if input.Title == "" || input.Content == "" || len([]rune(input.Title)) > 200 || len([]rune(input.Summary)) > 500 || len([]rune(input.Source)) > 200 || len(input.Content) > 100000 {
 		c.JSON(400, gin.H{"error": "title or content invalid"})
 		return input, false
 	}
@@ -341,7 +338,7 @@ func (h *RobotHandler) Create(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result, err := h.db.ExecContext(c.Request.Context(), `INSERT INTO robot_articles(title,summary,content,published,published_at,category,tags,cover_url,pinned) VALUES(?,?,?,?,IF(?=1,NOW(),NULL),?,?,?,?)`, input.Title, input.Summary, input.Content, input.Published, input.Published, input.Category, strings.Join(input.Tags, ","), input.CoverURL, input.Pinned)
+	result, err := h.db.ExecContext(c.Request.Context(), `INSERT INTO robot_articles(title,summary,source,content,published,published_at,category,tags,pinned) VALUES(?,?,?,?,?,IF(?=1,NOW(),NULL),?,?,?)`, input.Title, input.Summary, input.Source, input.Content, input.Published, input.Published, input.Category, strings.Join(input.Tags, ","), input.Pinned)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "database error"})
 		return
@@ -368,7 +365,7 @@ func (h *RobotHandler) Update(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "database error"})
 		return
 	}
-	result, err := h.db.ExecContext(c.Request.Context(), `UPDATE robot_articles SET title=?,summary=?,content=?,published=?,published_at=CASE WHEN ?=0 THEN NULL WHEN published_at IS NULL THEN NOW() ELSE published_at END,category=?,tags=?,cover_url=?,pinned=? WHERE id=?`, input.Title, input.Summary, input.Content, input.Published, input.Published, input.Category, strings.Join(input.Tags, ","), input.CoverURL, input.Pinned, id)
+	result, err := h.db.ExecContext(c.Request.Context(), `UPDATE robot_articles SET title=?,summary=?,source=?,content=?,published=?,published_at=CASE WHEN ?=0 THEN NULL WHEN published_at IS NULL THEN NOW() ELSE published_at END,category=?,tags=?,pinned=? WHERE id=?`, input.Title, input.Summary, input.Source, input.Content, input.Published, input.Published, input.Category, strings.Join(input.Tags, ","), input.Pinned, id)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "database error"})
 		return
