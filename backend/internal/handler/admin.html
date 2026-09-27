@@ -74,6 +74,8 @@
     border-radius: 6px; padding: 6px 12px; cursor: pointer;
   }
   button:hover { border-color: var(--baseline); }
+  button:disabled { cursor: not-allowed; opacity: .55; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
 
   /* ── Token gate ─────────────────────────────────────── */
   #gate { max-width: 520px; margin: 48px auto; background: var(--surface-1);
@@ -92,6 +94,45 @@
   .editor:empty::before { content:attr(data-placeholder); color:var(--text-muted); }
   .editor img, .editor video { display:block; max-width:100%; max-height:400px; margin:12px 0; }
   .err { color: var(--critical); font-size: 13px; margin-top: 10px; }
+  .article-head { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; margin-bottom:14px; }
+  .article-head h2 { margin:0 0 3px; font-size:19px; }
+  .article-head p { margin:0; color:var(--text-secondary); font-size:13px; }
+  .article-workspace { display:grid; grid-template-columns:minmax(260px,320px) minmax(0,1fr); gap:16px; align-items:start; }
+  .article-workspace .card { min-width:0; }
+  .article-sidebar { position:sticky; top:16px; }
+  .article-sidebar h3, .article-editor h3 { margin:0; font-size:16px; }
+  .article-sidebar input { margin:14px 0 8px; }
+  .article-list { max-height:650px; overflow:auto; margin-top:8px; }
+  .article-row { border:1px solid var(--border); border-radius:8px; padding:12px; margin:0 0 8px; background:var(--page); }
+  .article-row-title { font-weight:600; overflow-wrap:anywhere; line-height:1.4; }
+  .article-row-meta { color:var(--text-secondary); font-size:12px; margin:5px 0 9px; }
+  .article-row-actions { display:flex; gap:6px; flex-wrap:wrap; }
+  .article-row-actions button { padding:4px 9px; }
+  .article-row .danger { color:var(--critical); }
+  .article-row.active { border-color:var(--series-1); box-shadow:0 0 0 1px var(--series-1); }
+  .article-field { display:block; margin:14px 0; }
+  .article-field > span:first-child { display:block; font-size:13px; font-weight:600; margin-bottom:6px; }
+  .article-field input, .article-field textarea { margin:0; }
+  .article-field textarea { min-height:86px; resize:vertical; }
+  .article-hint { color:var(--text-muted); font-size:12px; margin:5px 0 0; }
+  .article-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 14px; }
+  .article-editor .editor { min-height:310px; border-radius:0 0 8px 8px; line-height:1.65; }
+  .article-editor .editor-tools { padding:8px; margin:0; background:var(--page); border:1px solid var(--border); border-bottom:0; border-radius:8px 8px 0 0; }
+  .article-editor .editor-tools button { padding:5px 9px; }
+  .article-settings { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:18px 0; }
+  .article-setting { display:flex; gap:10px; border:1px solid var(--border); border-radius:8px; padding:10px 12px; cursor:pointer; }
+  .article-setting input { margin:4px 0 0; }
+  .article-setting strong, .article-setting small { display:block; }
+  .article-setting small { color:var(--text-secondary); font-size:12px; }
+  .article-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:16px; }
+  .article-primary { color:white; background:var(--series-1); border-color:var(--series-1); font-weight:600; }
+  .article-primary:hover { filter:brightness(1.1); }
+  .article-feedback { min-height:20px; margin-top:8px; font-size:13px; }
+  .article-feedback.error { color:var(--critical); }
+  .article-feedback.success { color:var(--good); }
+  .upload-progress { width:100%; height:8px; margin:8px 0 0; accent-color:var(--series-1); }
+  @media (max-width:800px) { .article-workspace { grid-template-columns:1fr; } .article-sidebar { position:static; } .article-list { max-height:260px; } }
+  @media (max-width:540px) { .article-grid, .article-settings { grid-template-columns:1fr; } .article-head { align-items:flex-start; } }
 
   /* ── Cards & tiles ──────────────────────────────────── */
   section { margin-top: 32px; }
@@ -181,39 +222,61 @@
       appear here. Every messaging figure below is a count derived from delivery metadata only.
     </p>
 
-    <section>
-      <h2 class="sec">Embodied AI articles</h2>
-      <div class="card">
-        <input id="articleTitle" type="text" maxlength="200" placeholder="Title">
-        <input id="articleSummary" type="text" maxlength="500" placeholder="Summary">
-        <input id="articleCategory" type="text" maxlength="64" placeholder="Category">
-        <input id="articleTags" type="text" maxlength="500" placeholder="Tags, separated by commas">
-        <input id="articleSource" type="text" maxlength="200" placeholder="来源 / Source (e.g. Beijing Municipal Government)">
-        <div class="editor-tools" id="editorTools">
-          <button type="button" data-command="bold">Bold</button>
-          <button type="button" data-command="italic">Italic</button>
-          <button type="button" data-command="underline">Underline</button>
-          <button type="button" data-command="formatBlock" data-value="h2">Heading</button>
-          <button type="button" data-command="insertUnorderedList">Bullets</button>
-          <button type="button" data-command="createLink">Link</button>
-          <button type="button" id="uploadImage">Image</button>
-          <button type="button" id="uploadVideo">Video</button>
+    <section id="articlesSection">
+      <div class="article-head">
+        <div><h2>具身智能资讯</h2><p>管理文章、图片和视频。保存草稿后，读者暂时看不到。</p></div>
+        <button id="articleNew" type="button">＋ 新建资讯</button>
+      </div>
+      <div class="article-workspace">
+        <aside class="card article-sidebar" aria-label="资讯列表">
+          <h3>文章列表</h3>
+          <input id="articleSearch" type="text" maxlength="100" placeholder="搜索标题、摘要或来源" aria-label="搜索资讯">
+          <div id="articleListStatus" class="meta" role="status"></div>
+          <div id="articleList" class="article-list"></div>
+          <button id="articleMore" type="button" hidden>加载更多</button>
+        </aside>
+        <div class="card article-editor" id="articleEditor">
+          <h3 id="articleFormTitle">新建资讯</h3>
+          <p class="article-hint">带 * 的内容为必填。先写标题与正文，再选择保存草稿或发布。</p>
+          <label class="article-field"><span>标题 *</span><input id="articleTitle" type="text" maxlength="200" placeholder="输入读者在列表中看到的标题"><span class="article-hint" id="titleCount">0 / 200</span></label>
+          <label class="article-field"><span>摘要</span><textarea id="articleSummary" maxlength="500" placeholder="简要介绍文章内容，会显示在资讯列表和详情页"></textarea><span class="article-hint" id="summaryCount">0 / 500</span></label>
+          <div class="article-grid">
+            <label class="article-field"><span>分类</span><input id="articleCategory" type="text" maxlength="64" placeholder="例如：行业动态"><span class="article-hint">留空则显示为“资讯”</span></label>
+            <label class="article-field"><span>标签</span><input id="articleTags" type="text" maxlength="500" placeholder="例如：机器人, 融资"><span class="article-hint">用英文逗号分隔，最多 10 个</span></label>
+          </div>
+          <label class="article-field"><span>来源</span><input id="articleSource" type="text" maxlength="200" placeholder="例如：北京日报或官方网站"></label>
+          <div class="article-field"><span>正文 *</span><p class="article-hint">选中文字后可加粗、添加标题或链接。光标所在位置可以插入图片和视频。</p></div>
+          <div class="editor-tools" id="editorTools" role="toolbar" aria-label="正文格式">
+            <button type="button" data-command="bold" title="加粗">加粗</button>
+            <button type="button" data-command="italic" title="斜体">斜体</button>
+            <button type="button" data-command="underline" title="下划线">下划线</button>
+            <button type="button" data-command="formatBlock" data-value="h2" title="二级标题">标题</button>
+            <button type="button" data-command="formatBlock" data-value="p" title="普通段落">段落</button>
+            <button type="button" data-command="insertUnorderedList" title="项目符号列表">列表</button>
+            <button type="button" data-command="createLink" title="添加链接">链接</button>
+            <button type="button" data-command="removeFormat" title="清除所选文字的格式">清除格式</button>
+            <button type="button" id="uploadImage" title="插入图片">图片</button>
+            <button type="button" id="uploadVideo" title="插入视频">视频</button>
+          </div>
+          <input id="mediaInput" type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm" hidden>
+          <div id="articleContent" class="editor" contenteditable="true" role="textbox" aria-label="文章正文" aria-multiline="true" data-placeholder="从这里开始写正文..."></div>
+          <p class="article-hint">图片、视频请用上方按钮上传，单个文件最大 50 MiB。选中正文中的媒体后可按 Delete 删除。</p>
+          <div id="mediaStatus" class="article-feedback" role="status" aria-live="polite"></div>
+          <progress id="mediaProgress" class="upload-progress" max="100" value="0" hidden></progress>
+          <div class="article-settings">
+            <label class="article-setting"><input id="articlePublished" type="checkbox"><span><strong>立即发布</strong><small>勾选后用户可以在 App 中看到；不勾选则保存为草稿。</small></span></label>
+            <label class="article-setting"><input id="articlePinned" type="checkbox"><span><strong>置顶显示</strong><small>已发布文章会优先出现在资讯列表顶部。</small></span></label>
+          </div>
+          <div id="articleErr" class="article-feedback error" role="alert" hidden></div>
+          <div class="article-actions"><button id="articleSave" type="button" class="article-primary">保存草稿</button><button id="articleCancel" type="button" hidden>取消编辑</button><span id="articleSaveStatus" class="article-feedback" role="status" aria-live="polite"></span></div>
         </div>
-        <input id="mediaInput" type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm" hidden>
-        <div id="articleContent" class="editor" contenteditable="true" role="textbox" aria-label="Article content" aria-multiline="true" data-placeholder="Write the article here..."></div>
-        <div id="mediaStatus" class="meta"></div>
-        <label><input id="articlePublished" type="checkbox"> Published</label>
-        <label><input id="articlePinned" type="checkbox"> Pinned</label>
-        <div class="err" id="articleErr" hidden></div>
-        <div style="margin-top:12px"><button id="articleSave">Create article</button> <button id="articleCancel" hidden>Cancel edit</button></div>
-        <div id="articleList" class="tablewrap"></div>
       </div>
     </section>
     <dialog id="readersDialog">
-      <div class="card-head"><h3 id="readersTitle">Readers</h3><button id="readersClose">Close</button></div>
+      <div class="card-head"><h3 id="readersTitle">阅读记录</h3><button id="readersClose">关闭</button></div>
       <div id="readersSummary" class="meta"></div>
-      <div class="tablewrap" style="max-height:55vh"><table><thead><tr><th>Nickname / Chat ID</th><th class="num">Opens</th><th>First opened</th><th>Last opened</th></tr></thead><tbody id="readersList"></tbody></table></div>
-      <button id="readersMore" hidden>Load more</button>
+      <div class="tablewrap" style="max-height:55vh"><table><thead><tr><th>昵称 / Chat ID</th><th class="num">打开次数</th><th>首次阅读</th><th>最近阅读</th></tr></thead><tbody id="readersList"></tbody></table></div>
+      <button id="readersMore" hidden>加载更多</button>
     </dialog>
 
     <section>
@@ -302,6 +365,13 @@
 
   let editingArticle = null;
   let articles = [];
+  let articleCleanState = '';
+  let articleLoading = false;
+  let articleHasMore = false;
+  let articleRequestId = 0;
+  let articleSearchTimer = null;
+  let mediaUploading = false;
+  let articleSaving = false;
   let readersArticle = null;
   let readersOffset = 0;
 
@@ -353,8 +423,34 @@
     }
   }
 
-  function resetArticle() {
+  function articlePayload() {
+    return {
+      title: $('articleTitle').value.trim(), summary: $('articleSummary').value.trim(),
+      source: $('articleSource').value.trim(), content: $('articleContent').innerHTML,
+      published: $('articlePublished').checked, category: $('articleCategory').value.trim(),
+      tags: $('articleTags').value.split(',').map(s => s.trim()).filter(Boolean), pinned: $('articlePinned').checked
+    };
+  }
+  function articleSnapshot() { return JSON.stringify(articlePayload()); }
+  function articleIsDirty() { return articleCleanState !== '' && articleSnapshot() !== articleCleanState; }
+  function updateArticleControls() {
+    $('titleCount').textContent = $('articleTitle').value.length + ' / 200';
+    $('summaryCount').textContent = $('articleSummary').value.length + ' / 500';
+    $('articleSave').textContent = editingArticle ? '保存修改' : $('articlePublished').checked ? '创建并发布' : '保存草稿';
+    $('articleSave').disabled = mediaUploading || articleSaving;
+    $('articleNew').disabled = mediaUploading || articleSaving;
+    $('articleCancel').disabled = mediaUploading || articleSaving;
+  }
+  function showArticleError(message) {
+    $('articleErr').hidden = !message;
+    $('articleErr').textContent = message || '';
+    if (message) $('articleErr').scrollIntoView({ block:'nearest' });
+  }
+  function resetArticle(force = false) {
+    if (mediaUploading || articleSaving) { showArticleError('请等待当前操作完成。'); return false; }
+    if (!force && articleIsDirty() && !confirm('当前有未保存的修改，确定放弃吗？')) return false;
     editingArticle = null;
+    savedRange = null;
     $('articleTitle').value = '';
     $('articleSummary').value = '';
     $('articleCategory').value = '';
@@ -363,48 +459,131 @@
     $('articleContent').replaceChildren();
     $('articlePublished').checked = false;
     $('articlePinned').checked = false;
-    $('articleSave').textContent = 'Create article';
+    $('articleFormTitle').textContent = '新建资讯';
     $('articleCancel').hidden = true;
+    $('articleSaveStatus').textContent = '';
+    $('articleSaveStatus').className = 'article-feedback';
+    $('mediaStatus').textContent = '';
+    showArticleError('');
+    updateArticleControls();
+    articleCleanState = articleSnapshot();
+    renderArticleList();
+    return true;
   }
-  $('articleCancel').addEventListener('click', resetArticle);
-  $('articleSave').addEventListener('click', async () => {
-    const body = {title:$('articleTitle').value,summary:$('articleSummary').value,source:$('articleSource').value,content:$('articleContent').innerHTML,published:$('articlePublished').checked,category:$('articleCategory').value,tags:$('articleTags').value.split(',').map(s => s.trim()).filter(Boolean),pinned:$('articlePinned').checked};
-    const path = '/api/admin/robot/articles' + (editingArticle ? '/' + editingArticle : '');
-    const res = await fetch(path,{method:editingArticle ? 'PUT' : 'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    $('articleErr').hidden = res.ok;
-    $('articleErr').textContent = res.ok ? '' : (res.status === 403 ? 'Session or origin rejected. Reload /admin and sign in again.' : 'Could not save article. Check title and content.');
-    if (res.ok) { resetArticle(); loadArticles(); }
+  $('articleCancel').addEventListener('click', () => resetArticle());
+  $('articleNew').addEventListener('click', () => {
+    if (resetArticle()) $('articleEditor').scrollIntoView({ behavior:'smooth', block:'start' });
   });
-  async function loadArticles() {
-    const res = await fetch('/api/admin/robot/articles',{cache:'no-store'});
-    if (!res.ok) return;
-    articles = (await res.json()).articles || [];
+  for (const id of ['articleTitle','articleSummary','articleCategory','articleTags','articleSource','articlePublished','articlePinned']) {
+    $(id).addEventListener('input', () => { updateArticleControls(); $('articleSaveStatus').textContent = ''; });
+  }
+  $('articleContent').addEventListener('input', () => { $('articleSaveStatus').textContent = ''; });
+  window.addEventListener('beforeunload', (event) => {
+    if (articleIsDirty()) { event.preventDefault(); event.returnValue = ''; }
+  });
+  $('articleSave').addEventListener('click', async () => {
+    if (mediaUploading || articleSaving) return;
+    const body = articlePayload();
+    if (!body.title) { showArticleError('请填写标题。'); $('articleTitle').focus(); return; }
+    if (!body.content || !$('articleContent').textContent.trim() && !$('articleContent').querySelector('img,video')) {
+      showArticleError('请填写正文，或插入图片、视频。'); $('articleContent').focus(); return;
+    }
+    if (body.tags.length > 10 || body.tags.some(tag => tag.length > 30 || tag.includes(',')) || body.category.includes(',')) {
+      showArticleError('分类不能含逗号；标签最多 10 个，每个不超过 30 字。'); return;
+    }
+    const path = '/api/admin/robot/articles' + (editingArticle ? '/' + editingArticle : '');
+    articleSaving = true;
+    updateArticleControls();
+    $('articleSaveStatus').textContent = '正在保存…';
+    showArticleError('');
+    try {
+      const res = await fetch(path,{method:editingArticle ? 'PUT' : 'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if (!res.ok) {
+        const response = await res.json().catch(() => ({}));
+        const reason = res.status === 401 ? '登录已过期，请重新登录。' : res.status === 403 ? '请求被拒绝，请刷新后台后重新登录。' : response.error === 'title or content invalid' ? '标题或正文不符合要求；正文 HTML 不得超过 100 KB。' : response.error === 'invalid category or tags' || response.error === 'invalid tags' ? '分类或标签不符合要求。' : '保存失败（' + res.status + '），请稍后重试。';
+        throw new Error(reason);
+      }
+      articleSaving = false;
+      resetArticle(true);
+      $('articleSaveStatus').textContent = body.published ? '已发布。' : '草稿已保存。';
+      $('articleSaveStatus').className = 'article-feedback success';
+      await loadArticles(true);
+    } catch (error) {
+      $('articleSaveStatus').textContent = '';
+      showArticleError(error.message || '保存失败，请检查网络后重试。');
+    } finally { articleSaving = false; updateArticleControls(); }
+  });
+  $('articleSearch').addEventListener('input', () => {
+    clearTimeout(articleSearchTimer);
+    articleSearchTimer = setTimeout(() => loadArticles(true), 300);
+  });
+  $('articleMore').addEventListener('click', () => loadArticles(false));
+  async function loadArticles(reset = true) {
+    if (articleLoading && !reset) return;
+    const requestId = ++articleRequestId;
+    articleLoading = true;
+    $('articleListStatus').textContent = '正在加载…';
+    $('articleMore').hidden = true;
+    try {
+      const params = new URLSearchParams({ limit:'30', offset:String(reset ? 0 : articles.length) });
+      const search = $('articleSearch').value.trim();
+      if (search) params.set('search', search);
+      const res = await fetch('/api/admin/robot/articles?' + params, {cache:'no-store'});
+      if (!res.ok) throw new Error('加载失败（' + res.status + '）');
+      const data = await res.json();
+      if (requestId !== articleRequestId) return;
+      articles = reset ? (data.articles || []) : [...articles, ...(data.articles || [])];
+      articleHasMore = !!data.has_more;
+      renderArticleList();
+    } catch (error) { if (requestId === articleRequestId) $('articleListStatus').textContent = error.message || '列表加载失败'; }
+    finally { if (requestId === articleRequestId) articleLoading = false; }
+  }
+  function renderArticleList() {
     const list = $('articleList');
     list.replaceChildren();
+    $('articleListStatus').textContent = articles.length ? '已加载 ' + articles.length + ' 篇' : '暂无资讯';
+    $('articleMore').hidden = !articleHasMore;
     articles.forEach(article => {
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--gridline);padding:8px 0';
-      const title = document.createElement('span');
-      title.style.flex = '1';
-      title.textContent = (article.pinned ? '📌 ' : '') + article.title + (article.category ? ' · ' + article.category : '') + (article.published ? ' · Published' : ' · Draft');
-      const edit = document.createElement('button'); edit.textContent = 'Edit';
+      row.className = 'article-row' + (editingArticle === article.id ? ' active' : '');
+      const title = document.createElement('div'); title.className = 'article-row-title'; title.textContent = article.title;
+      const meta = document.createElement('div'); meta.className = 'article-row-meta';
+      meta.textContent = (article.published ? '已发布' : '草稿') + (article.pinned ? ' · 置顶' : '') + (article.category ? ' · ' + article.category : '');
+      const actions = document.createElement('div'); actions.className = 'article-row-actions';
+      const edit = document.createElement('button'); edit.textContent = '编辑'; edit.type = 'button';
       const readers = document.createElement('button');
-      readers.textContent = 'Readers (' + (article.viewer_count || 0) + ')';
+      readers.type = 'button'; readers.textContent = '阅读记录 ' + (article.viewer_count || 0);
       readers.onclick = () => openReaders(article);
       edit.onclick = async () => {
-        const detail = await fetch('/api/admin/robot/articles/' + article.id);
-        if (!detail.ok) return;
-        const a = await detail.json(); editingArticle = a.id;
-        $('articleTitle').value = a.title; $('articleSummary').value = a.summary;
-        $('articleCategory').value = a.category || ''; $('articleTags').value = (a.tags || []).join(', ');
-        $('articleSource').value = a.source || ''; $('articlePinned').checked = !!a.pinned;
-        $('articleContent').innerHTML = a.content; $('articlePublished').checked = a.published;
-        $('articleSave').textContent = 'Save changes'; $('articleCancel').hidden = false;
-        $('articleTitle').focus();
+        if (mediaUploading || articleSaving) { showArticleError('请等待当前操作完成。'); return; }
+        if (articleIsDirty() && !confirm('当前有未保存的修改，确定切换文章吗？')) return;
+        try {
+          const detail = await fetch('/api/admin/robot/articles/' + article.id);
+          if (!detail.ok) throw new Error('加载文章失败（' + detail.status + '）');
+          const a = await detail.json(); editingArticle = a.id; savedRange = null;
+          $('articleTitle').value = a.title; $('articleSummary').value = a.summary || '';
+          $('articleCategory').value = a.category || ''; $('articleTags').value = (a.tags || []).join(', ');
+          $('articleSource').value = a.source || ''; $('articlePinned').checked = !!a.pinned;
+          $('articleContent').innerHTML = a.content; $('articlePublished').checked = a.published;
+          $('articleFormTitle').textContent = '编辑资讯'; $('articleCancel').hidden = false;
+          $('articleSaveStatus').textContent = ''; showArticleError(''); updateArticleControls();
+          articleCleanState = articleSnapshot(); renderArticleList();
+          $('articleEditor').scrollIntoView({ behavior:'smooth', block:'start' });
+          $('articleTitle').focus({ preventScroll:true });
+        } catch (error) { showArticleError(error.message || '加载文章失败'); }
       };
-      const del = document.createElement('button'); del.textContent = 'Delete';
-      del.onclick = async () => { if (confirm('Delete this article?')) { await fetch('/api/admin/robot/articles/' + article.id,{method:'DELETE'}); loadArticles(); } };
-      row.append(title,readers,edit,del); list.append(row);
+      const del = document.createElement('button'); del.textContent = '删除'; del.type = 'button'; del.className = 'danger';
+      del.onclick = async () => {
+        if (mediaUploading || articleSaving) { showArticleError('请等待当前操作完成。'); return; }
+        if (!confirm('确定删除《' + article.title + '》？此操作无法撤销。')) return;
+        try {
+          const res = await fetch('/api/admin/robot/articles/' + article.id,{method:'DELETE'});
+          if (!res.ok) throw new Error('删除失败（' + res.status + '）');
+          if (editingArticle === article.id) resetArticle(true);
+          await loadArticles(true);
+        } catch (error) { $('articleListStatus').textContent = error.message || '删除失败'; }
+      };
+      actions.append(edit,readers,del); row.append(title,meta,actions); list.append(row);
     });
   }
   $('readersClose').onclick = () => $('readersDialog').close();
@@ -412,7 +591,7 @@
   async function openReaders(article) {
     readersArticle = article.id;
     readersOffset = 0;
-    $('readersTitle').textContent = article.title + ' — Readers';
+    $('readersTitle').textContent = article.title + ' · 阅读记录';
     $('readersList').replaceChildren();
     $('readersDialog').showModal();
     await loadReaders();
@@ -420,9 +599,9 @@
   async function loadReaders() {
     if (!readersArticle) return;
     const res = await fetch('/api/admin/robot/articles/' + readersArticle + '/views?offset=' + readersOffset, {cache:'no-store'});
-    if (!res.ok) { $('readersSummary').textContent = 'Could not load reader records.'; return; }
+    if (!res.ok) { $('readersSummary').textContent = '阅读记录加载失败。'; return; }
     const data = await res.json();
-    $('readersSummary').textContent = data.total_readers + ' readers · ' + data.total_views + ' total opens';
+    $('readersSummary').textContent = data.total_readers + ' 位读者 · 共打开 ' + data.total_views + ' 次';
     for (const reader of data.readers) {
       const row = document.createElement('tr');
       for (const value of [reader.nickname + ' (' + reader.chat_id + ')', reader.view_count, new Date(reader.first_viewed_at).toLocaleString(), new Date(reader.last_viewed_at).toLocaleString()]) {
@@ -437,6 +616,7 @@
   let savedRange = null;
   $('articleContent').addEventListener('keyup', rememberSelection);
   $('articleContent').addEventListener('mouseup', rememberSelection);
+  $('articleContent').addEventListener('focusout', rememberSelection);
   function rememberSelection() {
     const selection = getSelection();
     if (selection.rangeCount && $('articleContent').contains(selection.anchorNode)) savedRange = selection.getRangeAt(0).cloneRange();
@@ -447,38 +627,86 @@
     if (!button) return;
     $('articleContent').focus();
     if (button.dataset.command === 'createLink') {
-      const url = prompt('Link URL (https:// or http://)');
+      const url = prompt('请输入链接地址（https:// 或 http://）');
       if (url && /^https?:\/\//i.test(url)) document.execCommand('createLink', false, url);
     } else document.execCommand(button.dataset.command, false, button.dataset.value || null);
     rememberSelection();
   });
   $('uploadImage').onclick = () => { $('mediaInput').accept = 'image/jpeg,image/png,image/gif,image/webp'; $('mediaInput').click(); };
   $('uploadVideo').onclick = () => { $('mediaInput').accept = 'video/mp4,video/webm'; $('mediaInput').click(); };
+  function uploadMedia(file) {
+    return new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      request.open('POST', '/api/admin/robot/media');
+      request.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const percent = Math.round(event.loaded / event.total * 100);
+          $('mediaProgress').value = percent;
+          $('mediaStatus').textContent = '正在上传 ' + file.name + ' · ' + percent + '%';
+        }
+      };
+      request.onload = () => {
+        let result = {};
+        try { result = JSON.parse(request.responseText); } catch { /* Nginx returns HTML for 413. */ }
+        if (request.status === 201) return resolve(result);
+        const message = request.status === 413 ? '服务器拒绝了上传：请求体超出当前代理限制，请检查线上 Nginx 配置。' :
+          request.status === 401 ? '登录已过期，请重新登录后上传。' :
+          request.status === 403 ? '请求被拒绝，请刷新后台后重新登录。' :
+          result.error === 'unsupported media type' ? '文件格式不支持。请选择 JPG、PNG、GIF、WebP、MP4 或 WebM。' :
+          result.error === 'file too large' || result.error === 'missing or oversized file' ? '文件超过 50 MiB 限制。' :
+          '上传失败（' + request.status + '），请稍后重试。';
+        reject(new Error(message));
+      };
+      request.onerror = () => reject(new Error('网络连接中断，上传失败。'));
+      const body = new FormData(); body.append('file', file);
+      request.send(body);
+    });
+  }
   $('mediaInput').onchange = async () => {
     const file = $('mediaInput').files[0];
     if (!file) return;
-    $('mediaStatus').textContent = 'Uploading ' + file.name + '...';
-    const body = new FormData(); body.append('file', file);
+    $('mediaInput').value = '';
+    if (file.size > 50 * 1024 * 1024) {
+      $('mediaStatus').textContent = '文件超过 50 MiB，请压缩后重试。';
+      $('mediaStatus').className = 'article-feedback error';
+      return;
+    }
+    mediaUploading = true;
+    $('uploadImage').disabled = true;
+    $('uploadVideo').disabled = true;
+    $('mediaProgress').value = 0;
+    $('mediaProgress').hidden = false;
+    $('mediaStatus').className = 'article-feedback';
+    $('mediaStatus').textContent = '正在上传 ' + file.name + '…';
+    updateArticleControls();
     try {
-      const res = await fetch('/api/admin/robot/media', {method:'POST', body});
-      if (!res.ok) throw new Error('Upload failed (' + res.status + ')');
-      const media = await res.json();
+      const media = await uploadMedia(file);
       const element = document.createElement(media.mime.startsWith('video/') ? 'video' : 'img');
       element.src = media.url;
       if (element.tagName === 'VIDEO') { element.controls = true; element.preload = 'metadata'; }
-      const editor = $('articleContent'); editor.focus();
+      else element.alt = file.name;
+      const editor = $('articleContent');
+      const range = savedRange && editor.contains(savedRange.commonAncestorContainer) ? savedRange.cloneRange() : document.createRange();
+      if (!savedRange || !editor.contains(savedRange.commonAncestorContainer)) { range.selectNodeContents(editor); range.collapse(false); }
+      range.deleteContents(); range.insertNode(element);
+      const breakAfter = document.createElement('br'); element.after(breakAfter);
+      range.setStartAfter(breakAfter); range.collapse(true);
       const selection = getSelection();
-      if (savedRange && editor.contains(savedRange.commonAncestorContainer)) {
-        selection.removeAllRanges(); selection.addRange(savedRange);
-      }
-      const range = selection.rangeCount && editor.contains(selection.anchorNode) ? selection.getRangeAt(0) : null;
-      if (range) { range.deleteContents(); range.insertNode(element); range.setStartAfter(element); range.collapse(true); }
-      else editor.append(element);
-      editor.append(document.createElement('p'));
-      $('mediaStatus').textContent = 'Uploaded: ' + file.name;
+      selection.removeAllRanges(); selection.addRange(range);
+      editor.focus();
+      $('mediaStatus').textContent = '上传完成，已插入正文：' + file.name;
+      $('mediaStatus').className = 'article-feedback success';
       rememberSelection();
-    } catch (error) { $('mediaStatus').textContent = error.message; }
-    $('mediaInput').value = '';
+    } catch (error) {
+      $('mediaStatus').textContent = error.message || '上传失败。';
+      $('mediaStatus').className = 'article-feedback error';
+    } finally {
+      mediaUploading = false;
+      $('uploadImage').disabled = false;
+      $('uploadVideo').disabled = false;
+      $('mediaProgress').hidden = true;
+      updateArticleControls();
+    }
   };
 
   // ── Render ───────────────────────────────────────────
@@ -661,6 +889,7 @@
   }
 
   // Boot
+  resetArticle(true);
   load();
 })();
 </script>

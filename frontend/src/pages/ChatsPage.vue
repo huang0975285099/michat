@@ -24,7 +24,7 @@
                         <span v-if="chat.online" class="online-dot" />
                     </div>
                 </q-item-section>
-                <q-item-section>
+                <q-item-section class="conversation-body">
                     <div class="name-line">
                         <span class="conversation-name">{{ chat.nickname }}</span>
                         <span v-if="chat.deregistered" class="account-status">{{ t('chats.loggedOut') }}</span>
@@ -187,6 +187,7 @@ function formatTime(ts) {
 .section-count { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; background: #e9f2fc; color: #1976d2; font-size: 11px; }
 .conversation-list { overflow: hidden; border: 1px solid #e6edf4; border-radius: 15px; background: #fff; box-shadow: 0 3px 12px rgba(26, 52, 82, .025); }
 .conversation-item { min-height: 77px; padding: 13px 15px; }
+.conversation-body { min-width: 0; overflow: hidden; }
 .conversation-list :deep(.q-separator) { margin-left: 74px; background: #eef1f5; }
 .conversation-item :deep(.q-item__section--avatar) { min-width: 58px; padding-right: 13px; }
 .avatar-wrap { position: relative; width: 44px; height: 44px; border-radius: 12px; overflow: visible; }
@@ -196,7 +197,7 @@ function formatTime(ts) {
 .conversation-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; }
 .has-unread .conversation-name { font-weight: 700; }
 .account-status { flex: none; padding: 2px 5px; border-radius: 5px; background: #eff1f3; color: #7f8c99; font-size: 10px; }
-.message-preview { overflow: hidden; margin-top: 6px; color: #8594a4; font-size: 12px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.message-preview { width: 100%; overflow: hidden; margin-top: 6px; color: #8594a4; font-size: 12px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .has-unread .message-preview { color: #5d7084; }
 .conversation-meta { align-items: flex-end; gap: 7px; min-width: 49px; padding-left: 8px; }
 .conversation-time { color: #9aa7b4; font-size: 11px; white-space: nowrap; }
