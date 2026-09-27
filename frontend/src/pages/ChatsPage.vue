@@ -1,53 +1,39 @@
 <template>
-    <q-page class="q-pa-md">
-        <div
-            v-if="recentChats.length === 0"
-            class="text-center text-grey q-mt-xl"
-        >
-            <q-icon name="chat_bubble_outline" size="60px" class="q-mb-md" />
-            <div>{{ t("chats.empty") }}</div>
-            <div class="text-caption">{{ t("chats.emptyHint") }}</div>
+    <q-page class="conversation-page">
+      <div class="conversation-shell">
+        <div class="section-heading"><span>{{ t("chats.recent") }}</span><span class="section-count">{{ recentChats.length }}</span></div>
+        <div v-if="recentChats.length === 0" class="empty-state">
+            <div class="empty-icon"><q-icon name="chat_bubble_outline" size="34px" /></div>
+            <div class="empty-title">{{ t("chats.empty") }}</div>
+            <div class="empty-hint">{{ t("chats.emptyHint") }}</div>
+            <q-btn flat color="primary" no-caps :label="t('nav.friends')" @click="router.push('/friends')" />
         </div>
 
-        <q-card v-else bordered>
+        <q-list v-else separator class="conversation-list">
             <q-item
-                v-for="(chat, i) in recentChats"
+                v-for="chat in recentChats"
                 :key="chat.chatId"
                 clickable
-                class="chat-list-item"
-                :class="{ 'border-top': i > 0 }"
+                class="conversation-item"
+                :class="{ 'has-unread': chat.unread > 0 }"
                 @click="openChat(chat)"
             >
                 <q-item-section avatar>
-                    <deterministic-avatar :seed="chat.chatId" :size="40" />
+                    <div class="avatar-wrap">
+                        <deterministic-avatar :seed="chat.chatId" :size="44" />
+                        <span v-if="chat.online" class="online-dot" />
+                    </div>
                 </q-item-section>
                 <q-item-section>
-                    <div class="row items-center q-gutter-xs">
-                        <q-item-label>{{ chat.nickname }}</q-item-label>
-                        <q-badge v-if="chat.deregistered" color="grey-5" :label="t('chats.loggedOut')" style="font-size:10px" />
-                        <q-icon
-                            v-if="chat.online"
-                            name="circle"
-                            color="positive"
-                            size="8px"
-                        />
+                    <div class="name-line">
+                        <span class="conversation-name">{{ chat.nickname }}</span>
+                        <span v-if="chat.deregistered" class="account-status">{{ t('chats.loggedOut') }}</span>
                     </div>
-                    <q-item-label caption lines="1">{{
-                        chat.lastMessage
-                    }}</q-item-label>
+                    <div class="message-preview">{{ chat.lastMessage }}</div>
                 </q-item-section>
-                <q-item-section side top>
-                    <div class="row column items-center q-gutter-xs">
-                        <q-item-label caption>{{
-                            formatTime(chat.ts)
-                        }}</q-item-label>
-                        <q-badge
-                            v-if="chat.unread > 0"
-                            color="primary"
-                            :label="chat.unread"
-                            class="unread-badge"
-                        />
-                    </div>
+                <q-item-section side top class="conversation-meta">
+                    <span class="conversation-time">{{ formatTime(chat.ts) }}</span>
+                    <span v-if="chat.unread > 0" class="unread-badge">{{ chat.unread > 99 ? '99+' : chat.unread }}</span>
                 </q-item-section>
 
                 <q-menu context-menu @before-show="menuChat = chat">
@@ -64,7 +50,8 @@
                     </q-list>
                 </q-menu>
             </q-item>
-        </q-card>
+        </q-list>
+      </div>
     </q-page>
 </template>
 
@@ -194,13 +181,29 @@ function formatTime(ts) {
 </script>
 
 <style scoped>
-.border-top {
-    border-top: 1px solid rgba(0, 0, 0, 0.08);
-}
-.unread-badge {
-    min-width: 18px;
-    height: 18px;
-    font-size: 11px;
-    font-weight: 600;
-}
+.conversation-page { min-height: 100%; background: #f5f7fa; color: #182536; }
+.conversation-shell { max-width: 760px; margin: 0 auto; padding: 22px 16px 40px; }
+.section-heading { display: flex; align-items: center; gap: 8px; margin: 0 3px 13px; font-size: 18px; font-weight: 700; }
+.section-count { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; background: #e9f2fc; color: #1976d2; font-size: 11px; }
+.conversation-list { overflow: hidden; border: 1px solid #e6edf4; border-radius: 15px; background: #fff; box-shadow: 0 3px 12px rgba(26, 52, 82, .025); }
+.conversation-item { min-height: 77px; padding: 13px 15px; }
+.conversation-list :deep(.q-separator) { margin-left: 74px; background: #eef1f5; }
+.conversation-item :deep(.q-item__section--avatar) { min-width: 58px; padding-right: 13px; }
+.avatar-wrap { position: relative; width: 44px; height: 44px; border-radius: 12px; overflow: visible; }
+.avatar-wrap :deep(img) { border-radius: 12px; }
+.online-dot { position: absolute; right: -3px; bottom: -3px; width: 12px; height: 12px; border: 2px solid #fff; border-radius: 50%; background: #30b66c; }
+.name-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.conversation-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; }
+.has-unread .conversation-name { font-weight: 700; }
+.account-status { flex: none; padding: 2px 5px; border-radius: 5px; background: #eff1f3; color: #7f8c99; font-size: 10px; }
+.message-preview { overflow: hidden; margin-top: 6px; color: #8594a4; font-size: 12px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.has-unread .message-preview { color: #5d7084; }
+.conversation-meta { align-items: flex-end; gap: 7px; min-width: 49px; padding-left: 8px; }
+.conversation-time { color: #9aa7b4; font-size: 11px; white-space: nowrap; }
+.unread-badge { display: inline-flex; min-width: 20px; height: 20px; align-items: center; justify-content: center; padding: 0 5px; border-radius: 10px; background: #1976d2; color: #fff; font-size: 11px; font-weight: 700; }
+.empty-state { display: flex; min-height: 280px; flex-direction: column; align-items: center; justify-content: center; gap: 9px; text-align: center; }
+.empty-icon { display: grid; width: 64px; height: 64px; place-items: center; border-radius: 20px; background: #e9f2fc; color: #1976d2; }
+.empty-title { margin-top: 5px; font-size: 15px; font-weight: 700; }
+.empty-hint { max-width: 270px; color: #8393a3; font-size: 12px; line-height: 1.6; }
+@media (min-width: 640px) { .conversation-shell { padding: 28px 28px 52px; } }
 </style>

@@ -1,30 +1,30 @@
 <template>
-  <q-page ref="pageEl" class="column">
+  <q-page ref="pageEl" class="column chat-page">
     <!-- Top friend information -->
-    <div class="chat-peer-bar row items-center q-px-sm q-py-xs q-gutter-sm">
-      <deterministic-avatar :seed="friendChatId" :size="32" />
+    <div class="chat-peer-bar row items-center">
+      <deterministic-avatar :seed="friendChatId" :size="36" class="peer-avatar" />
       <div class="col chat-peer-identity">
         <div class="chat-peer-name">{{ friendNickname }}</div>
         <div class="chat-peer-id">{{ friendChatId }}</div>
       </div>
-      <q-icon name="circle" :color="friendOnline ? 'positive' : 'grey-4'" size="12px">
+      <q-icon name="circle" :color="friendOnline ? 'positive' : 'grey-4'" size="10px" class="peer-online">
         <q-tooltip>{{ friendOnline ? t("common.online") : t("common.offline") }}</q-tooltip>
       </q-icon>
       <q-btn
-        flat round dense icon="call" color="grey-7"
+        flat round dense icon="call" class="peer-action"
         :disable="callStore.state !== 'idle'"
         @click="callStore.startCall(friendChatId, friendNickname, 'audio')"
       >
         <q-tooltip>{{ t("call.voice") }}</q-tooltip>
       </q-btn>
       <q-btn
-        flat round dense icon="videocam" color="grey-7"
+        flat round dense icon="videocam" class="peer-action"
         :disable="callStore.state !== 'idle'"
         @click="callStore.startCall(friendChatId, friendNickname, 'video')"
       >
         <q-tooltip>{{ t("call.video") }}</q-tooltip>
       </q-btn>
-      <q-btn flat dense no-caps icon="delete_sweep" color="negative" :aria-label="t('chat.clearTitle')"
+      <q-btn flat round dense icon="delete_sweep" class="peer-action peer-action-danger" :aria-label="t('chat.clearTitle')"
         @click="clearHistory"
       >
         <q-tooltip>{{ t("chat.clearButton") }}</q-tooltip>
@@ -126,7 +126,7 @@
             </template>
             <!-- Ordinary text message -->
             <template v-else>
-              <div>{{ msg.decryptionFailed || msg.text === '[Decryption failed]' ? t("chat.decryptionFailed") : msg.text }}</div>
+              <div class="message-text">{{ msg.decryptionFailed || msg.text === '[Decryption failed]' ? t("chat.decryptionFailed") : msg.text }}</div>
             </template>
             <div class="text-caption q-mt-xs text-grey row items-center q-gutter-xs">
               <span>{{ formatTime(msg.ts) }}</span>
@@ -216,7 +216,7 @@
             </template>
             <!-- Ordinary text message -->
             <template v-else>
-              <div>{{ msg.decryptionFailed || msg.text === '[Decryption failed]' ? t("chat.decryptionFailed") : msg.text }}</div>
+              <div class="message-text">{{ msg.decryptionFailed || msg.text === '[Decryption failed]' ? t("chat.decryptionFailed") : msg.text }}</div>
             </template>
             <div class="text-caption q-mt-xs text-blue-2 row items-center q-gutter-xs">
               <span>{{ formatTime(msg.ts) }}</span>
@@ -453,7 +453,7 @@
     </div>
 
     <!-- Compact dynamic input bar -->
-    <div class="chat-composer bg-white">
+    <div class="chat-composer">
       <!-- Hidden image/file pickers -->
       <input
         ref="imageInputEl"
@@ -2259,29 +2259,36 @@ function shouldCompact(msgs, idx) {
 </script>
 
 <style scoped>
+.chat-page { background: #f5f7fa; color: #243448; }
 .chat-peer-bar {
-  min-height: 50px;
+  min-height: 62px;
   flex: 0 0 auto;
-  background: rgba(255, 255, 255, 0.96);
-  border-bottom: 1px solid #e7ebf0;
-  box-shadow: 0 2px 8px rgba(31, 55, 78, 0.05);
+  gap: 7px;
+  padding: 8px 11px;
+  background: #fff;
+  border-bottom: 1px solid #e6edf4;
+  box-shadow: 0 2px 10px rgba(26, 52, 82, 0.035);
 }
+.peer-avatar { flex: none; margin-right: 3px; border-radius: 11px; overflow: hidden; }
+.peer-online { flex: none; margin: 0 2px; }
+.peer-action { flex: none; width: 34px; height: 34px; min-width: 34px; color: #557693; background: #f1f6fc; }
+.peer-action-danger { color: #bd6570; background: #fff3f3; }
 .chat-peer-identity {
   min-width: 0;
   line-height: 1.2;
 }
 .chat-peer-name {
   overflow: hidden;
-  color: #263238;
-  font-size: 14px;
-  font-weight: 650;
+  color: #243448;
+  font-size: 15px;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .chat-peer-id {
   margin-top: 2px;
-  color: #8b96a3;
-  font-size: 10px;
+  color: #8a9aaa;
+  font-size: 11px;
   letter-spacing: 0.35px;
 }
 .chat-message-area {
@@ -2289,9 +2296,7 @@ function shouldCompact(msgs, idx) {
   min-height: 0;
   overflow: hidden;
   isolation: isolate;
-  background-color: #f8fafc;
-  background-image: radial-gradient(circle at 1px 1px, rgba(25, 118, 210, 0.035) 1px, transparent 0);
-  background-size: 18px 18px;
+  background-color: #f5f7fa;
 }
 .chat-message-scroll {
   position: relative;
@@ -2300,6 +2305,8 @@ function shouldCompact(msgs, idx) {
   height: 100%;
   min-height: 0;
   overflow-y: auto;
+  padding-left: 12px;
+  padding-right: 12px;
 }
 .chat-watermark {
   position: absolute;
@@ -2356,6 +2363,8 @@ function shouldCompact(msgs, idx) {
 .avatar-side {
   flex-shrink: 0;
   align-self: flex-start;
+  border-radius: 8px;
+  overflow: hidden;
 }
 .emoji-item {
   display: inline-block;
@@ -2409,7 +2418,7 @@ function shouldCompact(msgs, idx) {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: #f7f9fc;
+  background: #f1f6fc;
   border-top: 1px solid #e3e8ef;
 }
 .reply-composer-content {
@@ -2435,7 +2444,7 @@ function shouldCompact(msgs, idx) {
 .image-selection-tray {
   flex: 0 0 auto;
   padding: 9px 10px 10px;
-  background: #f8fafc;
+  background: #f5f7fa;
   border-top: 1px solid #e2e8f0;
 }
 .image-selection-header,
@@ -2561,30 +2570,33 @@ function shouldCompact(msgs, idx) {
   margin-top: 5px;
 }
 .chat-composer {
-  min-height: 54px;
-  padding: 6px 8px;
+  min-height: 60px;
+  padding: 8px 10px;
   display: flex;
   align-items: center;
-  gap: 4px;
-  border-top: 1px solid #e2e8f0;
-  box-shadow: 0 -4px 12px rgba(31, 55, 78, 0.05);
+  gap: 5px;
+  background: #fff;
+  border-top: 1px solid #e6edf4;
+  box-shadow: 0 -3px 12px rgba(26, 52, 82, 0.04);
 }
 .chat-composer :deep(.q-btn) {
   flex: 0 0 auto;
-  min-width: 40px;
-  min-height: 40px;
+  min-width: 38px;
+  min-height: 38px;
 }
 .composer-input,
 .voice-hold-input {
   flex: 1 1 auto;
   min-width: 0;
 }
+.composer-input :deep(.q-field__control) { min-height: 40px; height: 40px; border-radius: 14px; background: #f8fafc; }
+.composer-input :deep(.q-field__control::before) { border-color: #e2e8f0; }
 .voice-hold-input {
   height: 40px;
-  border: 1px solid #c7c7c7;
-  border-radius: 20px;
-  background: #fff;
-  color: #333;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #f8fafc;
+  color: #344b62;
   font: inherit;
   font-weight: 500;
   cursor: pointer;
@@ -2609,8 +2621,8 @@ function shouldCompact(msgs, idx) {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: start;
   gap: 6px;
-  background: #f6f7f9;
-  border-top: 1px solid #e5e5e5;
+  background: #f5f7fa;
+  border-top: 1px solid #e6edf4;
 }
 .composer-more-action {
   width: 100%;
@@ -2631,10 +2643,11 @@ function shouldCompact(msgs, idx) {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid #e0e0e0;
-  border-radius: 14px;
+  border: 1px solid #e6edf4;
+  border-radius: 15px;
   background: #fff;
-  color: #555;
+  color: #557693;
+  box-shadow: 0 2px 8px rgba(26, 52, 82, 0.035);
 }
 .composer-more-action small {
   color: #999;
@@ -2657,24 +2670,26 @@ function shouldCompact(msgs, idx) {
 .bubble-mine {
   background: #1976d2;
   color: white;
-  border-radius: 16px 4px 16px 16px;
-  max-width: min(78%, 560px);
+  border-radius: 16px 5px 16px 16px;
+  max-width: min(80%, 560px);
   min-width: 0;
   overflow-wrap: anywhere;
-  box-shadow: 0 2px 6px rgba(25, 118, 210, 0.14);
+  box-shadow: 0 3px 10px rgba(25, 118, 210, 0.12);
 }
 .bubble-theirs {
-  background: #f0f0f0;
-  color: #222;
-  border-radius: 4px 16px 16px 16px;
-  max-width: min(78%, 560px);
+  background: #fff;
+  color: #243448;
+  border: 1px solid #e6edf4;
+  border-radius: 5px 16px 16px 16px;
+  max-width: min(80%, 560px);
   min-width: 0;
   overflow-wrap: anywhere;
-  box-shadow: 0 2px 6px rgba(38, 50, 56, 0.08);
+  box-shadow: 0 3px 10px rgba(26, 52, 82, 0.035);
 }
 .bubble-burn {
-  border: 4px solid #ff9800;
+  border: 2px solid #ff9800;
 }
+.message-text { white-space: pre-wrap; line-height: 1.5; }
 .message-reply-quote {
   width: 100%;
   min-width: 130px;

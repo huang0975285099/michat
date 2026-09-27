@@ -173,6 +173,7 @@ export const messages = {
             noAttachments: "本机没有附件数据",
         },
         chats: {
+            recent: "最近聊天",
             empty: "暂无聊天记录",
             emptyHint: "消息端到端加密，仅你和对方可查看 · 前往好友列表开始聊天",
             loggedOut: "已注销",
@@ -185,6 +186,7 @@ export const messages = {
         },
         friends: {
             searchPlaceholder: "输入对方 Chat ID（例如 1234-ABCD）",
+            searchAction: "搜索用户",
             add: "添加好友",
             pending: "待处理申请（{count}）",
             applying: "申请中（{count}）",
@@ -758,6 +760,7 @@ export const messages = {
             noAttachments: "No attachment data is stored on this device",
         },
         chats: {
+            recent: "Recent chats",
             empty: "No chat history yet",
             emptyHint: "Messages are end-to-end encrypted — only you and the recipient can read them · Open your friends list to start chatting",
             loggedOut: "Deleted account",
@@ -770,6 +773,7 @@ export const messages = {
         },
         friends: {
             searchPlaceholder: "Enter a Chat ID (for example, 1234-ABCD)",
+            searchAction: "Search for user",
             add: "Add friend",
             pending: "Pending requests ({count})",
             applying: "Sent requests ({count})",

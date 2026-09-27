@@ -1,5 +1,6 @@
 <template>
-    <q-page class="friends-page q-pa-md">
+    <q-page class="friends-page">
+      <div class="friends-shell">
         <q-banner v-if="loadError" dense rounded class="q-mb-md bg-red-1 text-negative">
             {{ t('friends.loadFailed') }}
             <template #action>
@@ -9,19 +10,23 @@
         <!-- search bar -->
         <q-input
             :model-value="searchId"
-            outlined
+            borderless
             dense
             :placeholder="t('friends.searchPlaceholder')"
-            class="q-mb-md"
+            class="friend-search"
             maxlength="9"
             @update:model-value="searchId = ($event || '').toUpperCase()"
             @keyup.enter="search"
         >
+            <template #prepend><q-icon name="search" size="20px" /></template>
             <template #append>
                 <q-btn
                     flat
                     dense
-                    icon="search"
+                    round
+                    icon="arrow_forward"
+                    color="primary"
+                    :aria-label="t('friends.searchAction')"
                     :loading="searching"
                     @click="search"
                 />
@@ -29,16 +34,13 @@
         </q-input>
 
         <!-- Search results -->
-        <q-card v-if="searchResult" class="q-mb-md">
-            <q-item>
+        <q-card v-if="searchResult" flat class="friend-card search-result-card">
+            <q-item class="friend-item">
                 <q-item-section avatar>
-                    <deterministic-avatar
-                        :seed="searchResult.chat_id"
-                        :size="40"
-                    />
+                    <deterministic-avatar :seed="searchResult.chat_id" :size="44" />
                 </q-item-section>
                 <q-item-section>
-                    <q-item-label>{{ searchResult.nickname }}</q-item-label>
+                    <q-item-label class="friend-name">{{ searchResult.nickname }}</q-item-label>
                     <q-item-label caption>{{
                         searchResult.chat_id
                     }}</q-item-label>
@@ -46,6 +48,7 @@
                 <q-item-section side>
                     <q-btn
                         unelevated
+                        no-caps
                         size="sm"
                         color="primary"
                         :label="t('friends.add')"
@@ -57,37 +60,39 @@
         </q-card>
 
         <!-- friend request -->
-        <div v-if="requests.length > 0" class="q-mb-md">
-            <div class="text-subtitle2 q-mb-sm text-grey">
+        <div v-if="requests.length > 0" class="friend-section">
+            <div class="section-heading">
                 {{ t("friends.pending", { count: requests.length }) }}
             </div>
-            <q-card>
-                <q-item v-for="req in requests" :key="req.id" class="q-py-sm">
+            <q-card flat class="friend-card">
+                <q-item v-for="req in requests" :key="req.id" class="friend-item request-item">
                     <q-item-section avatar>
                         <deterministic-avatar
                             :seed="req.from_chat_id"
-                            :size="40"
+                            :size="44"
                         />
                     </q-item-section>
                     <q-item-section>
-                        <q-item-label>{{ req.from_nickname }}</q-item-label>
+                        <q-item-label class="friend-name">{{ req.from_nickname }}</q-item-label>
                         <q-item-label caption>{{
                             req.from_chat_id
                         }}</q-item-label>
                     </q-item-section>
                     <q-item-section side>
-                        <div class="row q-gutter-xs">
+                        <div class="request-actions">
                             <q-btn
                                 size="sm"
                                 unelevated
-                                color="positive"
+                                no-caps
+                                color="primary"
                                 :label="t('common.accept')"
                                 @click="handle(req.id, true)"
                             />
                             <q-btn
                                 size="sm"
-                                unelevated
-                                color="negative"
+                                flat
+                                no-caps
+                                color="grey-7"
                                 :label="t('common.reject')"
                                 @click="handle(req.id, false)"
                             />
@@ -98,20 +103,20 @@
         </div>
 
         <!-- Application I sent -->
-        <div v-if="outgoing.length > 0" class="q-mb-md">
-            <div class="text-subtitle2 q-mb-sm text-grey">
+        <div v-if="outgoing.length > 0" class="friend-section">
+            <div class="section-heading">
                 {{ t("friends.applying", { count: outgoing.length }) }}
             </div>
-            <q-card>
-                <q-item v-for="req in outgoing" :key="req.id" class="q-py-sm">
+            <q-card flat class="friend-card">
+                <q-item v-for="req in outgoing" :key="req.id" class="friend-item">
                     <q-item-section avatar>
                         <deterministic-avatar
                             :seed="req.to_chat_id"
-                            :size="40"
+                            :size="44"
                         />
                     </q-item-section>
                     <q-item-section>
-                        <q-item-label>{{ req.to_nickname }}</q-item-label>
+                        <q-item-label class="friend-name">{{ req.to_nickname }}</q-item-label>
                         <q-item-label caption>{{
                             req.to_chat_id
                         }}</q-item-label>
@@ -122,6 +127,7 @@
                             size="sm"
                             flat
                             dense
+                            no-caps
                             color="negative"
                             :label="t('common.cancel')"
                             :loading="cancelingId === req.id"
@@ -138,40 +144,39 @@
         </div>
 
         <!-- friends list -->
-        <div class="text-subtitle2 q-mb-sm text-grey">
+        <div class="section-heading friend-list-heading">
             {{ t("friends.list", { count: friends.length }) }}
         </div>
-        <q-card v-if="friends.length > 0" bordered>
+        <q-card v-if="friends.length > 0" flat class="friend-card">
             <q-item
-                v-for="(f, i) in sortedFriends"
+                v-for="f in sortedFriends"
                 :key="f.chat_id"
                 clickable
-                class="chat-list-item"
-                :class="{ 'border-top': i > 0 }"
+                class="friend-item"
                 @click="openChat(f)"
             >
                 <q-item-section avatar>
-                    <deterministic-avatar :seed="f.chat_id" :size="40" />
+                    <div class="avatar-wrap">
+                        <deterministic-avatar :seed="f.chat_id" :size="44" />
+                        <span v-if="f.online" class="online-dot" />
+                    </div>
                 </q-item-section>
                 <q-item-section>
-                    <q-item-label>{{ f.nickname }}</q-item-label>
+                    <q-item-label class="friend-name">{{ f.nickname }}</q-item-label>
                     <q-item-label caption>
                         {{ f.chat_id }}
-                        <span class="text-grey-6">· {{ formatLastSeen(f.last_seen, f.online) }}</span>
                     </q-item-label>
                 </q-item-section>
-                <q-item-section side>
-                    <q-icon
-                        name="circle"
-                        :color="f.online ? 'positive' : 'grey-4'"
-                        size="10px"
-                    />
+                <q-item-section side class="friend-status">
+                    <span :class="{ online: f.online }">{{ formatLastSeen(f.last_seen, f.online) }}</span>
                 </q-item-section>
             </q-item>
         </q-card>
-        <div v-else class="text-center text-grey q-mt-lg">
-            {{ t("friends.empty") }}
+        <div v-else class="empty-state">
+            <div class="empty-icon"><q-icon name="people_outline" size="34px" /></div>
+            <div class="empty-title">{{ t("friends.empty") }}</div>
         </div>
+      </div>
     </q-page>
 </template>
 
@@ -360,14 +365,33 @@ onDeactivated(() => {
 </script>
 
 <style scoped>
-.friends-page {
-    display: block;
-    min-height: calc(100vh - 112px);
-    overflow-y: auto;
-    box-sizing: border-box;
-}
-
-.border-top {
-    border-top: 1px solid rgba(0, 0, 0, 0.18);
-}
+.friends-page { min-height: 100%; background: #f5f7fa; color: #182536; }
+.friends-shell { max-width: 760px; margin: 0 auto; padding: 22px 16px 40px; }
+.friend-search { height: 46px; margin-bottom: 24px; padding: 0 13px; border: 1px solid #e2e8f0; border-radius: 14px; background: #fff; box-shadow: 0 2px 8px rgba(21, 43, 70, .03); }
+.friend-search :deep(.q-field__control) { height: 44px; min-height: 44px; }
+.friend-search :deep(.q-field__prepend) { color: #8997a8; }
+.friend-search :deep(.q-field__append) { padding-left: 3px; }
+.friend-section { margin-bottom: 24px; }
+.section-heading { margin: 0 3px 11px; color: #647a90; font-size: 13px; font-weight: 700; }
+.friend-list-heading { margin-top: 7px; }
+.friend-card { overflow: hidden; border: 1px solid #e6edf4; border-radius: 15px; background: #fff; box-shadow: 0 3px 12px rgba(26, 52, 82, .025); }
+.search-result-card { margin: -9px 0 24px; }
+.friend-item { min-height: 74px; padding: 12px 15px; }
+.friend-item + .friend-item { border-top: 1px solid #eef1f5; }
+.friend-item :deep(.q-item__section--avatar) { min-width: 58px; padding-right: 13px; }
+.friend-item :deep(.q-item__section--main) { min-width: 0; }
+.friend-item :deep(.q-item__section--side) { padding-left: 8px; }
+.friend-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #243448; font-size: 15px; font-weight: 600; }
+.friend-item :deep(.q-item__label--caption) { margin-top: 5px; overflow: hidden; color: #8a9aaa; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.avatar-wrap { position: relative; width: 44px; height: 44px; }
+.avatar-wrap :deep(img) { border-radius: 12px; }
+.online-dot { position: absolute; right: -3px; bottom: -3px; width: 12px; height: 12px; border: 2px solid #fff; border-radius: 50%; background: #30b66c; }
+.friend-status { max-width: 90px; color: #9aa7b4; font-size: 11px; text-align: right; white-space: nowrap; }
+.friend-status .online { color: #2fa767; }
+.request-actions { display: flex; gap: 3px; }
+.request-actions :deep(.q-btn) { min-height: 30px; padding: 0 6px; font-size: 11px; }
+.empty-state { display: flex; min-height: 250px; flex-direction: column; align-items: center; justify-content: center; gap: 13px; text-align: center; }
+.empty-icon { display: grid; width: 64px; height: 64px; place-items: center; border-radius: 20px; background: #e9f2fc; color: #1976d2; }
+.empty-title { max-width: 280px; color: #8292a2; font-size: 13px; line-height: 1.5; }
+@media (min-width: 640px) { .friends-shell { padding: 28px 28px 52px; } }
 </style>
