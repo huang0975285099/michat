@@ -186,6 +186,11 @@
       <div class="card">
         <input id="articleTitle" type="text" maxlength="200" placeholder="Title">
         <input id="articleSummary" type="text" maxlength="500" placeholder="Summary">
+        <input id="articleCategory" type="text" maxlength="64" placeholder="Category">
+        <input id="articleTags" type="text" maxlength="500" placeholder="Tags, separated by commas">
+        <input id="articleCover" type="text" maxlength="200" placeholder="Cover image URL (or upload below)">
+        <button type="button" id="uploadCover">Upload cover image</button>
+        <input id="coverInput" type="file" accept="image/jpeg,image/png,image/gif,image/webp" hidden>
         <div class="editor-tools" id="editorTools">
           <button type="button" data-command="bold">Bold</button>
           <button type="button" data-command="italic">Italic</button>
@@ -200,6 +205,7 @@
         <div id="articleContent" class="editor" contenteditable="true" role="textbox" aria-label="Article content" aria-multiline="true" data-placeholder="Write the article here..."></div>
         <div id="mediaStatus" class="meta"></div>
         <label><input id="articlePublished" type="checkbox"> Published</label>
+        <label><input id="articlePinned" type="checkbox"> Pinned</label>
         <div class="err" id="articleErr" hidden></div>
         <div style="margin-top:12px"><button id="articleSave">Create article</button> <button id="articleCancel" hidden>Cancel edit</button></div>
         <div id="articleList" class="tablewrap"></div>
@@ -353,14 +359,18 @@
     editingArticle = null;
     $('articleTitle').value = '';
     $('articleSummary').value = '';
+    $('articleCategory').value = '';
+    $('articleTags').value = '';
+    $('articleCover').value = '';
     $('articleContent').replaceChildren();
     $('articlePublished').checked = false;
+    $('articlePinned').checked = false;
     $('articleSave').textContent = 'Create article';
     $('articleCancel').hidden = true;
   }
   $('articleCancel').addEventListener('click', resetArticle);
   $('articleSave').addEventListener('click', async () => {
-    const body = {title:$('articleTitle').value,summary:$('articleSummary').value,content:$('articleContent').innerHTML,published:$('articlePublished').checked};
+    const body = {title:$('articleTitle').value,summary:$('articleSummary').value,content:$('articleContent').innerHTML,published:$('articlePublished').checked,category:$('articleCategory').value,tags:$('articleTags').value.split(',').map(s => s.trim()).filter(Boolean),cover_url:$('articleCover').value,pinned:$('articlePinned').checked};
     const path = '/api/admin/robot/articles' + (editingArticle ? '/' + editingArticle : '');
     const res = await fetch(path,{method:editingArticle ? 'PUT' : 'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     $('articleErr').hidden = res.ok;
@@ -378,7 +388,7 @@
       row.style.cssText = 'display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--gridline);padding:8px 0';
       const title = document.createElement('span');
       title.style.flex = '1';
-      title.textContent = article.title + (article.published ? ' · Published' : ' · Draft');
+      title.textContent = (article.pinned ? '📌 ' : '') + article.title + (article.category ? ' · ' + article.category : '') + (article.published ? ' · Published' : ' · Draft');
       const edit = document.createElement('button'); edit.textContent = 'Edit';
       const readers = document.createElement('button');
       readers.textContent = 'Readers (' + (article.viewer_count || 0) + ')';
@@ -388,6 +398,8 @@
         if (!detail.ok) return;
         const a = await detail.json(); editingArticle = a.id;
         $('articleTitle').value = a.title; $('articleSummary').value = a.summary;
+        $('articleCategory').value = a.category || ''; $('articleTags').value = (a.tags || []).join(', ');
+        $('articleCover').value = a.cover_url || ''; $('articlePinned').checked = !!a.pinned;
         $('articleContent').innerHTML = a.content; $('articlePublished').checked = a.published;
         $('articleSave').textContent = 'Save changes'; $('articleCancel').hidden = false;
         $('articleTitle').focus();
@@ -443,6 +455,22 @@
     rememberSelection();
   });
   $('uploadImage').onclick = () => { $('mediaInput').accept = 'image/jpeg,image/png,image/gif,image/webp'; $('mediaInput').click(); };
+  $('uploadCover').onclick = () => $('coverInput').click();
+  $('coverInput').onchange = async () => {
+    const file = $('coverInput').files[0];
+    if (!file) return;
+    $('mediaStatus').textContent = 'Uploading cover...';
+    const body = new FormData(); body.append('file', file);
+    try {
+      const res = await fetch('/api/admin/robot/media', {method:'POST', body});
+      if (!res.ok) throw new Error('Cover upload failed (' + res.status + ')');
+      const media = await res.json();
+      if (!media.mime.startsWith('image/')) throw new Error('Cover must be an image');
+      $('articleCover').value = media.url;
+      $('mediaStatus').textContent = 'Cover uploaded: ' + file.name;
+    } catch (error) { $('mediaStatus').textContent = error.message; }
+    $('coverInput').value = '';
+  };
   $('uploadVideo').onclick = () => { $('mediaInput').accept = 'video/mp4,video/webm'; $('mediaInput').click(); };
   $('mediaInput').onchange = async () => {
     const file = $('mediaInput').files[0];

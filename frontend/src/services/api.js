@@ -76,8 +76,11 @@ export const deviceApi = {
 }
 
 export const robotApi = {
-  list: () => api.get('/robot/articles'),
+  list: (params = {}) => api.get('/robot/feed', { params }),
+  filters: () => api.get('/robot/filters'),
   get: (id) => api.get(`/robot/articles/${encodeURIComponent(id)}`),
+  state: (id) => api.get(`/robot/articles/${encodeURIComponent(id)}/state`),
+  bookmark: (id, value) => api[value ? 'put' : 'delete'](`/robot/articles/${encodeURIComponent(id)}/bookmark`),
   recordView: (id) => api.post(`/robot/articles/${encodeURIComponent(id)}/view`),
 }
 

@@ -245,9 +245,19 @@ export const useIdentityStore = defineStore('identity', () => {
    * Clear local identity (user actively logs out)
    */
   async function clear() {
-    await deleteAccountThenClear(
-      () => identityApi.deleteAccount(),
-      async () => {
+    await deleteAccountThenClear(() => identityApi.deleteAccount(), clearLocalState)
+  }
+
+  // Sign out this device without deleting the server-side identity.
+  async function logout() {
+    try { await identityApi.logout() } catch (error) {
+      // A missing or expired session is already logged out; continue clearing local state.
+      if (error?.response?.status !== 401) throw error
+    }
+    await clearLocalState()
+  }
+
+  async function clearLocalState() {
         if (autoLockCleanup) {
           autoLockCleanup()
           autoLockCleanup = null
@@ -270,8 +280,6 @@ export const useIdentityStore = defineStore('identity', () => {
         hasCode.value = false
         isLocked.value = false
         friendPubKeys.value = {}
-      },
-    )
   }
 
   async function updateNickname(name) {
@@ -287,7 +295,7 @@ export const useIdentityStore = defineStore('identity', () => {
     pendingRequestCount,
     setPendingRequestCount: (n) => { pendingRequestCount.value = n },
     incPendingRequestCount: () => { pendingRequestCount.value++ },
-    load, loadFriendPubKeys, initialize, exportKey, clear,
+    load, loadFriendPubKeys, initialize, exportKey, clear, logout,
     unlockWithCode, lockNow, enableSecurityCode, disableSecCode, setLockTimeout,
     updateNickname
   }

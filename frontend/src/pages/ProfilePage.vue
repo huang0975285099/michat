@@ -169,6 +169,14 @@
                     <q-item-label caption>{{ t("profile.deleteAccountHint") }}</q-item-label>
                 </q-item-section>
             </q-item>
+
+            <q-item clickable @click="confirmLogout">
+                <q-item-section avatar><q-icon name="logout" color="primary" /></q-item-section>
+                <q-item-section>
+                    <q-item-label>{{ t("profile.logout") }}</q-item-label>
+                    <q-item-label caption>{{ t("profile.logoutHint") }}</q-item-label>
+                </q-item-section>
+            </q-item>
         </q-list>
 
         <!-- <q-btn
@@ -1065,6 +1073,23 @@ function confirmClear() {
             }
         });
     });
+}
+
+function confirmLogout() {
+    $q.dialog({
+        title: t("profile.logoutTitle"),
+        message: t("profile.logoutMessage"),
+        cancel: true,
+        persistent: true,
+        ok: { label: t("profile.logoutConfirm"), color: "primary" },
+    }).onOk(async () => {
+        try {
+            await identity.logout()
+            router.replace("/init")
+        } catch {
+            $q.notify({ type: "negative", message: t("profile.logoutFailed") })
+        }
+    })
 }
 </script>
 

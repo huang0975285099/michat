@@ -250,6 +250,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("robot media storage: %v", err)
 	}
+	robotHandler.SetMediaDir(robotMediaPath)
 	attachmentHandler := handler.NewAttachmentHandler(attachmentSvc)
 
 	// Current limiting (mainly mobile phone + operator CGNAT: relax the threshold by IP, the main line of defense is based on user authRL):
@@ -283,6 +284,7 @@ func main() {
 		open.GET("/invite/validate", inviteHandler.Validate)
 		open.GET("/version", versionHandler.Get)
 		open.GET("/robot/articles", robotHandler.List)
+		open.GET("/robot/filters", robotHandler.Filters)
 		open.GET("/robot/articles/:id", robotHandler.Get)
 		open.GET("/robot/media/:name", robotMediaHandler.Get)
 		open.POST("/admin/login", adminAuth.Login)
@@ -315,6 +317,10 @@ func main() {
 		auth.POST("/attachments/:id/ack", attachmentHandler.Acknowledge)
 		auth.DELETE("/attachments/:id", attachmentHandler.Cancel)
 		auth.POST("/robot/articles/:id/view", robotHandler.RecordView)
+		auth.GET("/robot/feed", robotHandler.List)
+		auth.GET("/robot/articles/:id/state", robotHandler.GetState)
+		auth.PUT("/robot/articles/:id/bookmark", robotHandler.Bookmark)
+		auth.DELETE("/robot/articles/:id/bookmark", robotHandler.Unbookmark)
 
 		admin := api.Group("/admin", adminAuth.Require())
 		admin.GET("/stats", adminHandler.GetStats)
