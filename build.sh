@@ -30,9 +30,9 @@ MODE="all"
 CREATE_PACKAGE=false
 
 REMOTE_USER="${REMOTE_USER:-test}"
-REMOTE_IP="${REMOTE_IP:-112.18.238.6}"
+REMOTE_IP="${REMOTE_IP:-10.66.66.1}"
 REMOTE_DIR="${REMOTE_DIR:-/home/test/e2eechat}"
-SSH_PORT="${SSH_PORT:-2202}"
+SSH_PORT="${SSH_PORT:-22}"
 SSH_KEY="${SSH_KEY:-}"
 SSH_ARGS=(-p "$SSH_PORT")
 SCP_ARGS=(-P "$SSH_PORT")
@@ -120,7 +120,7 @@ build_backend() {
 
 build_frontend() {
     log_info "Building e2eechat-frontend:$VERSION..."
-    docker build -t "e2eechat-frontend:$VERSION" -t e2eechat-frontend:latest ./frontend
+    docker build --network host -t "e2eechat-frontend:$VERSION" -t e2eechat-frontend:latest ./frontend
     docker save "e2eechat-frontend:$VERSION" e2eechat-frontend:latest | gzip > "$OUTPUT_DIR/e2eechat-frontend.tar.gz"
 }
 
