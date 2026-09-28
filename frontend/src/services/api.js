@@ -84,6 +84,11 @@ export const robotApi = {
   recordView: (id) => api.post(`/robot/articles/${encodeURIComponent(id)}/view`),
 }
 
+export const companyApi = {
+  list: (params = {}) => api.get('/intelligence/companies', { params }),
+  get: (slug) => api.get(`/intelligence/companies/${encodeURIComponent(slug)}`),
+}
+
 // Offline encrypted attachments. These endpoints only receive opaque AES-GCM
 // chunks and operational sizes; the file key/name/type remain inside chat E2EE.
 export const attachmentApi = {

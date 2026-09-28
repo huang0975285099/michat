@@ -113,6 +113,8 @@
   .article-field { display:block; margin:14px 0; }
   .article-field > span:first-child { display:block; font-size:13px; font-weight:600; margin-bottom:6px; }
   .article-field input, .article-field textarea { margin:0; }
+  .article-field select { width:100%; min-height:40px; padding:8px 10px; border:1px solid var(--border); border-radius:6px; background:var(--page); color:var(--text-primary); }
+  .article-field input[type=date], .article-field input[type=url] { width:100%; min-height:40px; padding:8px 10px; border:1px solid var(--border); border-radius:6px; background:var(--page); color:var(--text-primary); }
   .article-field textarea { min-height:86px; resize:vertical; }
   .article-hint { color:var(--text-muted); font-size:12px; margin:5px 0 0; }
   .article-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 14px; }
@@ -224,7 +226,7 @@
 
     <section id="articlesSection">
       <div class="article-head">
-        <div><h2>具身智能资讯</h2><p>管理文章、图片和视频。保存草稿后，读者暂时看不到。</p></div>
+        <div><h2>具身智能情报追踪</h2><p>管理文章、图片和视频。保存草稿后，读者暂时看不到。 <a href="/admin/intelligence">管理公司与官方来源 →</a></p></div>
         <button id="articleNew" type="button">＋ 新建资讯</button>
       </div>
       <div class="article-workspace">
@@ -245,6 +247,11 @@
             <label class="article-field"><span>标签</span><input id="articleTags" type="text" maxlength="500" placeholder="例如：机器人, 融资"><span class="article-hint">用英文逗号分隔，最多 10 个</span></label>
           </div>
           <label class="article-field"><span>来源</span><input id="articleSource" type="text" maxlength="200" placeholder="例如：北京日报或官方网站"></label>
+          <div class="article-grid">
+            <label class="article-field"><span>关联公司</span><select id="articleCompany"><option value="">不关联公司</option></select><span class="article-hint">只有人工关联后的文章才会出现在公司时间线。</span></label>
+            <label class="article-field"><span>事件日期</span><input id="articleOccurredOn" type="date"><span class="article-hint">填写事件发生或首次公开的日期。</span></label>
+          </div>
+          <label class="article-field"><span>原始来源链接</span><input id="articleSourceUrl" type="url" maxlength="500" placeholder="https://..."><span class="article-hint">关联公司并发布时必填，读者可打开原始证据。</span></label>
           <div class="article-field"><span>正文 *</span><p class="article-hint">选中文字后可加粗、添加标题或链接。光标所在位置可以插入图片和视频。</p></div>
           <div class="editor-tools" id="editorTools" role="toolbar" aria-label="正文格式">
             <button type="button" data-command="bold" title="加粗">加粗</button>
@@ -374,6 +381,7 @@
   let articleSaving = false;
   let readersArticle = null;
   let readersOffset = 0;
+  let companyChoices = [];
 
   // ── Auth gate ────────────────────────────────────────
   function showGate(msg) {
@@ -418,6 +426,7 @@
       if (res.ok) render(await res.json());
       else { $('gate').hidden = true; $('dash').hidden = false; }
       loadArticles();
+      loadCompanyOptions();
     } catch (e) {
       showGate('Could not reach the server.');
     }
@@ -427,9 +436,29 @@
     return {
       title: $('articleTitle').value.trim(), summary: $('articleSummary').value.trim(),
       source: $('articleSource').value.trim(), content: $('articleContent').innerHTML,
+      source_url: $('articleSourceUrl').value.trim(), company_id: $('articleCompany').value ? Number($('articleCompany').value) : null,
+      occurred_on: $('articleOccurredOn').value,
       published: $('articlePublished').checked, category: $('articleCategory').value.trim(),
       tags: $('articleTags').value.split(',').map(s => s.trim()).filter(Boolean), pinned: $('articlePinned').checked
     };
+  }
+  async function loadCompanyOptions() {
+    try {
+      const choices = [];
+      for (let offset = 0; offset < 1000; offset += 100) {
+        const res = await fetch('/api/admin/intelligence/companies?limit=100&offset=' + offset, {cache:'no-store'});
+        if (!res.ok) throw new Error('公司列表加载失败');
+        const data = await res.json();
+        choices.push(...(data.companies || []));
+        if (!data.has_more) break;
+      }
+      companyChoices = choices;
+      const selected = $('articleCompany').value;
+      $('articleCompany').replaceChildren(new Option('不关联公司',''));
+      for (const company of choices) $('articleCompany').add(new Option((company.name_zh || company.name_en) + (company.active ? '' : '（未公开）'), String(company.id)));
+      if (selected && !choices.some(company => String(company.id) === selected)) $('articleCompany').add(new Option('公司 #' + selected, selected));
+      $('articleCompany').value = selected;
+    } catch { /* Article editing remains available if the company directory cannot load. */ }
   }
   function articleSnapshot() { return JSON.stringify(articlePayload()); }
   function articleIsDirty() { return articleCleanState !== '' && articleSnapshot() !== articleCleanState; }
@@ -456,6 +485,9 @@
     $('articleCategory').value = '';
     $('articleTags').value = '';
     $('articleSource').value = '';
+    $('articleSourceUrl').value = '';
+    $('articleCompany').value = '';
+    $('articleOccurredOn').value = '';
     $('articleContent').replaceChildren();
     $('articlePublished').checked = false;
     $('articlePinned').checked = false;
@@ -474,7 +506,7 @@
   $('articleNew').addEventListener('click', () => {
     if (resetArticle()) $('articleEditor').scrollIntoView({ behavior:'smooth', block:'start' });
   });
-  for (const id of ['articleTitle','articleSummary','articleCategory','articleTags','articleSource','articlePublished','articlePinned']) {
+  for (const id of ['articleTitle','articleSummary','articleCategory','articleTags','articleSource','articleSourceUrl','articleCompany','articleOccurredOn','articlePublished','articlePinned']) {
     $(id).addEventListener('input', () => { updateArticleControls(); $('articleSaveStatus').textContent = ''; });
   }
   $('articleContent').addEventListener('input', () => { $('articleSaveStatus').textContent = ''; });
@@ -491,6 +523,9 @@
     if (body.tags.length > 10 || body.tags.some(tag => tag.length > 30 || tag.includes(',')) || body.category.includes(',')) {
       showArticleError('分类不能含逗号；标签最多 10 个，每个不超过 30 字。'); return;
     }
+    if (body.published && body.company_id && (!body.source_url || !body.occurred_on)) {
+      showArticleError('关联公司并发布时，请填写事件日期和原始来源链接。'); return;
+    }
     const path = '/api/admin/robot/articles' + (editingArticle ? '/' + editingArticle : '');
     articleSaving = true;
     updateArticleControls();
@@ -500,7 +535,7 @@
       const res = await fetch(path,{method:editingArticle ? 'PUT' : 'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       if (!res.ok) {
         const response = await res.json().catch(() => ({}));
-        const reason = res.status === 401 ? '登录已过期，请重新登录。' : res.status === 403 ? '请求被拒绝，请刷新后台后重新登录。' : response.error === 'title or content invalid' ? '标题或正文不符合要求；正文 HTML 不得超过 100 KB。' : response.error === 'invalid category or tags' || response.error === 'invalid tags' ? '分类或标签不符合要求。' : '保存失败（' + res.status + '），请稍后重试。';
+        const reason = res.status === 401 ? '登录已过期，请重新登录。' : res.status === 403 ? '请求被拒绝，请刷新后台后重新登录。' : response.error === 'title or content invalid' ? '标题或正文不符合要求；正文 HTML 不得超过 100 KB。' : response.error === 'invalid category or tags' || response.error === 'invalid tags' ? '分类或标签不符合要求。' : response.error === 'invalid company evidence' ? '请核对公司、事件日期和原始来源链接。' : response.error === 'unknown company' || response.error === 'company is not public' ? '关联公司不存在或尚未公开。' : '保存失败（' + res.status + '），请稍后重试。';
         throw new Error(reason);
       }
       articleSaving = false;
@@ -564,6 +599,10 @@
           $('articleTitle').value = a.title; $('articleSummary').value = a.summary || '';
           $('articleCategory').value = a.category || ''; $('articleTags').value = (a.tags || []).join(', ');
           $('articleSource').value = a.source || ''; $('articlePinned').checked = !!a.pinned;
+          $('articleSourceUrl').value = a.source_url || '';
+          if (a.company_id && !$('articleCompany').querySelector('option[value="' + a.company_id + '"]')) $('articleCompany').add(new Option('公司 #' + a.company_id, String(a.company_id)));
+          $('articleCompany').value = a.company_id || '';
+          $('articleOccurredOn').value = a.occurred_on || '';
           $('articleContent').innerHTML = a.content; $('articlePublished').checked = a.published;
           $('articleFormTitle').textContent = '编辑资讯'; $('articleCancel').hidden = false;
           $('articleSaveStatus').textContent = ''; showArticleError(''); updateArticleControls();

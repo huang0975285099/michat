@@ -12,6 +12,9 @@ import (
 //go:embed admin.html
 var adminPageHTML string
 
+//go:embed company_admin.html
+var companyAdminHTML string
+
 // AdminHandler serves the operator dashboard: one static HTML page plus the
 // aggregate JSON it renders. Both sit behind Auth + AdminOnly.
 type AdminHandler struct {
@@ -29,6 +32,11 @@ func NewAdminHandler(adminSvc *service.AdminService) *AdminHandler {
 func (h *AdminHandler) Page(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(adminPageHTML))
+}
+
+func (h *AdminHandler) CompanyPage(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(companyAdminHTML))
 }
 
 // GET /api/admin/stats

@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>公司资料 · Yunmi 后台</title>
+<style>
+  :root { color-scheme:light; --bg:#f5f7fa; --surface:#fff; --text:#182536; --muted:#65778a; --line:#dde6ef; --blue:#1976d2; --red:#b32b2b; }
+  @media (prefers-color-scheme:dark) { :root { color-scheme:dark; --bg:#101820; --surface:#192531; --text:#f4f7fa; --muted:#a7b7c6; --line:#314354; --blue:#6ab0fa; --red:#ff8888; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:1180px; margin:auto; padding:24px 18px 56px; }
+  header { display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:23px; }
+  h1 { margin:0 0 3px; font-size:24px; }
+  h2 { margin:0 0 16px; font-size:18px; }
+  h3 { margin:0 0 10px; font-size:15px; }
+  p { margin:0; }
+  a { color:var(--blue); }
+  .muted { color:var(--muted); }
+  .header-actions { display:flex; gap:14px; padding-top:7px; }
+  .workspace { display:grid; grid-template-columns:minmax(240px,310px) minmax(0,1fr); gap:16px; align-items:start; }
+  .card { min-width:0; padding:19px; border:1px solid var(--line); border-radius:14px; background:var(--surface); }
+  .sidebar { position:sticky; top:16px; }
+  .sidebar-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  label { display:block; font-weight:600; margin:0 0 12px; }
+  label span { display:block; margin-bottom:5px; }
+  input,textarea,select,button { font:inherit; }
+  input:not([type=checkbox]),textarea,select { width:100%; min-height:39px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--text); }
+  textarea { min-height:96px; resize:vertical; }
+  input[readonly] { opacity:.7; }
+  button { border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--text); padding:8px 13px; cursor:pointer; }
+  button:hover { border-color:var(--blue); }
+  button:disabled { opacity:.5; cursor:default; }
+  button.primary { background:var(--blue); border-color:var(--blue); color:#fff; }
+  button.danger { color:var(--red); }
+  :focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+  .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 14px; }
+  .hint { color:var(--muted); font-size:12px; font-weight:400; margin:4px 0 0; }
+  .check { display:flex; align-items:center; gap:9px; font-weight:400; }
+  .check input { margin:0; }
+  .form-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:16px 0; }
+  .message { min-height:20px; margin:8px 0; color:var(--muted); }
+  .message.error { color:var(--red); }
+  .message.success { color:#16803d; }
+  .list { display:grid; gap:7px; max-height:65vh; overflow:auto; margin:12px 0; }
+  .company-item { display:block; width:100%; text-align:left; padding:11px 12px; }
+  .company-item.selected { border-color:var(--blue); box-shadow:0 0 0 1px var(--blue); }
+  .company-item strong,.company-item small { display:block; }
+  .company-item small { margin-top:3px; color:var(--muted); }
+  .source-section { margin-top:28px; border-top:1px solid var(--line); padding-top:24px; }
+  .source-list { display:grid; gap:8px; margin-bottom:18px; }
+  .source-row { display:flex; align-items:center; justify-content:space-between; gap:10px; border:1px solid var(--line); border-radius:9px; padding:10px 12px; }
+  .source-row a { overflow-wrap:anywhere; }
+  .source-row small { display:block; color:var(--muted); }
+  .source-add { display:grid; grid-template-columns:145px minmax(120px,1fr); gap:0 12px; }
+  .source-url { grid-column:1/-1; }
+  [hidden] { display:none !important; }
+  @media (max-width:780px) { .workspace { grid-template-columns:1fr; } .sidebar { position:static; } .list { max-height:260px; } }
+  @media (max-width:520px) { .grid,.source-add { grid-template-columns:1fr; } .source-url { grid-column:auto; } main { padding:18px 12px 40px; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>公司资料与官方来源</h1><p class="muted">先建立经过核对的公司档案，再把资讯关联到公司。</p></div>
+    <nav class="header-actions"><a href="/admin">返回资讯后台</a></nav>
+  </header>
+  <div id="authMessage" class="message error" role="alert" hidden></div>
+  <div class="workspace">
+    <aside class="card sidebar">
+      <div class="sidebar-head"><h2>公司目录</h2><button type="button" id="newCompany">＋ 新建</button></div>
+      <input id="companySearch" type="search" maxlength="100" placeholder="搜索公司或方向" aria-label="搜索公司">
+      <div id="listStatus" class="message" role="status"></div>
+      <div id="companyList" class="list"></div>
+      <button id="moreCompanies" type="button" hidden>加载更多</button>
+    </aside>
+    <div class="card">
+      <h2 id="formTitle">新建公司</h2>
+      <p class="hint">只填写已核对的事实。公开后，App 用户可看到档案及其官方来源。</p>
+      <form id="companyForm">
+        <div class="grid">
+          <label><span>固定网址标识 *</span><input id="slug" maxlength="80" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="例如 unitree" required><p class="hint">仅小写字母、数字和短横线；创建后不可修改。</p></label>
+          <label><span>地区</span><input id="region" maxlength="100" placeholder="例如：中国 / 美国"></label>
+          <label><span>中文名称</span><input id="nameZh" maxlength="120" placeholder="至少填写中英文名称之一"></label>
+          <label><span>英文名称</span><input id="nameEn" maxlength="120"></label>
+        </div>
+        <label><span>别名</span><input id="aliases" placeholder="用英文逗号分隔，最多 12 个"><p class="hint">用于搜索与后续实体匹配，不能填未经核对的产品名称。</p></label>
+        <label><span>关注方向</span><input id="focus" maxlength="200" placeholder="例如：人形机器人、具身基础模型"></label>
+        <label><span>官方网站</span><input id="website" type="url" maxlength="500" placeholder="https://..."></label>
+        <label><span>简介</span><textarea id="description" maxlength="4000" placeholder="简述公司与具身智能的关系"></textarea></label>
+        <label class="check"><input id="active" type="checkbox"><span>公开展示这家公司</span></label>
+        <div class="form-actions"><button class="primary" id="saveCompany" type="submit">保存公司</button><button id="cancelEdit" type="button">清空表单</button></div>
+        <div id="formStatus" class="message" role="status" aria-live="polite"></div>
+      </form>
+      <section id="sourcesSection" class="source-section" hidden>
+        <h2>官方来源</h2>
+        <p class="hint">这里记录核对过的官方渠道。目前不会自动抓取；来源会显示在 App 公司详情页。</p>
+        <div id="sourceList" class="source-list"></div>
+        <form id="sourceForm">
+          <div class="source-add">
+            <label><span>渠道类型</span><select id="sourceKind"><option value="website">官网</option><option value="blog">博客 / 新闻室</option><option value="github">GitHub</option><option value="youtube">YouTube</option><option value="social">官方社交账号</option><option value="filing">公开披露</option><option value="other">其他</option></select></label>
+            <label><span>显示名称</span><input id="sourceLabel" maxlength="120" required placeholder="例如：官方新闻室"></label>
+            <label class="source-url"><span>官方链接</span><input id="sourceUrl" type="url" maxlength="500" required placeholder="https://..."></label>
+          </div>
+          <label class="check"><input id="sourceVerified" type="checkbox" required><span>我已核对该链接属于这家公司</span></label>
+          <div class="form-actions"><button type="submit">添加来源</button><span id="sourceStatus" class="message" role="status" aria-live="polite"></span></div>
+        </form>
+      </section>
+    </div>
+  </div>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let companies = [], hasMore = false, selectedId = null, cleanState = '', searchTimer = null, requestId = 0;
+  async function request(path, options = {}) {
+    const response = await fetch(path, { cache:'no-store', ...options });
+    if (response.status === 401) { $('authMessage').hidden = false; $('authMessage').textContent = '管理员登录已过期。请返回资讯后台重新登录。'; throw new Error('请重新登录'); }
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error === 'duplicate company or source' ? '标识或来源链接已存在。' : body.error || '请求失败（' + response.status + '）');
+    }
+    return response.status === 204 ? null : response.json();
+  }
+  function payload() {
+    return { slug:$('slug').value.trim(), name_zh:$('nameZh').value.trim(), name_en:$('nameEn').value.trim(),
+      aliases:$('aliases').value.split(',').map(v => v.trim()).filter(Boolean), region:$('region').value.trim(),
+      focus:$('focus').value.trim(), website:$('website').value.trim(), description:$('description').value.trim(), active:$('active').checked };
+  }
+  function dirty() { return cleanState && JSON.stringify(payload()) !== cleanState; }
+  function status(id, message, kind = '') { $(id).textContent = message; $(id).className = 'message ' + kind; }
+  function clearForm(force = false) {
+    if (!force && dirty() && !confirm('放弃尚未保存的公司修改？')) return false;
+    selectedId = null; $('companyForm').reset(); $('slug').readOnly = false;
+    $('formTitle').textContent = '新建公司'; $('sourcesSection').hidden = true;
+    status('formStatus',''); cleanState = JSON.stringify(payload()); renderList(); return true;
+  }
+  function renderList() {
+    $('companyList').replaceChildren();
+    for (const company of companies) {
+      const button = document.createElement('button'); button.type = 'button';
+      button.className = 'company-item' + (company.id === selectedId ? ' selected' : '');
+      const name = document.createElement('strong'); name.textContent = company.name_zh || company.name_en;
+      const sub = document.createElement('small'); sub.textContent = company.slug + ' · ' + (company.active ? '公开' : '草稿') + ' · ' + company.article_count + ' 条动态';
+      button.append(name, sub); button.onclick = () => selectCompany(company.id); $('companyList').append(button);
+    }
+    $('moreCompanies').hidden = !hasMore;
+    status('listStatus', companies.length ? '已加载 ' + companies.length + ' 家' : '暂无公司');
+  }
+  async function loadCompanies(reset = true) {
+    const current = ++requestId;
+    try {
+      const params = new URLSearchParams({limit:'50', offset:String(reset ? 0 : companies.length)});
+      if ($('companySearch').value.trim()) params.set('search',$('companySearch').value.trim());
+      const data = await request('/api/admin/intelligence/companies?' + params);
+      if (current !== requestId) return;
+      companies = reset ? data.companies : [...companies, ...data.companies]; hasMore = !!data.has_more; renderList();
+    } catch (error) { if (current === requestId) status('listStatus', error.message, 'error'); }
+  }
+  function renderSources(sources) {
+    $('sourceList').replaceChildren();
+    if (!sources.length) { const empty = document.createElement('p'); empty.className = 'hint'; empty.textContent = '尚未添加官方来源。'; $('sourceList').append(empty); return; }
+    for (const source of sources) {
+      const row = document.createElement('div'); row.className = 'source-row';
+      const text = document.createElement('div');
+      const link = document.createElement('a'); link.href = source.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = source.label;
+      const sub = document.createElement('small'); sub.textContent = source.kind + ' · ' + source.url;
+      text.append(link,sub);
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'danger'; remove.textContent = '移除';
+      remove.onclick = async () => {
+        if (!confirm('移除官方来源“' + source.label + '”？')) return;
+        try { await request('/api/admin/intelligence/companies/' + selectedId + '/sources/' + source.id,{method:'DELETE'}); await refreshSelected(); }
+        catch(error) { status('sourceStatus',error.message,'error'); }
+      };
+      row.append(text,remove); $('sourceList').append(row);
+    }
+  }
+  async function refreshSelected() {
+    if (!selectedId) return;
+    const data = await request('/api/admin/intelligence/companies/' + selectedId);
+    renderSources(data.sources || []);
+  }
+  async function selectCompany(id) {
+    if (id !== selectedId && dirty() && !confirm('放弃尚未保存的公司修改？')) return;
+    try {
+      const data = await request('/api/admin/intelligence/companies/' + id);
+      const company = data.company; selectedId = company.id;
+      $('slug').value = company.slug; $('slug').readOnly = true;
+      $('nameZh').value = company.name_zh; $('nameEn').value = company.name_en;
+      $('aliases').value = (company.aliases || []).join(', '); $('region').value = company.region;
+      $('focus').value = company.focus; $('website').value = company.website;
+      $('description').value = company.description; $('active').checked = company.active;
+      $('formTitle').textContent = '编辑公司 · ' + (company.name_zh || company.name_en);
+      $('sourcesSection').hidden = false; renderSources(data.sources || []);
+      status('formStatus',''); status('sourceStatus',''); cleanState = JSON.stringify(payload()); renderList();
+    } catch (error) { status('formStatus',error.message,'error'); }
+  }
+  $('companyForm').onsubmit = async event => {
+    event.preventDefault();
+    const body = payload();
+    if (!body.name_zh && !body.name_en) { status('formStatus','请填写中文或英文名称。','error'); return; }
+    const path = '/api/admin/intelligence/companies' + (selectedId ? '/' + selectedId : '');
+    $('saveCompany').disabled = true; status('formStatus','正在保存…');
+    try {
+      const result = await request(path,{method:selectedId ? 'PUT' : 'POST', headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const id = selectedId || result.id; cleanState = JSON.stringify(body);
+      await loadCompanies(true); await selectCompany(id); status('formStatus','已保存。','success');
+    } catch (error) { status('formStatus',error.message,'error'); }
+    finally { $('saveCompany').disabled = false; }
+  };
+  $('sourceForm').onsubmit = async event => {
+    event.preventDefault(); if (!selectedId) return;
+    if (!$('sourceVerified').checked) { status('sourceStatus','请先核对官方来源。','error'); return; }
+    status('sourceStatus','正在保存…');
+    try {
+      await request('/api/admin/intelligence/companies/' + selectedId + '/sources',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:$('sourceKind').value,label:$('sourceLabel').value.trim(),url:$('sourceUrl').value.trim()})});
+      $('sourceForm').reset(); await refreshSelected(); status('sourceStatus','来源已添加。','success');
+    } catch (error) { status('sourceStatus',error.message,'error'); }
+  };
+  $('newCompany').onclick = () => { if (clearForm()) $('slug').focus(); };
+  $('cancelEdit').onclick = () => clearForm();
+  $('moreCompanies').onclick = () => loadCompanies(false);
+  $('companySearch').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadCompanies(true),300); };
+  window.addEventListener('beforeunload', event => { if (dirty()) { event.preventDefault(); event.returnValue = ''; } });
+  clearForm(true); loadCompanies();
+})();
+</script>
+</body>
+</html>

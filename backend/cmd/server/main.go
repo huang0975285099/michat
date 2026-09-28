@@ -242,6 +242,7 @@ func main() {
 	adminHandler := handler.NewAdminHandler(adminSvc)
 	adminAuth := handler.NewAdminAuth(os.Getenv("ADMIN_USERNAME"), os.Getenv("ADMIN_PASSWORD"))
 	robotHandler := handler.NewRobotHandler(db)
+	companyHandler := handler.NewCompanyHandler(db)
 	robotMediaPath := os.Getenv("ROBOT_MEDIA_PATH")
 	if robotMediaPath == "" {
 		robotMediaPath = "./data/robot-media"
@@ -286,6 +287,8 @@ func main() {
 		open.GET("/robot/articles", robotHandler.List)
 		open.GET("/robot/filters", robotHandler.Filters)
 		open.GET("/robot/articles/:id", robotHandler.Get)
+		open.GET("/intelligence/companies", companyHandler.List)
+		open.GET("/intelligence/companies/:slug", companyHandler.Get)
 		open.GET("/robot/media/:name", robotMediaHandler.Get)
 		open.POST("/admin/login", adminAuth.Login)
 
@@ -332,11 +335,18 @@ func main() {
 		admin.PUT("/robot/articles/:id", robotHandler.Update)
 		admin.DELETE("/robot/articles/:id", robotHandler.Delete)
 		admin.POST("/robot/media", robotMediaHandler.Upload)
+		admin.GET("/intelligence/companies", companyHandler.List)
+		admin.GET("/intelligence/companies/:id", companyHandler.Get)
+		admin.POST("/intelligence/companies", companyHandler.Create)
+		admin.PUT("/intelligence/companies/:id", companyHandler.Update)
+		admin.POST("/intelligence/companies/:id/sources", companyHandler.AddSource)
+		admin.DELETE("/intelligence/companies/:id/sources/:sourceId", companyHandler.DeleteSource)
 	}
 
 	// The dashboard shell itself. It holds no data — it prompts for a token and then
 	// calls /api/admin/stats, which is where the actual authorisation happens.
 	r.GET("/admin", publicRL.Limit(), adminHandler.Page)
+	r.GET("/admin/intelligence", publicRL.Limit(), adminHandler.CompanyPage)
 
 	// Start a scheduled task: automatically reject friend requests that have not been processed for more than 7 days
 	go func() {

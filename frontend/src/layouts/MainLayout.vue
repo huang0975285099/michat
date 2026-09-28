@@ -7,10 +7,10 @@
                     dense
                     round
                     icon="arrow_back"
-                    @click="route.path.startsWith('/robot/') ? router.push('/robot') : router.back()"
+                    @click="goBack"
                     v-if="canGoBack"
                 />
-                <q-toolbar-title>{{ pageTitle }}</q-toolbar-title>
+                <q-toolbar-title :class="{ 'robot-toolbar-title': route.path.startsWith('/robot') }">{{ pageTitle }}</q-toolbar-title>
                 <q-btn
                     v-if="identity.hasCode"
                     flat
@@ -214,7 +214,7 @@ const showNav = computed(() => {
 
 // Chat details use the full available height; the global header remains visible.
 const showFooter = computed(
-    () => showNav.value && !route.path.startsWith("/chat/") && !route.path.startsWith("/robot/") && route.path !== "/attachment-storage",
+    () => showNav.value && !route.path.startsWith("/chat/") && (!route.path.startsWith("/robot/") || route.path === "/robot/tracker") && route.path !== "/attachment-storage",
 );
 
 const chatStore = useChatStore();
@@ -347,6 +347,27 @@ watch(wsConnected, (connected) => {
 
 const canGoBack = computed(() => route.path.startsWith("/chat/") || route.path.startsWith("/robot/") || route.path === "/attachment-storage");
 
+function goBack() {
+    if (route.path.startsWith('/robot/tracker/companies/')) {
+        router.push('/robot/tracker/companies');
+        return;
+    }
+    if (route.path === '/robot/tracker/companies') {
+        router.push('/robot/tracker');
+        return;
+    }
+    if (route.path.startsWith('/robot/')) {
+        const from = route.query.from;
+        if (typeof from === 'string' && /^\/robot\/tracker\/companies\/[a-z0-9-]+$/.test(from)) {
+            router.push(from);
+        } else {
+            router.push(from === 'tracker' ? '/robot/tracker' : '/robot');
+        }
+        return;
+    }
+    router.back();
+}
+
 function doLockNow() {
     identity.lockNow();
     Notify.create({ type: "info", message: t("header.locked"), timeout: 2000 });
@@ -387,6 +408,7 @@ const pageTitle = computed(() => {
 </script>
 
 <style scoped>
+.robot-toolbar-title { min-width: 0; white-space: normal; overflow-wrap: break-word; line-height: 1.2; font-size: 18px; padding-top: 6px; padding-bottom: 6px; }
 @keyframes spin-once {
     from { transform: rotate(0deg); }
     to   { transform: rotate(360deg); }

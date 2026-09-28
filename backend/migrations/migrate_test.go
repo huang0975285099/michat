@@ -17,6 +17,14 @@ func TestReliableMessageInboxMigrationRegistered(t *testing.T) {
 	}
 }
 
+func TestCompanyTrackerMigrationRegistered(t *testing.T) {
+	for _, required := range []string{"intelligence_companies", "intelligence_company_sources", "company_id", "source_url", "occurred_on"} {
+		if !strings.Contains(intelligenceCompaniesSQL, required) {
+			t.Fatalf("company tracker migration is missing %s", required)
+		}
+	}
+}
+
 func TestEncryptedAttachmentsMigrationRegisteredWithoutPlaintextMetadata(t *testing.T) {
 	if strings.TrimSpace(encryptedAttachmentsSQL) == "" {
 		t.Fatal("encrypted attachments migration is not embedded")

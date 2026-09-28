@@ -12,10 +12,13 @@
           <div class="detail-category">{{ article.category || t('具身智能资讯', 'Embodied AI News') }}</div>
           <h1>{{ article.title }}</h1>
           <div class="detail-meta">
+            <span v-if="article.occurred_on">{{ t('事件日期：', 'Event date: ') }}{{ article.occurred_on }}</span>
             <span v-if="formatDate(article.published_at)">{{ formatDate(article.published_at) }}</span>
             <span v-if="read" class="read-status"><q-icon name="done" size="15px" />{{ t('已读', 'Read') }}</span>
           </div>
           <div v-if="article.source" class="detail-source">{{ t('来源：', 'Source: ') }}{{ article.source }}</div>
+          <router-link v-if="article.company_slug" :to="`/robot/tracker/companies/${article.company_slug}`" class="company-link"><q-icon name="domain" size="15px" />{{ t('查看公司档案', 'View company profile') }}</router-link>
+          <a v-if="article.source_url" :href="article.source_url" target="_blank" rel="noopener noreferrer" class="source-link"><q-icon name="open_in_new" size="15px" />{{ t('查看原始来源', 'View original source') }}</a>
           <div v-if="article.tags?.length" class="detail-tags"><span v-for="value in article.tags" :key="value">#{{ value }}</span></div>
         </div>
         <div class="article-body-wrap">
@@ -127,7 +130,10 @@ watch(() => route.params.id, load)
 .detail-category { margin-bottom: 11px; color: #1976d2; font-size: 12px; font-weight: 700; }
 h1 { margin: 0; font-size: clamp(23px, 5vw, 30px); line-height: 1.42; font-weight: 700; overflow-wrap: anywhere; }
 .detail-meta { display: flex; align-items: center; gap: 15px; margin-top: 15px; color: #8a98a7; font-size: 12px; }
+.detail-meta { flex-wrap: wrap; }
 .detail-source { margin-top: 10px; color: #68798b; font-size: 12px; overflow-wrap: anywhere; }
+.source-link { display:inline-flex; align-items:center; gap:4px; margin-top:9px; color:#1976d2; font-size:12px; text-decoration:none; }
+.company-link { display:inline-flex; align-items:center; gap:4px; margin:9px 12px 0 0; color:#1976d2; font-size:12px; text-decoration:none; }
 .read-status { display: inline-flex; align-items: center; gap: 2px; }
 .detail-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 15px; }
 .detail-tags span { padding: 5px 9px; border-radius: 7px; background: #f1f6fc; color: #47729e; font-size: 11px; }
