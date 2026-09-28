@@ -20,24 +20,33 @@
             <!-- 6-digit PIN entry -->
             <div class="pin-row q-mb-lg">
                 <input
-                    v-for="i in 6"
-                    :key="i"
-                    ref="pinRefs"
-                    v-model="pinValues[i - 1]"
-                    maxlength="1"
+                    ref="pinInput"
+                    :value="pinCode"
+                    maxlength="6"
                     type="password"
                     inputmode="numeric"
                     pattern="[0-9]*"
+                    autocomplete="off"
+                    class="pin-capture"
+                    :aria-label="t('lock.enterCode')"
+                    :disabled="isUnlocking || isCoolingDown"
+                    @input="onPinInput"
+                    @compositionend="onPinInput"
+                    @paste="onPinPaste"
+                    @click="moveCaretToEnd"
+                    @focus="moveCaretToEnd"
+                />
+                <span
+                    v-for="i in 6"
+                    :key="i"
+                    aria-hidden="true"
                     class="pin-input"
                     :class="{
                         active: activeIdx === i - 1,
-                        filled: pinValues[i - 1],
+                        filled: pinCode.length >= i,
                         error: showError,
                     }"
-                    @input="onPinInput(i - 1, $event)"
-                    @keydown="onPinKeydown(i - 1, $event)"
-                    @focus="activeIdx = i - 1"
-                />
+                >{{ pinCode.length >= i ? "•" : "" }}</span>
             </div>
 
             <!-- Error message -->
@@ -98,10 +107,9 @@ const identity = useIdentityStore();
 const { t } = useI18n();
 
 const show = computed(() => identity.isLocked);
-const pinValues = ref(["", "", "", "", "", ""]);
-const pinCode = computed(() => pinValues.value.join(""));
-const activeIdx = ref(0);
-const pinRefs = ref([]);
+const pinCode = ref("");
+const activeIdx = computed(() => Math.min(pinCode.value.length, 5));
+const pinInput = ref(null);
 const isUnlocking = ref(false);
 const showError = ref(false);
 const isCoolingDown = ref(false);
@@ -145,32 +153,37 @@ watch(
 );
 
 function resetPin() {
-    pinValues.value = ["", "", "", "", "", ""];
-    activeIdx.value = 0;
-    nextTick(() => pinRefs.value[0]?.focus());
+    pinCode.value = "";
+    nextTick(() => {
+        if (show.value && !isCoolingDown.value) pinInput.value?.focus();
+    });
 }
 
-function onPinInput(idx, event) {
-    let val = event.target.value.replace(/[^0-9]/g, "");
-    pinValues.value[idx] = val.slice(0, 1);
+function setPin(value) {
+    pinCode.value = value.replace(/[^0-9]/g, "").slice(0, 6);
+    if (pinInput.value) pinInput.value.value = pinCode.value;
     showError.value = false;
 
-    if (val && idx < 5) {
-        pinRefs.value[idx + 1]?.focus();
-    }
-
-    // autocommit
     if (pinCode.value.length === 6) {
         tryUnlock();
     }
 }
 
-function onPinKeydown(idx, event) {
-    if (event.key === "Backspace" && !pinValues.value[idx] && idx > 0) {
-        pinRefs.value[idx - 1]?.focus();
-        pinValues.value[idx - 1] = "";
-        event.preventDefault();
-    }
+function onPinInput(event) {
+    if (event.isComposing) return;
+    setPin(event.target.value);
+}
+
+function onPinPaste(event) {
+    event.preventDefault();
+    setPin(event.clipboardData?.getData("text") || "");
+}
+
+function moveCaretToEnd() {
+    nextTick(() => {
+        const input = pinInput.value;
+        input?.setSelectionRange(input.value.length, input.value.length);
+    });
 }
 
 async function tryUnlock() {
@@ -246,7 +259,7 @@ function confirmReset() {
 
 function startCooldown(endTime) {
     isCoolingDown.value = true;
-    pinValues.value = ["", "", "", "", "", ""];
+    pinCode.value = "";
 
     const update = () => {
         const remaining = securityCodeCooldownSeconds(endTime);
@@ -300,13 +313,27 @@ function startCooldown(endTime) {
 }
 
 .pin-row {
+    position: relative;
     display: flex;
     justify-content: center;
     gap: 6px;
     flex-wrap: nowrap;
 }
 
+.pin-capture {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+    opacity: 0.01;
+    cursor: text;
+}
+
 .pin-input {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: calc((100% - 30px) / 6);
     min-width: 0;
     max-width: 48px;
@@ -319,12 +346,8 @@ function startCooldown(endTime) {
     outline: none;
     background: #fafafa;
     color: #333;
-    caret-color: transparent;
     transition: all 0.15s;
     flex-shrink: 0;
-}
-.pin-input::placeholder {
-    color: #ccc;
 }
 .pin-input.active {
     border-color: #1976d2;
