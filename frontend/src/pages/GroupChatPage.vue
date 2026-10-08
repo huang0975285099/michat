@@ -30,11 +30,15 @@
           <deterministic-avatar v-if="!shouldCompact(messages, idx)" :seed="msg.from" :size="28" class="avatar-side q-mr-xs" />
           <div v-else class="avatar-placeholder" />
           <div class="message-content">
-            <div class="message-sender">{{ senderName(msg.from) }}</div>
+            <div class="message-sender" v-if="!shouldCompact(messages, idx)">{{ senderName(msg.from) }} · {{ formatTime(msg.ts) }}</div>
             <div class="message-bubble">
               <span v-if="msg.text">{{ msg.text }}</span>
               <span v-else-if="msg.decryptionFailed" style="color: #e8463a">[解密失败]</span>
-              <span v-else-if="msg.type === 'file'" class="file-msg">📎 {{ msg.filename }} ({{ formatFileSize(msg.filesize) }})</span>
+              <button v-else-if="msg.type === 'file'" class="file-msg file-download" :disabled="fileBusy[msg.id]" @click="onDownloadFile(msg)">
+                <q-icon :name="fileBusy[msg.id] ? 'downloading' : 'download'" size="14px" />
+                {{ msg.filename }} ({{ formatFileSize(msg.filesize) }}){{ fileBusy[msg.id] ? ' …' : '' }}
+              </button>
+              <message-action-menu :can-copy="!!msg.text" @copy="copyMessage(msg)" />
             </div>
           </div>
         </template>
@@ -43,13 +47,15 @@
           <deterministic-avatar v-if="!shouldCompact(messages, idx)" :seed="identity.chatId" :size="28" class="avatar-side q-ml-xs" />
           <div v-else class="avatar-placeholder" />
           <div class="message-content">
+            <div class="message-sender mine-sender" v-if="!shouldCompact(messages, idx)">{{ formatTime(msg.ts) }}</div>
             <div class="message-bubble mine">
               <span v-if="msg.text">{{ msg.text }}</span>
               <span v-else-if="msg.decryptionFailed" style="color: #e8463a">[解密失败]</span>
-              <span v-else-if="msg.type === 'file'" class="file-msg">📎 {{ msg.filename }} ({{ formatFileSize(msg.filesize) }})</span>
-            </div>
-            <div class="message-actions" v-if="!dissolved && !removed">
-              <q-btn flat dense size="xs" label="撤回" @click="onRecall(msg)" />
+              <button v-else-if="msg.type === 'file'" class="file-msg file-download" :disabled="fileBusy[msg.id]" @click="onDownloadFile(msg)">
+                <q-icon :name="fileBusy[msg.id] ? 'downloading' : 'download'" size="14px" />
+                {{ msg.filename }} ({{ formatFileSize(msg.filesize) }}){{ fileBusy[msg.id] ? ' …' : '' }}
+              </button>
+              <message-action-menu :can-copy="!!msg.text" :can-recall="!dissolved && !removed" @copy="copyMessage(msg)" @recall="onRecall(msg)" />
             </div>
           </div>
         </template>
@@ -86,6 +92,9 @@ import { useChatStore } from 'src/stores/chat'
 import { useGroupStore } from 'src/stores/group'
 import { useIdentityStore } from 'src/stores/identity'
 import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
+import MessageActionMenu from 'src/components/MessageActionMenu.vue'
+import { attachmentApi, groupApi } from 'src/services/api.js'
+import { downloadOfflineAttachment, acknowledgeGroupAttachment } from 'src/services/offline-attachment.mjs'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -171,6 +180,35 @@ function scrollToBottom() {
   }
 }
 
+// ── 群文件下载 ──
+const fileBusy = ref({})
+
+async function onDownloadFile(msg) {
+  if (fileBusy.value[msg.id]) return
+  const meta = msg.offlineAttachment
+  if (!meta?.attachmentId) return
+  fileBusy.value[msg.id] = true
+  try {
+    const blob = await downloadOfflineAttachment(meta, { api: attachmentApi })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = msg.filename || 'file'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    // Acknowledge so the server can release the attachment once all members have downloaded
+    await acknowledgeGroupAttachment(meta, { api: groupApi }).catch(e => {
+      console.warn('[group] attachment ack failed (server expiry remains the fallback)', e)
+    })
+  } catch (e) {
+    console.error('[group] file download failed', e)
+  } finally {
+    fileBusy.value[msg.id] = false
+  }
+}
+
 async function onSend() {
   const text = inputText.value.trim()
   if (!text) return
@@ -189,6 +227,15 @@ async function onRecall(msg) {
     await chatStore.recallGroupMessage(groupId, msg.id)
   } catch (e) {
     console.warn('recall failed', e)
+  }
+}
+
+async function copyMessage(msg) {
+  if (!msg.text) return
+  try {
+    await navigator.clipboard.writeText(msg.text)
+  } catch (e) {
+    console.warn('copy failed', e)
   }
 }
 
@@ -214,6 +261,14 @@ function formatFileSize(bytes) {
   if (bytes < 1024) return bytes + ' B'
   if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB'
   return Math.round(bytes / (1024 * 1024)) + ' MB'
+}
+
+function formatTime(ts) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  return `${hh}:${mm}`
 }
 
 function senderName(chatId) {
@@ -245,9 +300,9 @@ function shouldCompact(msgs, idx) {
 .message-content { display: flex; flex-direction: column; min-width: 0; max-width: 75%; }
 .message-row.mine .message-content { align-items: flex-end; }
 .message-sender { font-size: 11px; color: #888; margin-bottom: 2px; }
+.mine-sender { text-align: right; }
 .message-bubble { padding: 8px 12px; border-radius: 12px; background: #f0f0f0; word-break: break-word; }
-.message-bubble.mine { background: #0FDC78; color: white; }
-.message-actions { margin-top: 2px; }
+.message-bubble.mine { background: #95EC69; color: #111; }
 .avatar-side { flex-shrink: 0; align-self: flex-start; border-radius: 8px; overflow: hidden; }
 .avatar-placeholder { width: 28px; flex-shrink: 0; }
 .composer { border-top: 1px solid rgba(0,0,0,0.08); padding: 8px 12px; flex-shrink: 0; }
@@ -255,4 +310,11 @@ function shouldCompact(msgs, idx) {
 .message-input { flex: 1; }
 .muted-notice, .dissolved-notice { text-align: center; color: #e8463a; padding: 8px; font-size: 13px; }
 .file-msg { font-size: 13px; }
+.file-download {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: transparent; border: none; padding: 0;
+  cursor: pointer; font: inherit; color: inherit;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.file-download:disabled { cursor: wait; opacity: 0.7; }
 </style>

@@ -9,6 +9,7 @@ const ALLOWED_FILE_EXTENSIONS = new Set([
   'ogg', 'm4a', 'aac', 'mp3', 'wav',
   'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'pdf',
   'zip', 'rar', '7z', 'tar', 'gz', 'apk',
+  'txt', 'log', 'csv', 'json', 'xml', 'html', 'htm', 'md', 'rtf',
 ])
 
 const MAX_VOICE_DURATION_MS = 5 * 60 * 1000

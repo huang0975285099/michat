@@ -2580,13 +2580,13 @@ function validateMsgId(msgId) {
     // Send fileKey metadata as a group message
     const plaintext = serializeOfflineAttachmentContent(metadata)
     const envelope = await encryptGroupMessageContent(plaintext, members, msgId)
-    const msg = {
-      id: msgId, chatId: groupId, from: 'me', text: null,
+    await addFileMessage(groupId, {
+      id: msgId, chatId: groupId, from: 'me',
       type: 'file', filename: metadata.filename, filesize: metadata.fileSize, filetype: metadata.filetype,
       ts: getServerNow(), mine: true, groupId, status: 'pending',
       attachmentId: metadata.attachmentId, offlineAttachment: metadata,
-    }
-    await addMessage(groupId, msg)
+      localFileAvailable: false,
+    })
     const payload = {
       group_id: groupId, msg_id: msgId,
       iv: envelope.iv, ciphertext: envelope.ciphertext,
@@ -3045,19 +3045,17 @@ function validateMsgId(msgId) {
         return
       }
       const content = parseChatMessageContent(plaintext)
-      // Check if this is an attachment message
-      const attachmentMeta = parseOfflineAttachmentContent(content)
+      // Check if this is an attachment message (needs the raw JSON string, not the parsed object)
+      const attachmentMeta = parseOfflineAttachmentContent(plaintext)
       if (attachmentMeta) {
-        const msg = {
+        await addFileMessage(payload.group_id, {
           id: payload.msg_id, chatId: payload.group_id, from: payload.from,
-          text: null, type: 'file',
+          type: 'file',
           filename: attachmentMeta.filename, filesize: attachmentMeta.fileSize, filetype: attachmentMeta.filetype,
           ts: payload.ts || getServerNow(), mine: false,
           groupId: payload.group_id, status: 'sent',
           attachmentId: attachmentMeta.attachmentId, offlineAttachment: attachmentMeta,
-          attachmentStatus: 'waiting',
-        }
-        await addMessage(payload.group_id, msg)
+        })
         send('group_message_received_ack', { group_id: payload.group_id, msg_ids: [payload.msg_id] })
         notifyNewMessage()
         return
@@ -3377,16 +3375,14 @@ function validateMsgId(msgId) {
           )
           const offlineAttachment = parseOfflineAttachmentContent(plaintext)
           if (offlineAttachment) {
-            const msg = {
+            await addFileMessage(p.group_id, {
               id: p.msg_id, chatId: p.group_id, from: p.from,
-              text: null, type: 'file',
+              type: 'file',
               filename: offlineAttachment.filename, filesize: offlineAttachment.fileSize, filetype: offlineAttachment.filetype,
               ts: p.ts || getServerNow(), mine: false,
               groupId: p.group_id, status: 'sent',
               attachmentId: offlineAttachment.attachmentId, offlineAttachment,
-              attachmentStatus: 'waiting',
-            }
-            await addMessage(p.group_id, msg)
+            })
             await dbDeletePending(p.msg_id).catch(() => {})
             send('group_message_received_ack', { group_id: p.group_id, msg_ids: [p.msg_id] })
             continue

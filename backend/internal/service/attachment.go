@@ -66,7 +66,7 @@ func ValidateAttachmentConfig(config AttachmentConfig) error {
 type Attachment struct {
 	ID              string
 	OwnerUserID     uint64
-	RecipientUserID uint64
+	RecipientUserID sql.NullInt64
 	GroupDBID       sql.NullInt64
 	FileSize        int64
 	CiphertextSize  int64
@@ -358,7 +358,7 @@ func (s *AttachmentService) InitGroupAttachment(ctx context.Context, ownerUserID
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO attachments
 		(id, owner_user_id, recipient_user_id, group_db_id, file_size, ciphertext_size, chunk_size, chunk_count, status, expires_at, created_at, updated_at)
-		VALUES (?, ?, 0, ?, ?, ?, ?, ?, 'uploading', ?, ?, ?)`,
+		VALUES (?, ?, NULL, ?, ?, ?, ?, ?, 'uploading', ?, ?, ?)`,
 		id, ownerUserID, groupDBID, fileSize, ciphertextSize, chunkSize, chunkCount, expiresAt, now, now)
 	if err != nil {
 		return AttachmentView{}, err
