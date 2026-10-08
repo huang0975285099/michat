@@ -359,6 +359,37 @@
         </div>
       </div>
     </section>
+
+    <section id="groupsSection">
+      <div class="article-head">
+        <div><h2>群组管理</h2><p>创建群、管理成员、禁言、删除消息和文件。</p></div>
+        <button id="grpNew" type="button">＋ 新建群组</button>
+      </div>
+
+      <div class="card" id="grpCreateForm" hidden>
+        <h3>新建群组</h3>
+        <label class="article-field"><span>群名称 *</span><input id="grpName" type="text" maxlength="64" placeholder="输入群名称"></label>
+        <label class="article-field"><span>成员 Chat ID（每行一个，至少 2 个）*</span><textarea id="grpMembers" rows="5" placeholder="1234-ABCD&#10;5678-EFGH"></textarea></label>
+        <div class="article-actions">
+          <button id="grpCreateBtn" type="button" class="article-primary">创建群组</button>
+          <button id="grpCancelCreate" type="button">取消</button>
+          <span class="article-feedback" id="grpFeedback"></span>
+        </div>
+      </div>
+
+      <div class="article-workspace" style="margin-top:16px">
+        <aside class="card article-sidebar" aria-label="群组列表">
+          <h3>群组列表</h3>
+          <div id="grpListStatus" class="meta" role="status"></div>
+          <div id="grpList" class="article-list"></div>
+        </aside>
+        <div class="card" id="grpDetail" hidden>
+          <div id="grpDetailContent"></div>
+        </div>
+      </div>
+
+      <p class="article-hint" style="margin-top:8px;color:var(--text-muted)">端到端加密：管理员仅可删除消息和文件，无法查看内容。</p>
+    </section>
   </div>
 </div>
 
@@ -427,6 +458,7 @@
       else { $('gate').hidden = true; $('dash').hidden = false; }
       loadArticles();
       loadCompanyOptions();
+      loadGroups();
     } catch (e) {
       showGate('Could not reach the server.');
     }
@@ -925,6 +957,230 @@
       });
       hit.addEventListener('blur', () => { tip.style.opacity = 0; });
     });
+  }
+
+  // ── Group management ─────────────────────────────────
+  let groups = [], selectedGroup = null;
+
+  $('grpNew').addEventListener('click', () => {
+    $('grpCreateForm').hidden = false;
+    $('grpName').focus();
+  });
+  $('grpCancelCreate').addEventListener('click', () => {
+    $('grpCreateForm').hidden = true;
+    $('grpName').value = '';
+    $('grpMembers').value = '';
+    $('grpFeedback').textContent = '';
+  });
+  $('grpCreateBtn').addEventListener('click', async () => {
+    const name = $('grpName').value.trim();
+    const members = $('grpMembers').value.split('\n').map(s => s.trim()).filter(Boolean);
+    const fb = $('grpFeedback');
+    fb.className = 'article-feedback';
+    if (!name) { fb.textContent = '请输入群名称'; fb.classList.add('error'); return; }
+    if (members.length < 2) { fb.textContent = '至少需要 2 个成员'; fb.classList.add('error'); return; }
+    const re = /^\d{4}-[A-Z]{4}$/;
+    for (const m of members) { if (!re.test(m)) { fb.textContent = '无效的 Chat ID: ' + m; fb.classList.add('error'); return; } }
+    fb.textContent = '创建中…';
+    try {
+      const res = await fetch('/api/admin/groups', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name, member_chat_ids: members})
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        fb.textContent = d.error || '创建失败 (' + res.status + ')';
+        fb.classList.add('error');
+        return;
+      }
+      fb.textContent = '创建成功';
+      fb.classList.add('success');
+      $('grpCreateForm').hidden = true;
+      $('grpName').value = '';
+      $('grpMembers').value = '';
+      await loadGroups();
+    } catch (e) { fb.textContent = '网络错误'; fb.classList.add('error'); }
+  });
+
+  async function loadGroups() {
+    try {
+      const res = await fetch('/api/admin/groups', {cache: 'no-store'});
+      if (!res.ok) return;
+      groups = await res.json();
+      renderGroupList();
+    } catch {}
+  }
+
+  function renderGroupList() {
+    const list = $('grpList');
+    list.replaceChildren();
+    $('grpListStatus').textContent = groups.length ? groups.length + ' 个群组' : '暂无群组';
+    groups.forEach(g => {
+      const row = document.createElement('div');
+      row.className = 'article-row' + (selectedGroup === g.group_id ? ' active' : '');
+      const title = document.createElement('div'); title.className = 'article-row-title'; title.textContent = g.name;
+      const meta = document.createElement('div'); meta.className = 'article-row-meta';
+      meta.textContent = g.group_id + ' · ' + g.member_count + ' 成员';
+      const actions = document.createElement('div'); actions.className = 'article-row-actions';
+      const open = document.createElement('button'); open.textContent = '管理'; open.type = 'button';
+      open.addEventListener('click', () => loadGroupDetail(g.group_id));
+      const dissolve = document.createElement('button'); dissolve.textContent = '解散'; dissolve.type = 'button';
+      dissolve.className = 'danger';
+      dissolve.addEventListener('click', async () => {
+        if (!confirm('确定解散群组"' + g.name + '"？此操作不可恢复。')) return;
+        const res = await fetch('/api/admin/groups/' + g.group_id, {method: 'DELETE'});
+        if (res.ok) { selectedGroup = null; $('grpDetail').hidden = true; await loadGroups(); }
+        else alert('解散失败');
+      });
+      actions.append(open, dissolve);
+      row.append(title, meta, actions);
+      list.append(row);
+    });
+  }
+
+  async function loadGroupDetail(groupId) {
+    selectedGroup = groupId;
+    renderGroupList();
+    try {
+      const res = await fetch('/api/admin/groups/' + groupId, {cache: 'no-store'});
+      if (!res.ok) return;
+      const g = await res.json();
+      renderGroupDetail(g);
+    } catch {}
+  }
+
+  function renderGroupDetail(g) {
+    const el = $('grpDetailContent');
+    el.replaceChildren();
+    $('grpDetail').hidden = false;
+
+    const head = document.createElement('h3'); head.textContent = g.name;
+    const id = document.createElement('p'); id.className = 'article-row-meta'; id.textContent = g.group_id + ' · 创建于 ' + new Date(g.created_at).toLocaleString();
+
+    const renameLabel = document.createElement('label'); renameLabel.className = 'article-field';
+    renameLabel.innerHTML = '<span>群名称</span>';
+    const renameInput = document.createElement('input'); renameInput.type = 'text'; renameInput.maxLength = 64; renameInput.value = g.name;
+    const renameBtn = document.createElement('button'); renameBtn.textContent = '改名'; renameBtn.type = 'button';
+    renameBtn.addEventListener('click', async () => {
+      const res = await fetch('/api/admin/groups/' + g.group_id, {
+        method: 'PUT', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: renameInput.value.trim()})
+      });
+      if (res.ok) { await loadGroups(); await loadGroupDetail(g.group_id); }
+      else alert('改名失败');
+    });
+    renameLabel.append(renameInput, ' ', renameBtn);
+
+    const memberHead = document.createElement('h4'); memberHead.textContent = '成员（' + g.members.length + '）'; memberHead.style.marginTop = '16px';
+    const memberList = document.createElement('div');
+
+    g.members.forEach(m => {
+      const row = document.createElement('div'); row.className = 'article-row';
+      row.style.marginBottom = '4px';
+      const info = document.createElement('div'); info.className = 'article-row-meta';
+      info.textContent = m.chat_id + ' · ' + m.nickname + (m.state === 'removed' ? ' · 已移除' : '');
+      const muted = m.muted_until && new Date(m.muted_until) > new Date();
+      if (muted) info.textContent += ' · 禁言至 ' + new Date(m.muted_until).toLocaleString();
+      const actions = document.createElement('div'); actions.className = 'article-row-actions';
+      if (m.state === 'active') {
+        const muteBtn = document.createElement('button'); muteBtn.textContent = muted ? '解除禁言' : '禁言'; muteBtn.type = 'button';
+        muteBtn.addEventListener('click', async () => {
+          const body = muted ? {muted_until: null} : {muted_until: new Date(Date.now() + 3600000).toISOString()};
+          await fetch('/api/admin/groups/' + g.group_id + '/members/' + m.chat_id + '/mute', {
+            method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+          });
+          await loadGroupDetail(g.group_id);
+        });
+        const kickBtn = document.createElement('button'); kickBtn.textContent = '移出群'; kickBtn.type = 'button'; kickBtn.className = 'danger';
+        kickBtn.addEventListener('click', async () => {
+          if (!confirm('确定移除' + m.nickname + '？')) return;
+          const res = await fetch('/api/admin/groups/' + g.group_id + '/members/' + m.chat_id, {method: 'DELETE'});
+          if (res.ok) await loadGroupDetail(g.group_id);
+          else alert('移除失败');
+        });
+        actions.append(muteBtn, kickBtn);
+      }
+      row.append(info, actions);
+      memberList.append(row);
+    });
+
+    const addMemberLabel = document.createElement('label'); addMemberLabel.className = 'article-field';
+    addMemberLabel.innerHTML = '<span>添加成员（每行一个 Chat ID）</span>';
+    const addMemberInput = document.createElement('textarea'); addMemberInput.rows = 3; addMemberInput.placeholder = '1234-ABCD';
+    const addMemberBtn = document.createElement('button'); addMemberBtn.textContent = '添加'; addMemberBtn.type = 'button';
+    addMemberBtn.addEventListener('click', async () => {
+      const ids = addMemberInput.value.split('\n').map(s => s.trim()).filter(Boolean);
+      if (!ids.length) return;
+      const res = await fetch('/api/admin/groups/' + g.group_id + '/members', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({chat_ids: ids})
+      });
+      if (res.ok) { addMemberInput.value = ''; await loadGroupDetail(g.group_id); await loadGroups(); }
+      else { const d = await res.json().catch(() => ({})); alert(d.error || '添加失败'); }
+    });
+    addMemberLabel.append(addMemberInput, ' ', addMemberBtn);
+
+    const msgHead = document.createElement('h4'); msgHead.textContent = '消息管理'; msgHead.style.marginTop = '20px';
+    const msgHint = document.createElement('p'); msgHint.className = 'article-hint'; msgHint.textContent = '以下为密文元数据，管理员可删除但不可查看内容。';
+    const msgContainer = document.createElement('div');
+    const loadMsgsBtn = document.createElement('button'); loadMsgsBtn.textContent = '加载消息列表'; loadMsgsBtn.type = 'button';
+    msgContainer.append(loadMsgsBtn);
+    loadMsgsBtn.addEventListener('click', async () => {
+      msgContainer.replaceChildren();
+      const res = await fetch('/api/admin/groups/' + g.group_id + '/messages?limit=50', {cache: 'no-store'});
+      if (!res.ok) { msgContainer.textContent = '加载失败'; return; }
+      const msgs = await res.json();
+      if (!msgs.length) { msgContainer.textContent = '暂无消息'; return; }
+      msgs.forEach(msg => {
+        const row = document.createElement('div'); row.className = 'article-row'; row.style.marginBottom = '4px';
+        const info = document.createElement('div'); info.className = 'article-row-meta';
+        let text = msg.sender_chat_id + ' · ' + new Date(msg.sent_at).toLocaleString() + ' · ' + msg.envelope_size + 'B';
+        if (msg.recalled_at) text += ' · 已撤回';
+        if (msg.deleted_at) text += ' · 已删除';
+        info.textContent = text;
+        if (!msg.recalled_at && !msg.deleted_at) {
+          const delBtn = document.createElement('button'); delBtn.textContent = '删除'; delBtn.type = 'button'; delBtn.className = 'danger';
+          delBtn.addEventListener('click', async () => {
+            if (!confirm('确定删除此消息？')) return;
+            const r = await fetch('/api/admin/groups/' + g.group_id + '/messages/' + msg.msg_id, {method: 'DELETE'});
+            if (r.ok) loadMsgsBtn.click();
+            else alert('删除失败');
+          });
+          row.append(info, delBtn);
+        } else {
+          row.append(info);
+        }
+        msgContainer.append(row);
+      });
+    });
+
+    const attHead = document.createElement('h4'); attHead.textContent = '文件管理'; attHead.style.marginTop = '20px';
+    const attContainer = document.createElement('div');
+    const loadAttsBtn = document.createElement('button'); loadAttsBtn.textContent = '加载文件列表'; loadAttsBtn.type = 'button';
+    attContainer.append(loadAttsBtn);
+    loadAttsBtn.addEventListener('click', async () => {
+      attContainer.replaceChildren();
+      const res = await fetch('/api/admin/groups/' + g.group_id + '/attachments', {cache: 'no-store'});
+      if (!res.ok) { attContainer.textContent = '加载失败'; return; }
+      const atts = await res.json();
+      if (!atts.length) { attContainer.textContent = '暂无文件'; return; }
+      atts.forEach(att => {
+        const row = document.createElement('div'); row.className = 'article-row'; row.style.marginBottom = '4px';
+        const info = document.createElement('div'); info.className = 'article-row-meta';
+        info.textContent = att.id.slice(0,8) + '… · ' + att.status + ' · ' + Math.round(att.file_size/1024) + 'KB · ' + new Date(att.expires_at).toLocaleString();
+        const delBtn = document.createElement('button'); delBtn.textContent = '删除'; delBtn.type = 'button'; delBtn.className = 'danger';
+        delBtn.addEventListener('click', async () => {
+          if (!confirm('确定删除此文件？')) return;
+          const r = await fetch('/api/admin/groups/' + g.group_id + '/attachments/' + att.id, {method: 'DELETE'});
+          if (r.ok) loadAttsBtn.click();
+          else alert('删除失败');
+        });
+        row.append(info, delBtn);
+        attContainer.append(row);
+      });
+    });
+
+    el.append(head, id, renameLabel, memberHead, memberList, addMemberLabel, msgHead, msgHint, msgContainer, attHead, attContainer);
   }
 
   // Boot
