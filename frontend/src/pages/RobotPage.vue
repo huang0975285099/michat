@@ -4,8 +4,8 @@
       <div class="feed-heading">
         <div class="section-title">{{ bookmarkedOnly ? t('我的收藏', 'Saved articles') : t('最新发布', 'Latest stories') }}</div>
         <div class="feed-actions">
-          <q-btn unelevated no-caps icon="timeline" :label="t('追踪', 'Tracker')" class="tracker-entry" @click="router.push('/robot/tracker')" />
-          <q-btn flat round dense icon="tune" :color="hasActiveFilters ? 'primary' : undefined" :aria-label="t('搜索与筛选', 'Search and filters')" :aria-expanded="filterOpen" aria-controls="feedFilters" @click="filterOpen = !filterOpen" />
+          <!-- <q-btn unelevated no-caps icon="timeline" :label="t('追踪', 'Tracker')" class="tracker-entry" @click="router.push('/robot/tracker')" /> -->
+          <!-- <q-btn flat round dense icon="tune" :color="hasActiveFilters ? 'primary' : undefined" :aria-label="t('搜索与筛选', 'Search and filters')" :aria-expanded="filterOpen" aria-controls="feedFilters" @click="filterOpen = !filterOpen" /> -->
           <q-btn flat round dense :icon="bookmarkedOnly ? 'bookmark' : 'bookmark_border'" :color="bookmarkedOnly ? 'primary' : undefined" :aria-label="t('我的收藏', 'Saved articles')" @click="bookmarkedOnly = !bookmarkedOnly; applyFilters()" />
         </div>
       </div>
