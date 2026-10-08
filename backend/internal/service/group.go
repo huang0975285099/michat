@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -247,6 +248,289 @@ func (s *GroupService) DissolveGroup(ctx context.Context, groupID string) error 
 	}
 	return tx.Commit()
 }
+
+// PendingGroupMessage is a pending group message delivery with its key envelope.
+type PendingGroupMessage struct {
+	MsgID        string    `json:"msg_id"`
+	GroupID      string    `json:"group_id"`
+	SenderChatID string    `json:"sender_chat_id"`
+	IV           string    `json:"iv"`
+	Ciphertext   string    `json:"ciphertext"`
+	KeyEnvelope  string    `json:"key_envelope"`
+	SentAt       time.Time `json:"sent_at"`
+	RecalledAt   *time.Time `json:"recalled_at"`
+	DeletedAt    *time.Time `json:"deleted_at"`
+}
+
+// PendingGroupTombstone is a pending recall/delete tombstone for replay.
+type PendingGroupTombstone struct {
+	MsgID     string     `json:"msg_id"`
+	GroupID   string     `json:"group_id"`
+	Kind      string     `json:"kind"` // "recall" or "delete"
+	Timestamp time.Time  `json:"timestamp"`
+}
+
+// AcceptGroupMessage persists one ciphertext + N per-member delivery rows.
+// Validates envelopes cover exactly the active members excluding the sender.
+// Returns (sentAt, created, error). created=false means duplicate msg_id.
+func (s *GroupService) AcceptGroupMessage(ctx context.Context, senderChatID, groupID, msgID, iv, ciphertext string, envelopes []KeyEnvelope) (time.Time, bool, error) {
+	if !groupIDPattern.MatchString(groupID) {
+		return time.Time{}, false, ErrGroupNotFound
+	}
+	if !chatIDPattern.MatchString(senderChatID) {
+		return time.Time{}, false, ErrNotMessageSender
+	}
+	if !msgIDRe.MatchString(msgID) {
+		return time.Time{}, false, errors.New("invalid msg_id")
+	}
+	if iv == "" || ciphertext == "" {
+		return time.Time{}, false, errors.New("invalid payload")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	defer tx.Rollback()
+
+	var groupDBID uint64
+	err = tx.QueryRowContext(ctx, `SELECT id FROM ` + "`groups`" + ` WHERE group_id = ? FOR UPDATE`, groupID).Scan(&groupDBID)
+	if err == sql.ErrNoRows {
+		return time.Time{}, false, ErrGroupNotFound
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+
+	// check mute
+	muted, err := s.isMutedTx(ctx, tx, groupDBID, senderChatID)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if muted {
+		return time.Time{}, false, ErrMemberMuted
+	}
+
+	// verify sender is an active member
+	if !s.isMemberTx(ctx, tx, groupDBID, senderChatID) {
+		return time.Time{}, false, ErrNotGroupMember
+	}
+
+	// get active members excluding sender
+	activeMembers := make(map[string]bool) // chatID -> true
+	rows, err := tx.QueryContext(ctx, `
+		SELECT u.chat_id FROM group_members gm
+		JOIN users u ON u.id = gm.user_id
+		WHERE gm.group_db_id = ? AND gm.state = 'active'`, groupDBID)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	for rows.Next() {
+		var chatID string
+		if err = rows.Scan(&chatID); err != nil {
+			rows.Close()
+			return time.Time{}, false, err
+		}
+		if chatID != senderChatID {
+			activeMembers[chatID] = true
+		}
+	}
+	rows.Close()
+
+	// validate envelope count matches active members (excluding sender)
+	if len(envelopes) != len(activeMembers) {
+		return time.Time{}, false, ErrMembershipChanged
+	}
+	seen := make(map[string]bool, len(envelopes))
+	for _, env := range envelopes {
+		if !chatIDPattern.MatchString(env.To) || !activeMembers[env.To] || seen[env.To] {
+			return time.Time{}, false, ErrMembershipChanged
+		}
+		seen[env.To] = true
+	}
+
+	// check duplicate msg_id
+	var existingSentAt *time.Time
+	err = tx.QueryRowContext(ctx, `SELECT sent_at FROM group_messages WHERE msg_id = ?`, msgID).Scan(&existingSentAt)
+	if err == nil {
+		// duplicate — idempotent
+		if existingSentAt != nil {
+			return *existingSentAt, false, nil
+		}
+		return time.Time{}, false, nil
+	}
+	if err != sql.ErrNoRows {
+		return time.Time{}, false, err
+	}
+
+	// insert message
+	envelopeSize := len(ciphertext)
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO group_messages (msg_id, group_db_id, sender_chat_id, iv, ciphertext, envelope_size, sent_at)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3))`,
+		msgID, groupDBID, senderChatID, iv, ciphertext, envelopeSize)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("insert group message: %w", err)
+	}
+
+	// insert per-member delivery rows
+	for _, env := range envelopes {
+		envJSON, _ := json.Marshal(env)
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO group_message_deliveries (msg_id, member_chat_id, key_envelope)
+			VALUES (?, ?, ?)`,
+			msgID, env.To, string(envJSON))
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("insert delivery: %w", err)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return time.Time{}, false, err
+	}
+
+	// fetch the actual sent_at
+	var sentAt time.Time
+	_ = s.db.QueryRowContext(ctx, `SELECT sent_at FROM group_messages WHERE msg_id = ?`, msgID).Scan(&sentAt)
+	return sentAt, true, nil
+}
+
+// GetPendingGroupMessages returns un-applied group messages for a member.
+func (s *GroupService) GetPendingGroupMessages(ctx context.Context, memberChatID string, limit int) ([]*PendingGroupMessage, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT gmd.msg_id, g.group_id, gm.sender_chat_id, gm.iv, gm.ciphertext, gmd.key_envelope, gm.sent_at, gm.recalled_at, gm.deleted_at
+		FROM group_message_deliveries gmd
+		JOIN group_messages gm ON gm.msg_id = gmd.msg_id
+		JOIN ` + "`groups`" + ` g ON g.id = gm.group_db_id
+		WHERE gmd.member_chat_id = ? AND gmd.applied_at IS NULL
+			AND gm.deleted_at IS NULL AND gm.recalled_at IS NULL
+		ORDER BY gm.sent_at ASC
+		LIMIT ?`, memberChatID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*PendingGroupMessage
+	for rows.Next() {
+		m := &PendingGroupMessage{}
+		if err = rows.Scan(&m.MsgID, &m.GroupID, &m.SenderChatID, &m.IV, &m.Ciphertext, &m.KeyEnvelope, &m.SentAt, &m.RecalledAt, &m.DeletedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, m)
+	}
+	return result, nil
+}
+
+// MarkGroupMessagesApplied marks delivery rows as applied (recipient confirmed).
+func (s *GroupService) MarkGroupMessagesApplied(ctx context.Context, msgIDs []string, memberChatID string) error {
+	if len(msgIDs) == 0 {
+		return nil
+	}
+	placeholders := strings.Repeat("?,", len(msgIDs))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]interface{}, 0, len(msgIDs)+1)
+	for _, id := range msgIDs {
+		args = append(args, id)
+	}
+	args = append(args, memberChatID)
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE group_message_deliveries SET applied_at = CURRENT_TIMESTAMP(3)
+		 WHERE msg_id IN (`+placeholders+`) AND member_chat_id = ?`,
+		args...)
+	return err
+}
+
+// GetPendingGroupTombstones returns un-applied recall/delete tombstones for a member.
+func (s *GroupService) GetPendingGroupTombstones(ctx context.Context, memberChatID string, limit int) ([]*PendingGroupTombstone, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT gmd.msg_id, g.group_id,
+			CASE WHEN gm.recalled_at IS NOT NULL THEN 'recall' ELSE 'delete' END AS kind,
+			COALESCE(gm.recalled_at, gm.deleted_at) AS ts
+		FROM group_message_deliveries gmd
+		JOIN group_messages gm ON gm.msg_id = gmd.msg_id
+		JOIN ` + "`groups`" + ` g ON g.id = gm.group_db_id
+		WHERE gmd.member_chat_id = ? AND gmd.removed_applied_at IS NULL
+			AND (gm.recalled_at IS NOT NULL OR gm.deleted_at IS NOT NULL)
+		ORDER BY ts ASC
+		LIMIT ?`, memberChatID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*PendingGroupTombstone
+	for rows.Next() {
+		t := &PendingGroupTombstone{}
+		if err = rows.Scan(&t.MsgID, &t.GroupID, &t.Kind, &t.Timestamp); err != nil {
+			return nil, err
+		}
+		result = append(result, t)
+	}
+	return result, nil
+}
+
+// MarkGroupTombstonesApplied marks tombstone delivery rows as applied.
+func (s *GroupService) MarkGroupTombstonesApplied(ctx context.Context, msgIDs []string, memberChatID string) error {
+	if len(msgIDs) == 0 {
+		return nil
+	}
+	placeholders := strings.Repeat("?,", len(msgIDs))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]interface{}, 0, len(msgIDs)+1)
+	for _, id := range msgIDs {
+		args = append(args, id)
+	}
+	args = append(args, memberChatID)
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE group_message_deliveries SET removed_applied_at = CURRENT_TIMESTAMP(3)
+		 WHERE msg_id IN (`+placeholders+`) AND member_chat_id = ?`,
+		args...)
+	return err
+}
+
+// isMutedTx checks mute status within a transaction.
+func (s *GroupService) isMutedTx(ctx context.Context, tx *sql.Tx, groupDBID uint64, chatID string) (bool, error) {
+	var mutedUntil *time.Time
+	err := tx.QueryRowContext(ctx, `
+		SELECT gm.muted_until FROM group_members gm
+		JOIN users u ON u.id = gm.user_id
+		WHERE gm.group_db_id = ? AND u.chat_id = ? AND gm.state = 'active'`,
+		groupDBID, chatID).Scan(&mutedUntil)
+	if err == sql.ErrNoRows {
+		return false, ErrNotGroupMember
+	}
+	if err != nil {
+		return false, err
+	}
+	if mutedUntil == nil {
+		return false, nil
+	}
+	return mutedUntil.After(time.Now()), nil
+}
+
+// isMemberTx checks membership within a transaction.
+func (s *GroupService) isMemberTx(ctx context.Context, tx *sql.Tx, groupDBID uint64, chatID string) bool {
+	var count int
+	err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM group_members gm
+		JOIN users u ON u.id = gm.user_id
+		WHERE gm.group_db_id = ? AND u.chat_id = ? AND gm.state = 'active'`,
+		groupDBID, chatID).Scan(&count)
+	if err != nil {
+		return false
+	}
+	return count > 0
+}
+
+// msgIDRe matches the client-generated message ID format.
+var msgIDRe = regexp.MustCompile(`^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$`)
 
 // AddMembers adds members to a group.
 func (s *GroupService) AddMembers(ctx context.Context, groupID string, chatIDs []string) error {

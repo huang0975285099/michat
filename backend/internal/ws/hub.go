@@ -22,6 +22,7 @@ import (
 var (
 	chatIDRe              = regexp.MustCompile(`^\d{4}-[A-Z]{4}$`)
 	msgIDRe               = regexp.MustCompile(`^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$`)
+	groupIDRe             = regexp.MustCompile(`^G-[0-9A-F]{12}$`)
 	transferIDRe          = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	healthNonceRe         = regexp.MustCompile(`^[a-z0-9]{1,32}$`)
 	allowedFileExtensions = map[string]struct{}{
@@ -112,6 +113,9 @@ type Client struct {
 	// ReliableInbox is negotiated by the client in the auth payload. Older clients
 	// are delivered with legacy enqueue semantics so a rolling upgrade does not fill their inbox forever.
 	ReliableInbox bool
+	// Group is negotiated by the client in the auth payload. Clients without it
+	// never receive group frames; their delivery rows wait in the inbox until upgrade.
+	Group bool
 
 	// closed is closed when the connection is preempted by a new connection, telling writePump to stop sending data to the old connection that may be half dead.
 	// Write and exit (recycle unsent messages in the send buffer into the offline queue when exiting). Use closeOnce
@@ -169,6 +173,7 @@ type Hub struct {
 	clients        map[string]*Client // chatID → client
 	redis          *rdb.Client
 	friendSvc      friendChecker
+	groupSvc       groupChecker
 	identitySvc    *service.IdentityService
 	messageReadSvc messageReadStore
 	pushSvc        *service.PushService                 //Can be nil (disables pushing when not configured)
@@ -184,6 +189,19 @@ type Hub struct {
 type friendChecker interface {
 	GetFriendChatIDs(context.Context, uint64) ([]string, error)
 	AreFriends(context.Context, uint64, string) (bool, error)
+}
+
+type groupChecker interface {
+	IsGroupMember(ctx context.Context, groupID, chatID string) bool
+	ActiveMemberChatIDs(ctx context.Context, groupID string) ([]string, error)
+	IsMuted(ctx context.Context, groupID, chatID string) (bool, error)
+	AcceptGroupMessage(ctx context.Context, senderChatID, groupID, msgID, iv, ciphertext string, envelopes []service.KeyEnvelope) (time.Time, bool, error)
+	RecallGroupMessage(ctx context.Context, senderChatID, groupID, msgID string) error
+	DeleteGroupMessage(ctx context.Context, groupID, msgID string) error
+	GetPendingGroupMessages(ctx context.Context, memberChatID string, limit int) ([]*service.PendingGroupMessage, error)
+	MarkGroupMessagesApplied(ctx context.Context, msgIDs []string, memberChatID string) error
+	GetPendingGroupTombstones(ctx context.Context, memberChatID string, limit int) ([]*service.PendingGroupTombstone, error)
+	MarkGroupTombstonesApplied(ctx context.Context, msgIDs []string, memberChatID string) error
 }
 
 type messageReadStore interface {
@@ -225,6 +243,11 @@ func NewHub(redis *rdb.Client, friendSvc *service.FriendService, identitySvc *se
 		pvpLobby:       make(map[string]*service.LobbyUserProfile),
 		fileTransfers:  make(map[string]*fileTransferSession),
 	}
+}
+
+// SetGroupService injects the group service (called after hub is created in main.go)
+func (h *Hub) SetGroupService(svc *service.GroupService) {
+	h.groupSvc = svc
 }
 
 // SetPushService injects the push service (called after hub is created in main.go)
@@ -601,6 +624,68 @@ func (h *Hub) FlushPersistentInbox(c *Client) {
 			return
 		}
 	}
+
+	// Replay pending group messages
+	if h.groupSvc != nil {
+		groupMsgs, err := h.groupSvc.GetPendingGroupMessages(ctx, c.ChatID, 500)
+		if err != nil {
+			log.Printf("[ws] load group inbox failed: %v", err)
+		} else {
+			for _, item := range groupMsgs {
+				var env service.KeyEnvelope
+				_ = json.Unmarshal([]byte(item.KeyEnvelope), &env)
+				fwd, _ := json.Marshal(Message{
+					Type: "group_message",
+					Payload: mustMarshal(map[string]interface{}{
+						"group_id":     item.GroupID,
+						"from":         item.SenderChatID,
+						"msg_id":       item.MsgID,
+						"iv":           item.IV,
+						"ciphertext":   item.Ciphertext,
+						"key_envelope": env,
+						"ts":           item.SentAt.UnixMilli(),
+						"replay":       true,
+					}),
+				})
+				select {
+				case c.send <- fwd:
+					if !c.ReliableInbox {
+						_ = h.groupSvc.MarkGroupMessagesApplied(ctx, []string{item.MsgID}, c.ChatID)
+					}
+				case <-c.closed:
+					return
+				}
+			}
+		}
+
+		// Replay pending group tombstones (recall/delete)
+		tombstones, err := h.groupSvc.GetPendingGroupTombstones(ctx, c.ChatID, 500)
+		if err != nil {
+			log.Printf("[ws] load group tombstones failed: %v", err)
+		} else {
+			for _, t := range tombstones {
+				msgType := "group_recall"
+				if t.Kind == "delete" {
+					msgType = "group_delete"
+				}
+				fwd, _ := json.Marshal(Message{
+					Type: msgType,
+					Payload: mustMarshal(map[string]interface{}{
+						"group_id": t.GroupID,
+						"msg_id":   t.MsgID,
+					}),
+				})
+				select {
+				case c.send <- fwd:
+					if !c.ReliableInbox {
+						_ = h.groupSvc.MarkGroupTombstonesApplied(ctx, []string{t.MsgID}, c.ChatID)
+					}
+				case <-c.closed:
+					return
+				}
+			}
+		}
+	}
 }
 
 func (h *Hub) storeOffline(chatID string, msg []byte) {
@@ -748,7 +833,7 @@ func offlineStorable(msg []byte) bool {
 	if err := json.Unmarshal(msg, &m); err != nil {
 		return false
 	}
-	return m.Type == "message" || m.Type == "read_receipt" || m.Type == "ack" ||
+	return m.Type == "message" || m.Type == "group_message" || m.Type == "read_receipt" || m.Type == "ack" ||
 		m.Type == "read_ack" || m.Type == "file_done"
 }
 
@@ -761,6 +846,16 @@ func (h *Hub) dispatch(c *Client, msg *Message, raw []byte) {
 		h.handleMessageStatusQuery(c, msg.Payload)
 	case "health_ping":
 		h.handleHealthPing(c, msg.Payload)
+	case "group_message":
+		h.handleGroupMessage(c, msg.Payload)
+	case "group_recall":
+		h.handleGroupRecall(c, msg.Payload)
+	case "group_message_received_ack":
+		h.handleGroupMessageReceivedAck(c, msg.Payload)
+	case "group_recall_received_ack":
+		h.handleGroupTombstoneReceivedAck(c, msg.Payload, "recall")
+	case "group_delete_received_ack":
+		h.handleGroupTombstoneReceivedAck(c, msg.Payload, "delete")
 	case "recall":
 		h.handleRecall(c, msg.Payload)
 	case "message_received_ack":
@@ -2185,5 +2280,235 @@ func (h *Hub) sendLobbyUpdate(recipients []*Client, list []*service.LobbyUserPro
 		case rc.send <- msg:
 		default:
 		}
+	}
+}
+
+// GroupMessagePayload is the client→server group message frame.
+type GroupMessagePayload struct {
+	GroupID      string                `json:"group_id"`
+	MsgID        string                `json:"msg_id"`
+	IV           string                `json:"iv"`
+	Ciphertext   string                `json:"ciphertext"`
+	KeyEnvelopes []service.KeyEnvelope `json:"key_envelopes"`
+}
+
+func (h *Hub) handleGroupMessage(from *Client, payload json.RawMessage) {
+	var p GroupMessagePayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		h.rejectChatMessage(from, p.MsgID, "invalid_payload", false)
+		return
+	}
+	if !groupIDRe.MatchString(p.GroupID) {
+		h.rejectChatMessage(from, p.MsgID, "invalid_group_id", false)
+		return
+	}
+	if !msgIDRe.MatchString(p.MsgID) {
+		return
+	}
+	if p.IV == "" || p.Ciphertext == "" || len(p.KeyEnvelopes) == 0 {
+		h.rejectChatMessage(from, p.MsgID, "invalid_payload", false)
+		return
+	}
+	if h.groupSvc == nil {
+		h.rejectChatMessage(from, p.MsgID, "service_unavailable", true)
+		return
+	}
+
+	ctx := context.Background()
+	sentAt, created, err := h.groupSvc.AcceptGroupMessage(ctx, from.ChatID, p.GroupID, p.MsgID, p.IV, p.Ciphertext, p.KeyEnvelopes)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrMemberMuted):
+			h.rejectChatMessage(from, p.MsgID, "muted", false)
+		case errors.Is(err, service.ErrNotGroupMember):
+			h.rejectChatMessage(from, p.MsgID, "not_group_member", false)
+		case errors.Is(err, service.ErrGroupNotFound):
+			h.rejectChatMessage(from, p.MsgID, "group_not_found", false)
+		case errors.Is(err, service.ErrMembershipChanged):
+			h.rejectChatMessage(from, p.MsgID, "membership_changed", true)
+		default:
+			h.rejectChatMessage(from, p.MsgID, "temporary_failure", true)
+		}
+		return
+	}
+	if !created {
+		h.sendChatResult(from, ChatAckPayload{MsgID: p.MsgID, Status: "duplicate", Timestamp: sentAt.UnixMilli()})
+		return
+	}
+
+	// fan-out to online members
+	members, err := h.groupSvc.ActiveMemberChatIDs(ctx, p.GroupID)
+	if err != nil || len(members) == 0 {
+		h.sendChatResult(from, ChatAckPayload{MsgID: p.MsgID, Status: "accepted", Timestamp: sentAt.UnixMilli()})
+		return
+	}
+
+	// build per-member frames
+	envelopeMap := make(map[string]service.KeyEnvelope, len(p.KeyEnvelopes))
+	for _, env := range p.KeyEnvelopes {
+		envelopeMap[env.To] = env
+	}
+
+	offlineCount := 0
+	for _, memberChatID := range members {
+		if memberChatID == from.ChatID {
+			continue
+		}
+		env, ok := envelopeMap[memberChatID]
+		if !ok {
+			continue // member without envelope (shouldn't happen after validation)
+		}
+		fwd, _ := json.Marshal(Message{
+			Type: "group_message",
+			Payload: mustMarshal(map[string]interface{}{
+				"group_id":     p.GroupID,
+				"from":         from.ChatID,
+				"msg_id":       p.MsgID,
+				"iv":           p.IV,
+				"ciphertext":   p.Ciphertext,
+				"key_envelope": env,
+				"ts":           sentAt.UnixMilli(),
+				"replay":       false,
+			}),
+		})
+		h.mu.RLock()
+		recipient, online := h.clients[memberChatID]
+		h.mu.RUnlock()
+		if online {
+			select {
+			case recipient.send <- fwd:
+			default:
+				offlineCount++ // buffer full, treat as offline
+			}
+		} else {
+			offlineCount++
+		}
+	}
+
+	// offline push (batch, non-blocking)
+	if offlineCount > 0 && h.pushSvc != nil {
+		go h.pushSvc.NotifyOfflineGroupMember(p.GroupID, from.ChatID)
+	}
+
+	h.sendChatResult(from, ChatAckPayload{MsgID: p.MsgID, Status: "accepted", Timestamp: sentAt.UnixMilli()})
+}
+
+func (h *Hub) handleGroupRecall(from *Client, payload json.RawMessage) {
+	var p struct {
+		GroupID string `json:"group_id"`
+		MsgID   string `json:"msg_id"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		log.Printf("[ws] group recall rejected")
+		return
+	}
+	if !groupIDRe.MatchString(p.GroupID) || !msgIDRe.MatchString(p.MsgID) {
+		return
+	}
+	if h.groupSvc == nil {
+		return
+	}
+	ctx := context.Background()
+	err := h.groupSvc.RecallGroupMessage(ctx, from.ChatID, p.GroupID, p.MsgID)
+	if err != nil {
+		log.Printf("[ws] group recall rejected")
+		return
+	}
+
+	// fan out recall tombstone to members
+	members, _ := h.groupSvc.ActiveMemberChatIDs(ctx, p.GroupID)
+	for _, memberChatID := range members {
+		if memberChatID == from.ChatID {
+			continue
+		}
+		fwd, _ := json.Marshal(Message{
+			Type: "group_recall",
+			Payload: mustMarshal(map[string]interface{}{
+				"group_id": p.GroupID,
+				"from":     from.ChatID,
+				"msg_id":   p.MsgID,
+			}),
+		})
+		h.mu.RLock()
+		recipient, online := h.clients[memberChatID]
+		h.mu.RUnlock()
+		if online {
+			select {
+			case recipient.send <- fwd:
+			default:
+			}
+		}
+	}
+}
+
+func (h *Hub) handleGroupMessageReceivedAck(c *Client, payload json.RawMessage) {
+	var p struct {
+		GroupID string   `json:"group_id"`
+		MsgIDs  []string `json:"msg_ids"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil || c == nil {
+		return
+	}
+	if len(p.MsgIDs) == 0 {
+		return
+	}
+	ctx := context.Background()
+	_ = h.groupSvc.MarkGroupMessagesApplied(ctx, p.MsgIDs, c.ChatID)
+}
+
+func (h *Hub) handleGroupTombstoneReceivedAck(c *Client, payload json.RawMessage, kind string) {
+	var p struct {
+		GroupID string   `json:"group_id"`
+		MsgIDs  []string `json:"msg_ids"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil || c == nil {
+		return
+	}
+	if len(p.MsgIDs) == 0 {
+		return
+	}
+	ctx := context.Background()
+	_ = h.groupSvc.MarkGroupTombstonesApplied(ctx, p.MsgIDs, c.ChatID)
+}
+
+// NotifyGroupEvent sends a best-effort online notification to group members.
+func (h *Hub) NotifyGroupEvent(groupID string, event string, members []string, extra map[string]interface{}) {
+	payload := map[string]interface{}{
+		"group_id": groupID,
+		"event":    event,
+		"ts":       time.Now().UnixMilli(),
+	}
+	for k, v := range extra {
+		payload[k] = v
+	}
+	msg, _ := json.Marshal(Message{
+		Type:    "group_event",
+		Payload: mustMarshal(payload),
+	})
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, chatID := range members {
+		if c, ok := h.clients[chatID]; ok {
+			select {
+			case c.send <- msg:
+			default:
+			}
+		}
+	}
+}
+
+// SendToClient sends a raw frame to an online client. Non-blocking; returns false if offline.
+func (h *Hub) SendToClient(chatID string, msg []byte) bool {
+	h.mu.RLock()
+	c, ok := h.clients[chatID]
+	h.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	select {
+	case c.send <- msg:
+		return true
+	default:
+		return false
 	}
 }

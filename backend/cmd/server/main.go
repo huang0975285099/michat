@@ -223,6 +223,9 @@ func main() {
 		log.Println("JPush push notification enabled")
 	}
 
+	groupSvc := service.NewGroupService(db)
+	hub.SetGroupService(groupSvc)
+
 	identHandler := handler.NewIdentityHandler(identSvc, inviteSvc, friendSvc, hub)
 	userHandler := handler.NewUserHandler(identSvc)
 	friendHandler := handler.NewFriendHandler(friendSvc, hub)
@@ -241,9 +244,8 @@ func main() {
 	)
 	adminHandler := handler.NewAdminHandler(adminSvc)
 	adminAuth := handler.NewAdminAuth(os.Getenv("ADMIN_USERNAME"), os.Getenv("ADMIN_PASSWORD"))
-	groupSvc := service.NewGroupService(db)
 	groupHandler := handler.NewGroupHandler(groupSvc)
-	adminGroupHandler := handler.NewAdminGroupHandler(groupSvc)
+	adminGroupHandler := handler.NewAdminGroupHandler(groupSvc, hub)
 	robotHandler := handler.NewRobotHandler(db)
 	companyHandler := handler.NewCompanyHandler(db)
 	robotMediaPath := os.Getenv("ROBOT_MEDIA_PATH")

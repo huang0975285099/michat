@@ -46,6 +46,29 @@ func (s *PushService) NotifyOfflineUser(recipientChatID, senderChatID string) {
 	}
 }
 
+// NotifyOfflineGroupMember pushes a notification to all active members of a group
+// except the sender. Called in goroutine; does not block message processing.
+func (s *PushService) NotifyOfflineGroupMember(groupID, senderChatID string) {
+	if !s.enabled {
+		return
+	}
+	rows, err := s.db.Query(`
+		SELECT u.chat_id FROM group_members gm
+		JOIN users u ON u.id = gm.user_id
+		JOIN `+"`groups`"+` g ON g.id = gm.group_db_id
+		WHERE g.group_id = ? AND gm.state = 'active'`, groupID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var chatID string
+		if err := rows.Scan(&chatID); err == nil && chatID != senderChatID {
+			s.NotifyOfflineUser(chatID, senderChatID)
+		}
+	}
+}
+
 func (s *PushService) getRegIDs(chatID string) ([]string, error) {
 	rows, err := s.db.Query(`SELECT reg_id FROM device_tokens WHERE chat_id = ?`, chatID)
 	if err != nil {

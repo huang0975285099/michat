@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 	"e2eechat/internal/middleware"
 	"e2eechat/internal/service"
+	"e2eechat/internal/ws"
 )
 
 // GroupHandler exposes the read-only user-facing group API.
@@ -57,10 +59,11 @@ func (h *GroupHandler) GetGroupDetail(c *gin.Context) {
 // AdminGroupHandler exposes the admin group management API.
 type AdminGroupHandler struct {
 	svc *service.GroupService
+	hub *ws.Hub
 }
 
-func NewAdminGroupHandler(svc *service.GroupService) *AdminGroupHandler {
-	return &AdminGroupHandler{svc: svc}
+func NewAdminGroupHandler(svc *service.GroupService, hub *ws.Hub) *AdminGroupHandler {
+	return &AdminGroupHandler{svc: svc, hub: hub}
 }
 
 // POST /api/admin/groups
@@ -77,6 +80,9 @@ func (h *AdminGroupHandler) CreateGroup(c *gin.Context) {
 	if err != nil {
 		h.mapCreateError(c, err)
 		return
+	}
+	if h.hub != nil {
+		h.hub.NotifyGroupEvent(group.GroupID, "member_added", body.MemberChatIDs, nil)
 	}
 	c.JSON(http.StatusOK, group)
 }
@@ -144,6 +150,10 @@ func (h *AdminGroupHandler) RenameGroup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if h.hub != nil {
+		members, _ := h.svc.ActiveMemberChatIDs(c.Request.Context(), groupID)
+		h.hub.NotifyGroupEvent(groupID, "renamed", members, map[string]interface{}{"name": body.Name})
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -161,6 +171,10 @@ func (h *AdminGroupHandler) AddMembers(c *gin.Context) {
 		h.mapMemberError(c, err)
 		return
 	}
+	if h.hub != nil {
+		members, _ := h.svc.ActiveMemberChatIDs(c.Request.Context(), groupID)
+		h.hub.NotifyGroupEvent(groupID, "member_added", members, nil)
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -171,6 +185,12 @@ func (h *AdminGroupHandler) RemoveMember(c *gin.Context) {
 	if err := h.svc.RemoveMember(c.Request.Context(), groupID, chatID); err != nil {
 		h.mapMemberError(c, err)
 		return
+	}
+	if h.hub != nil {
+		members, _ := h.svc.ActiveMemberChatIDs(c.Request.Context(), groupID)
+		// include the removed member so their client can react
+		members = append(members, chatID)
+		h.hub.NotifyGroupEvent(groupID, "member_removed", members, map[string]interface{}{"member": chatID})
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -198,12 +218,21 @@ func (h *AdminGroupHandler) MuteMember(c *gin.Context) {
 		h.mapMemberError(c, err)
 		return
 	}
+	if h.hub != nil {
+		members, _ := h.svc.ActiveMemberChatIDs(c.Request.Context(), groupID)
+		event := "unmuted"
+		if until != nil {
+			event = "muted"
+		}
+		h.hub.NotifyGroupEvent(groupID, event, members, map[string]interface{}{"member": chatID, "muted_until": until})
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // DELETE /api/admin/groups/:groupId — dissolve
 func (h *AdminGroupHandler) DissolveGroup(c *gin.Context) {
 	groupID := c.Param("groupId")
+	members, _ := h.svc.ActiveMemberChatIDs(c.Request.Context(), groupID)
 	if err := h.svc.DissolveGroup(c.Request.Context(), groupID); err != nil {
 		if errors.Is(err, service.ErrGroupNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "group not found"})
@@ -211,6 +240,9 @@ func (h *AdminGroupHandler) DissolveGroup(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to dissolve group"})
 		return
+	}
+	if h.hub != nil {
+		h.hub.NotifyGroupEvent(groupID, "dissolved", members, nil)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -246,6 +278,20 @@ func (h *AdminGroupHandler) DeleteMessage(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete message"})
 		return
+	}
+	if h.hub != nil {
+		members, _ := h.svc.ActiveMemberChatIDs(c.Request.Context(), groupID)
+		payload, _ := json.Marshal(map[string]interface{}{
+			"group_id": groupID,
+			"msg_id":   msgID,
+		})
+		fwd, _ := json.Marshal(ws.Message{
+			Type:    "group_delete",
+			Payload: payload,
+		})
+		for _, memberChatID := range members {
+			h.hub.SendToClient(memberChatID, fwd)
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
