@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -19,12 +20,16 @@ type attachmentAPI interface {
 	MaxEncryptedChunkBytes() int64
 	Quota(ctx context.Context, ownerUserID uint64) (service.AttachmentQuotaView, error)
 	Init(ctx context.Context, ownerUserID uint64, recipientChatID string, fileSize, ciphertextSize, chunkSize int64, chunkCount int) (service.AttachmentView, error)
+	InitGroupAttachment(ctx context.Context, ownerUserID uint64, groupID string, fileSize, ciphertextSize, chunkSize int64, chunkCount int) (service.AttachmentView, error)
 	PutChunk(ctx context.Context, ownerUserID uint64, id string, index int, expectedSHA256 string, src io.Reader) (service.AttachmentChunkResult, error)
 	Get(ctx context.Context, userID uint64, id string) (service.AttachmentView, error)
 	Complete(ctx context.Context, ownerUserID uint64, id string) (service.AttachmentView, error)
 	DownloadChunk(ctx context.Context, recipientUserID uint64, id string, index int) (service.AttachmentChunkDownload, error)
 	Acknowledge(ctx context.Context, recipientUserID uint64, id string) error
+	AcknowledgeGroupAttachment(ctx context.Context, memberUserID uint64, id string) error
 	Cancel(ctx context.Context, ownerUserID uint64, id string) error
+	ListGroupAttachments(ctx context.Context, groupID string) ([]service.AttachmentView, error)
+	DeleteGroupAttachment(ctx context.Context, id string) error
 }
 
 func (h *AttachmentHandler) Quota(c *gin.Context) {
@@ -170,6 +175,48 @@ func (h *AttachmentHandler) Acknowledge(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "ciphertext_deleted": true})
+}
+
+var groupIDRe = regexp.MustCompile(`^G-[0-9A-F]{12}$`)
+
+// InitGroupAttachment creates an upload slot for a group file.
+func (h *AttachmentHandler) InitGroupAttachment(c *gin.Context) {
+	var request struct {
+		GroupID       string `json:"group_id" binding:"required"`
+		FileSize      int64  `json:"file_size" binding:"required"`
+		CiphertextSize int64 `json:"ciphertext_size" binding:"required"`
+		ChunkSize     int64  `json:"chunk_size" binding:"required"`
+		ChunkCount    int    `json:"chunk_count" binding:"required"`
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4096)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || !groupIDRe.MatchString(request.GroupID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid attachment metadata"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid attachment metadata"})
+		return
+	}
+	view, err := h.service.InitGroupAttachment(
+		c.Request.Context(), attachmentUserID(c), request.GroupID,
+		request.FileSize, request.CiphertextSize, request.ChunkSize, request.ChunkCount,
+	)
+	if err != nil {
+		writeAttachmentError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, view)
+}
+
+// AcknowledgeGroup records a per-member ack for a group attachment.
+func (h *AttachmentHandler) AcknowledgeGroup(c *gin.Context) {
+	if err := h.service.AcknowledgeGroupAttachment(c.Request.Context(), attachmentUserID(c), c.Param("id")); err != nil {
+		writeAttachmentError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func (h *AttachmentHandler) Cancel(c *gin.Context) {

@@ -245,7 +245,7 @@ func main() {
 	adminHandler := handler.NewAdminHandler(adminSvc)
 	adminAuth := handler.NewAdminAuth(os.Getenv("ADMIN_USERNAME"), os.Getenv("ADMIN_PASSWORD"))
 	groupHandler := handler.NewGroupHandler(groupSvc)
-	adminGroupHandler := handler.NewAdminGroupHandler(groupSvc, hub)
+	adminGroupHandler := handler.NewAdminGroupHandler(groupSvc, attachmentSvc, hub)
 	robotHandler := handler.NewRobotHandler(db)
 	companyHandler := handler.NewCompanyHandler(db)
 	robotMediaPath := os.Getenv("ROBOT_MEDIA_PATH")
@@ -323,6 +323,8 @@ func main() {
 		auth.GET("/attachments/:id/chunks/:index", attachmentHandler.DownloadChunk)
 		auth.POST("/attachments/:id/complete", attachmentHandler.Complete)
 		auth.POST("/attachments/:id/ack", attachmentHandler.Acknowledge)
+		auth.POST("/attachments/group", attachmentHandler.InitGroupAttachment)
+		auth.POST("/attachments/:id/group-ack", attachmentHandler.AcknowledgeGroup)
 		auth.DELETE("/attachments/:id", attachmentHandler.Cancel)
 		auth.GET("/groups", groupHandler.ListMyGroups)
 		auth.GET("/groups/:groupId", groupHandler.GetGroupDetail)
@@ -358,6 +360,8 @@ func main() {
 		admin.PUT("/groups/:groupId/members/:chatId/mute", adminGroupHandler.MuteMember)
 		admin.GET("/groups/:groupId/messages", adminGroupHandler.ListMessages)
 		admin.DELETE("/groups/:groupId/messages/:msgId", adminGroupHandler.DeleteMessage)
+		admin.GET("/groups/:groupId/attachments", adminGroupHandler.ListAttachments)
+		admin.DELETE("/groups/:groupId/attachments/:id", adminGroupHandler.DeleteAttachment)
 	}
 
 	// The dashboard shell itself. It holds no data — it prompts for a token and then

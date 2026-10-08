@@ -54,6 +54,18 @@ func (m *attachmentAPIMock) DownloadChunk(_ context.Context, _ uint64, _ string,
 
 func (m *attachmentAPIMock) Acknowledge(_ context.Context, _ uint64, _ string) error { return m.getErr }
 func (m *attachmentAPIMock) Cancel(_ context.Context, _ uint64, _ string) error      { return m.getErr }
+func (m *attachmentAPIMock) InitGroupAttachment(_ context.Context, _ uint64, _ string, _, _, _ int64, _ int) (service.AttachmentView, error) {
+	return service.AttachmentView{}, m.getErr
+}
+func (m *attachmentAPIMock) AcknowledgeGroupAttachment(_ context.Context, _ uint64, _ string) error {
+	return m.getErr
+}
+func (m *attachmentAPIMock) ListGroupAttachments(_ context.Context, _ string) ([]service.AttachmentView, error) {
+	return nil, m.getErr
+}
+func (m *attachmentAPIMock) DeleteGroupAttachment(_ context.Context, _ string) error {
+	return m.getErr
+}
 
 func attachmentTestContext(method, target string, body io.Reader) (*gin.Context, *httptest.ResponseRecorder) {
 	recorder := httptest.NewRecorder()

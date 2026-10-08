@@ -37,6 +37,7 @@ type AttachmentConfig struct {
 	MaxChunkBytes   int64
 	UploadTTL       time.Duration
 	Retention       time.Duration
+	GroupRetention  time.Duration
 	TombstoneTTL    time.Duration
 }
 
@@ -48,6 +49,7 @@ func DefaultAttachmentConfig() AttachmentConfig {
 		MaxChunkBytes:   2 * 1024 * 1024,
 		UploadTTL:       24 * time.Hour,
 		Retention:       7 * 24 * time.Hour,
+		GroupRetention:  3 * 24 * time.Hour,
 		TombstoneTTL:    7 * 24 * time.Hour,
 	}
 }
@@ -65,6 +67,7 @@ type Attachment struct {
 	ID              string
 	OwnerUserID     uint64
 	RecipientUserID uint64
+	GroupDBID       sql.NullInt64
 	FileSize        int64
 	CiphertextSize  int64
 	ChunkSize       int64
@@ -301,6 +304,75 @@ func (s *AttachmentService) Init(ctx context.Context, ownerUserID uint64, recipi
 	}, nil
 }
 
+func (s *AttachmentService) InitGroupAttachment(ctx context.Context, ownerUserID uint64, groupID string, fileSize, ciphertextSize, chunkSize int64, chunkCount int) (AttachmentView, error) {
+	if err := validateAttachmentShape(fileSize, ciphertextSize, chunkSize, chunkCount, s.config); err != nil {
+		return AttachmentView{}, err
+	}
+	if !groupIDPattern.MatchString(groupID) {
+		return AttachmentView{}, ErrAttachmentForbidden
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AttachmentView{}, err
+	}
+	defer tx.Rollback()
+
+	var lockedOwner uint64
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM users WHERE id = ? FOR UPDATE`, ownerUserID).Scan(&lockedOwner); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AttachmentView{}, ErrAttachmentForbidden
+		}
+		return AttachmentView{}, err
+	}
+	var groupDBID uint64
+	err = tx.QueryRowContext(ctx, `SELECT id FROM `+"`groups`"+` WHERE group_id = ?`, groupID).Scan(&groupDBID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AttachmentView{}, ErrAttachmentForbidden
+	}
+	if err != nil {
+		return AttachmentView{}, err
+	}
+	var memberCount int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM group_members WHERE group_db_id = ? AND user_id = ? AND state = 'active'`, groupDBID, ownerUserID).Scan(&memberCount); err != nil {
+		return AttachmentView{}, err
+	}
+	if memberCount == 0 {
+		return AttachmentView{}, ErrAttachmentForbidden
+	}
+	var usedBytes int64
+	if err = tx.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(ciphertext_size), 0) FROM attachments
+		WHERE owner_user_id = ? AND status IN ('uploading','available')`, ownerUserID).Scan(&usedBytes); err != nil {
+		return AttachmentView{}, err
+	}
+	if usedBytes > s.config.MaxAccountBytes-ciphertextSize {
+		return AttachmentView{}, ErrAttachmentQuota
+	}
+
+	id, err := newAttachmentID()
+	if err != nil {
+		return AttachmentView{}, err
+	}
+	now := s.now()
+	expiresAt := now.Add(s.config.UploadTTL)
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO attachments
+		(id, owner_user_id, recipient_user_id, group_db_id, file_size, ciphertext_size, chunk_size, chunk_count, status, expires_at, created_at, updated_at)
+		VALUES (?, ?, 0, ?, ?, ?, ?, ?, 'uploading', ?, ?, ?)`,
+		id, ownerUserID, groupDBID, fileSize, ciphertextSize, chunkSize, chunkCount, expiresAt, now, now)
+	if err != nil {
+		return AttachmentView{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return AttachmentView{}, err
+	}
+	return AttachmentView{
+		ID: id, Role: "owner", FileSize: fileSize, CiphertextSize: ciphertextSize,
+		ChunkSize: chunkSize, ChunkCount: chunkCount, Status: "uploading", ExpiresAt: expiresAt,
+		UploadedChunks: []int{}, MissingChunks: integerRange(chunkCount),
+	}, nil
+}
+
 func integerRange(count int) []int {
 	values := make([]int, count)
 	for index := range values {
@@ -316,7 +388,7 @@ type rowScanner interface {
 func scanAttachment(row rowScanner) (Attachment, error) {
 	var attachment Attachment
 	err := row.Scan(
-		&attachment.ID, &attachment.OwnerUserID, &attachment.RecipientUserID,
+		&attachment.ID, &attachment.OwnerUserID, &attachment.RecipientUserID, &attachment.GroupDBID,
 		&attachment.FileSize, &attachment.CiphertextSize, &attachment.ChunkSize,
 		&attachment.ChunkCount, &attachment.ReceivedBytes, &attachment.Status,
 		&attachment.ExpiresAt, &attachment.CompletedAt, &attachment.AcknowledgedAt,
@@ -325,8 +397,7 @@ func scanAttachment(row rowScanner) (Attachment, error) {
 	return attachment, err
 }
 
-const attachmentColumns = `id, owner_user_id, recipient_user_id, file_size, ciphertext_size, chunk_size, chunk_count,
-	received_bytes, status, expires_at, completed_at, acknowledged_at, created_at, updated_at`
+const attachmentColumns = `id, owner_user_id, recipient_user_id, group_db_id, file_size, ciphertext_size, chunk_size, chunk_count, received_bytes, status, expires_at, completed_at, acknowledged_at, created_at, updated_at`
 
 func (s *AttachmentService) ownedAttachment(ctx context.Context, ownerUserID uint64, id string) (Attachment, error) {
 	if !attachmentIDPattern.MatchString(id) {
@@ -422,7 +493,14 @@ func (s *AttachmentService) Get(ctx context.Context, userID uint64, id string) (
 		return AttachmentView{}, ErrAttachmentNotFound
 	}
 	attachment, err := scanAttachment(s.db.QueryRowContext(ctx,
-		`SELECT `+attachmentColumns+` FROM attachments WHERE id = ? AND (owner_user_id = ? OR recipient_user_id = ?)`, id, userID, userID))
+		`SELECT `+attachmentColumns+` FROM attachments a WHERE a.id = ? AND (
+			a.owner_user_id = ?
+			OR a.recipient_user_id = ?
+			OR (a.group_db_id IS NOT NULL AND EXISTS(
+				SELECT 1 FROM group_members gm
+				WHERE gm.group_db_id = a.group_db_id AND gm.user_id = ? AND gm.state = 'active'
+			))
+		)`, id, userID, userID, userID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return AttachmentView{}, ErrAttachmentNotFound
 	}
@@ -509,7 +587,14 @@ func (s *AttachmentService) Complete(ctx context.Context, ownerUserID uint64, id
 	}
 	now := s.now()
 	attachment.Status = "available"
-	attachment.ExpiresAt = now.Add(s.config.Retention)
+	retention := s.config.Retention
+	if attachment.GroupDBID.Valid {
+		retention = s.config.GroupRetention
+		if retention <= 0 {
+			retention = 3 * 24 * time.Hour
+		}
+	}
+	attachment.ExpiresAt = now.Add(retention)
 	attachment.CompletedAt = sql.NullTime{Time: now, Valid: true}
 	_, err = tx.ExecContext(ctx, `UPDATE attachments SET status = 'available', completed_at = ?, expires_at = ?, updated_at = ? WHERE id = ?`, now, attachment.ExpiresAt, now, id)
 	if err != nil {
@@ -532,7 +617,14 @@ func (s *AttachmentService) DownloadChunk(ctx context.Context, recipientUserID u
 	err := s.db.QueryRowContext(ctx, `
 		SELECT a.status, a.expires_at, c.ciphertext_size, c.ciphertext_sha256
 		FROM attachments a JOIN attachment_chunks c ON c.attachment_id = a.id
-		WHERE a.id = ? AND a.recipient_user_id = ? AND c.chunk_index = ?`, id, recipientUserID, index).
+		WHERE a.id = ? AND c.chunk_index = ? AND (
+			a.recipient_user_id = ?
+			OR (a.group_db_id IS NOT NULL AND EXISTS(
+				SELECT 1 FROM group_members gm
+				JOIN users u ON u.id = gm.user_id
+				WHERE gm.group_db_id = a.group_db_id AND u.id = ? AND gm.state = 'active'
+			))
+		)`, id, index, recipientUserID, recipientUserID).
 		Scan(&status, &expiresAt, &size, &hash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AttachmentChunkDownload{}, ErrChunkNotFound
@@ -575,6 +667,66 @@ func (s *AttachmentService) Acknowledge(ctx context.Context, recipientUserID uin
 		_, err = s.db.ExecContext(ctx, `UPDATE attachments SET received_bytes = 0 WHERE id = ?`, id)
 	}
 	return err
+}
+
+func (s *AttachmentService) AcknowledgeGroupAttachment(ctx context.Context, memberUserID uint64, id string) error {
+	release := s.acquireAttachmentLock(id)
+	defer release()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var groupDBID sql.NullInt64
+	var status string
+	err = tx.QueryRowContext(ctx, `SELECT group_db_id, status FROM attachments WHERE id = ? FOR UPDATE`, id).
+		Scan(&groupDBID, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrAttachmentNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !groupDBID.Valid || status != "available" {
+		return ErrAttachmentNotFound
+	}
+	var memberCount int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM group_members WHERE group_db_id = ? AND user_id = ? AND state = 'active'`, groupDBID.Int64, memberUserID).Scan(&memberCount); err != nil {
+		return err
+	}
+	if memberCount == 0 {
+		return ErrAttachmentNotFound
+	}
+	now := s.now()
+	if _, err = tx.ExecContext(ctx, `INSERT IGNORE INTO attachment_acks (attachment_id, member_user_id, acked_at) VALUES (?, ?, ?)`, id, memberUserID, now); err != nil {
+		return err
+	}
+	var ackCount int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM attachment_acks WHERE attachment_id = ?`, id).Scan(&ackCount); err != nil {
+		return err
+	}
+	var totalMembers int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM group_members WHERE group_db_id = ? AND state = 'active'`, groupDBID.Int64).Scan(&totalMembers); err != nil {
+		return err
+	}
+	if ackCount >= totalMembers {
+		if _, err = tx.ExecContext(ctx, `UPDATE attachments SET status = 'consumed', updated_at = ? WHERE id = ?`, now, id); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM attachment_chunks WHERE attachment_id = ?`, id); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE attachments SET received_bytes = 0 WHERE id = ?`, id); err != nil {
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		_ = s.storage.DeleteAttachment(ctx, id)
+		return nil
+	}
+	return tx.Commit()
 }
 
 func (s *AttachmentService) Cancel(ctx context.Context, ownerUserID uint64, id string) error {
@@ -686,4 +838,64 @@ func (s *AttachmentService) cleanupOrphanDirectories(ctx context.Context) error 
 		}
 	}
 	return nil
+}
+
+func (s *AttachmentService) ListGroupAttachments(ctx context.Context, groupID string) ([]AttachmentView, error) {
+	if !groupIDPattern.MatchString(groupID) {
+		return nil, ErrAttachmentNotFound
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT a.id, a.status, a.file_size, a.ciphertext_size, a.created_at, a.expires_at
+		FROM attachments a
+		WHERE a.group_db_id = (SELECT id FROM `+"`groups`"+` WHERE group_id = ?)
+		ORDER BY a.created_at`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var views []AttachmentView
+	for rows.Next() {
+		var view AttachmentView
+		var created time.Time
+		if err = rows.Scan(&view.ID, &view.Status, &view.FileSize, &view.CiphertextSize, &created, &view.ExpiresAt); err != nil {
+			return nil, err
+		}
+		views = append(views, view)
+	}
+	return views, rows.Err()
+}
+
+func (s *AttachmentService) DeleteGroupAttachment(ctx context.Context, id string) error {
+	if !attachmentIDPattern.MatchString(id) {
+		return ErrAttachmentNotFound
+	}
+	release := s.acquireAttachmentLock(id)
+	defer release()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := s.now()
+	result, err := tx.ExecContext(ctx, `UPDATE attachments SET status = 'deleted', updated_at = ? WHERE id = ?`, now, id)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return ErrAttachmentNotFound
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM attachment_acks WHERE attachment_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM attachment_chunks WHERE attachment_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE attachments SET received_bytes = 0 WHERE id = ?`, id); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return s.storage.DeleteAttachment(ctx, id)
 }

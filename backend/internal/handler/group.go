@@ -58,12 +58,13 @@ func (h *GroupHandler) GetGroupDetail(c *gin.Context) {
 
 // AdminGroupHandler exposes the admin group management API.
 type AdminGroupHandler struct {
-	svc *service.GroupService
-	hub *ws.Hub
+	svc           *service.GroupService
+	attachmentSvc *service.AttachmentService
+	hub           *ws.Hub
 }
 
-func NewAdminGroupHandler(svc *service.GroupService, hub *ws.Hub) *AdminGroupHandler {
-	return &AdminGroupHandler{svc: svc, hub: hub}
+func NewAdminGroupHandler(svc *service.GroupService, attachmentSvc *service.AttachmentService, hub *ws.Hub) *AdminGroupHandler {
+	return &AdminGroupHandler{svc: svc, attachmentSvc: attachmentSvc, hub: hub}
 }
 
 // POST /api/admin/groups
@@ -311,4 +312,28 @@ func (h *AdminGroupHandler) mapMemberError(c *gin.Context, err error) {
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}
+}
+
+// GET /api/admin/groups/:groupId/attachments — metadata only
+func (h *AdminGroupHandler) ListAttachments(c *gin.Context) {
+	groupID := c.Param("groupId")
+	attachments, err := h.attachmentSvc.ListGroupAttachments(c.Request.Context(), groupID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list attachments"})
+		return
+	}
+	if attachments == nil {
+		attachments = []service.AttachmentView{}
+	}
+	c.JSON(http.StatusOK, attachments)
+}
+
+// DELETE /api/admin/groups/:groupId/attachments/:id — delete chunks
+func (h *AdminGroupHandler) DeleteAttachment(c *gin.Context) {
+	attachmentID := c.Param("id")
+	if err := h.attachmentSvc.DeleteGroupAttachment(c.Request.Context(), attachmentID); err != nil {
+		writeAttachmentError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

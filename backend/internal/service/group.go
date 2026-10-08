@@ -243,6 +243,16 @@ func (s *GroupService) DissolveGroup(ctx context.Context, groupID string) error 
 	}
 
 	// CASCADE deletes group_members, group_messages, group_message_deliveries
+	// Mark group attachments as deleted (chunks cleaned up by the expiry cron later)
+	if _, err = tx.ExecContext(ctx, `
+		UPDATE attachments SET status = 'deleted', updated_at = CURRENT_TIMESTAMP(3)
+		WHERE group_db_id = ? AND status IN ('uploading','available')`, groupDBID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM attachment_acks WHERE attachment_id IN (
+		SELECT id FROM attachments WHERE group_db_id = ?)`, groupDBID); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM ` + "`groups`" + ` WHERE id = ?`, groupDBID); err != nil {
 		return err
 	}
