@@ -89,6 +89,14 @@ export const companyApi = {
   get: (slug) => api.get(`/intelligence/companies/${encodeURIComponent(slug)}`),
 }
 
+// Group chat — read-only user API (admin management via /api/admin/groups).
+export const groupApi = {
+  list: () => api.get('/groups'),
+  detail: (groupId) => api.get(`/groups/${encodeURIComponent(groupId)}`),
+  initGroupAttachment: (metadata, signal) => api.post('/attachments/group', metadata, { signal }),
+  acknowledgeGroupAttachment: (id, signal) => api.post(`/attachments/${encodeURIComponent(id)}/group-ack`, null, { signal }),
+}
+
 // Offline encrypted attachments. These endpoints only receive opaque AES-GCM
 // chunks and operational sizes; the file key/name/type remain inside chat E2EE.
 export const attachmentApi = {

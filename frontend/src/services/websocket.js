@@ -19,6 +19,7 @@ let readAckSupported = false
 let messageSyncSupported = false
 let healthCheckSupported = false
 let reliableInboxSupported = false
+let groupSupported = false
 let pendingMessageSync = false
 let pendingMessageSyncTimer = null
 let healthIntervalTimer = null
@@ -30,6 +31,7 @@ const PENDING_QUEUE_KEY = 'ws_pending_queue'  //A persistent queue for key messa
 const READ_BATCH_SIZE = 100
 const MAX_PENDING_MESSAGES = 100
 const MAX_PENDING_RECALLS = 100
+const MAX_PENDING_GROUP_MESSAGES = 100
 const MESSAGE_RETRY_MS = 15000
 const MESSAGE_RETRY_MAX_MS = 120000
 const HEALTH_INTERVAL_MS = 20000
@@ -200,7 +202,7 @@ function forceReconnect(reason, immediate = false) {
 // The type is temporarily stored first and will be played back when the corresponding on(type) is registered. In addition to offline message types,
 // call_offer is buffered only across this cold-start listener gap; session-bound call signaling remains transient.
 // Avoid buffering high-frequency transient events such as status and game actions.
-const BUFFERED_TYPES = new Set(['message', 'read_receipt', 'read_ack', 'ack', 'recall', 'file_done', 'call_offer'])
+const BUFFERED_TYPES = new Set(['message', 'read_receipt', 'read_ack', 'ack', 'recall', 'file_done', 'call_offer', 'group_message', 'group_recall', 'group_delete', 'group_event'])
 const EARLY_BUFFER_MAX = 500
 const earlyBuffer = [] //[{ type, payload }] A message that arrives without a listener
 
@@ -290,6 +292,25 @@ function isValidPendingRecall(payload) {
   return Boolean(payload && typeof payload.to === 'string' && typeof payload.msg_id === 'string')
 }
 
+function isValidPendingGroupMessage(payload) {
+  return Boolean(
+    payload &&
+    typeof payload.group_id === 'string' && payload.group_id.length > 0 &&
+    typeof payload.msg_id === 'string' && payload.msg_id.length > 0 &&
+    typeof payload.iv === 'string' && payload.iv.length > 0 &&
+    typeof payload.ciphertext === 'string' && payload.ciphertext.length > 0 &&
+    Array.isArray(payload.key_envelopes) && payload.key_envelopes.length > 0
+  )
+}
+
+function isValidPendingGroupRecall(payload) {
+  return Boolean(
+    payload &&
+    typeof payload.group_id === 'string' && payload.group_id.length > 0 &&
+    typeof payload.msg_id === 'string' && payload.msg_id.length > 0
+  )
+}
+
 function queuePendingMessage(payload) {
   if (!isValidPendingMessage(payload)) return false
   const existing = pendingQueue.find(item => item.type === 'message' && item.payload?.msg_id === payload.msg_id)
@@ -317,6 +338,37 @@ function queuePendingRecall(payload) {
   const count = pendingQueue.reduce((total, item) => total + (item.type === 'recall' ? 1 : 0), 0)
   if (count >= MAX_PENDING_RECALLS) return false
   pendingQueue.push({ type: 'recall', payload: { ...payload } })
+  savePendingQueue()
+  return true
+}
+
+function queuePendingGroupMessage(payload) {
+  if (!isValidPendingGroupMessage(payload)) return false
+  const existing = pendingQueue.find(item => item.type === 'group_message' && item.payload?.msg_id === payload.msg_id)
+  if (existing) {
+    existing.payload = { ...payload }
+    savePendingQueue()
+    return true
+  }
+  const count = pendingQueue.reduce((total, item) => total + (item.type === 'group_message' ? 1 : 0), 0)
+  if (count >= MAX_PENDING_GROUP_MESSAGES) return false
+  if (count === 0) pendingMessageRetryDelay = MESSAGE_RETRY_MS
+  pendingQueue.push({ type: 'group_message', payload: { ...payload } })
+  savePendingQueue()
+  return true
+}
+
+function queuePendingGroupRecall(payload) {
+  if (!isValidPendingGroupRecall(payload)) return false
+  const existing = pendingQueue.find(item => item.type === 'group_recall' && item.payload?.msg_id === payload.msg_id)
+  if (existing) {
+    existing.payload = { ...payload }
+    savePendingQueue()
+    return true
+  }
+  const count = pendingQueue.reduce((total, item) => total + (item.type === 'group_recall' ? 1 : 0), 0)
+  if (count >= MAX_PENDING_RECALLS) return false
+  pendingQueue.push({ type: 'group_recall', payload: { ...payload } })
   savePendingQueue()
   return true
 }
@@ -638,6 +690,7 @@ export function connect() {
           messageSyncSupported = msg.payload?.message_sync === true
           healthCheckSupported = msg.payload?.health_check === true
           reliableInboxSupported = msg.payload?.reliable_inbox === true
+          groupSupported = msg.payload?.group === true
           if (msg.payload && msg.payload.success) {
             console.log('[ws] auth success')
             reconnectAttempt = 0
@@ -692,7 +745,7 @@ export function connect() {
  */
 function sendAuth(token, resolve, authenticatingSocket = socket) {
   if (authenticatingSocket && authenticatingSocket.readyState === WebSocket.OPEN) {
-    authenticatingSocket.send(JSON.stringify({ type: 'auth', payload: { token, reliable_inbox: true } }))
+    authenticatingSocket.send(JSON.stringify({ type: 'auth', payload: { token, reliable_inbox: true, group: true } }))
     // Wait for auth_result response before resolving
     // Set a timeout to prevent the server from becoming unresponsive
     const timeout = setTimeout(() => {
@@ -717,6 +770,7 @@ function sendAuth(token, resolve, authenticatingSocket = socket) {
           messageSyncSupported = msg.payload?.message_sync === true
           healthCheckSupported = msg.payload?.health_check === true
           reliableInboxSupported = msg.payload?.reliable_inbox === true
+          groupSupported = msg.payload?.group === true
           if (msg.payload?.success) {
             console.log('[ws] auth success')
             reconnectAttempt = 0
@@ -760,6 +814,7 @@ export function disconnect() {
   messageSyncSupported = false
   healthCheckSupported = false
   reliableInboxSupported = false
+  groupSupported = false
 }
 
 export function reconnectNow(reason = 'manual') {
@@ -858,6 +913,26 @@ export function send(type, payload) {
     if (connected) schedulePendingFlush()
     return connected
   }
+  // Group messages use the same reliable outbox pattern as 1:1 messages.
+  if (type === 'group_message') {
+    if (!queuePendingGroupMessage(payload)) {
+      console.warn('[ws] pending group message queue is full or invalid')
+      return false
+    }
+    const connected = Boolean(socket && socket.readyState === WebSocket.OPEN && authenticated)
+    if (connected) schedulePendingFlush()
+    return connected
+  }
+  // Group recall uses the same outbox pattern.
+  if (type === 'group_recall') {
+    if (!queuePendingGroupRecall(payload)) {
+      console.warn('[ws] pending group recall queue is full or invalid')
+      return false
+    }
+    const connected = Boolean(socket && socket.readyState === WebSocket.OPEN && authenticated)
+    if (connected) schedulePendingFlush()
+    return connected
+  }
   if (!socket || socket.readyState !== WebSocket.OPEN || !authenticated) {
     console.warn('[ws] not connected or auth pending, message dropped')
     return false
@@ -880,7 +955,17 @@ function flushPendingQueue() {
         ? []
         : [{ type: item.type, payload: { ...item.payload } }]
     }
+    if (item.type === 'group_message') {
+      return pendingMessageInFlight.has(item.payload.msg_id)
+        ? []
+        : [{ type: item.type, payload: { ...item.payload } }]
+    }
     if (item.type === 'recall') {
+      return pendingRecallInFlight.has(item.payload.msg_id)
+        ? []
+        : [{ type: item.type, payload: { ...item.payload } }]
+    }
+    if (item.type === 'group_recall') {
       return pendingRecallInFlight.has(item.payload.msg_id)
         ? []
         : [{ type: item.type, payload: { ...item.payload } }]
@@ -897,9 +982,9 @@ function flushPendingQueue() {
       sentItems.push({ type, payload })
       if (type === 'read') {
         for (const id of payload.msg_id) pendingReadInFlight.add(`${payload.to}\u0000${id}`)
-      } else if (type === 'message') {
+      } else if (type === 'message' || type === 'group_message') {
         pendingMessageInFlight.add(payload.msg_id)
-      } else if (type === 'recall') {
+      } else if (type === 'recall' || type === 'group_recall') {
         pendingRecallInFlight.add(payload.msg_id)
       }
     } catch (e) {
@@ -953,4 +1038,8 @@ export function off(type, callback) {
 
 export function isConnected() {
   return socket?.readyState === WebSocket.OPEN && authenticated
+}
+
+export function isGroupSupported() {
+  return groupSupported
 }
