@@ -168,6 +168,7 @@ import { Notify } from "quasar";
 import { useChatStore } from "src/stores/chat";
 import { useIdentityStore } from "src/stores/identity";
 import { useCallStore } from "src/stores/call";
+import { useGroupStore } from "src/stores/group";
 import {
     wsConnected,
     wsConnectionState,
@@ -219,8 +220,10 @@ const showFooter = computed(
 
 const chatStore = useChatStore();
 const callStore = useCallStore();
+const groupStore = useGroupStore();
 let stopListening = null;
 let stopCallListening = null;
+let stopGroupListening = null;
 let stopConnectionRecovery = null;
 function onFriendRequestGlobal() {
     identity.incPendingRequestCount();
@@ -293,6 +296,9 @@ onMounted(() => {
     stopConnectionRecovery = startConnectionRecovery();
     stopListening = chatStore.startListening();
     stopCallListening = callStore.startListening();
+    stopGroupListening = groupStore.startListening();
+    groupStore.setMyChatId(identity.chatId);
+    groupStore.loadGroups();
     on("friend_request", onFriendRequestGlobal);
     initNotifications();
     checkAppUpdate();
@@ -323,6 +329,7 @@ onUnmounted(() => {
     off("friend_request", onFriendRequestGlobal);
     stopListening?.();
     stopCallListening?.();
+    stopGroupListening?.();
     stopConnectionRecovery?.();
     chatStore.stopBurnTimer();
 });

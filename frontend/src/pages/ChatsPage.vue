@@ -61,6 +61,7 @@ import { useRouter } from "vue-router";
 import { useQuasar } from "quasar";
 import { useChatStore } from "src/stores/chat";
 import { useIdentityStore } from "src/stores/identity";
+import { useGroupStore } from "src/stores/group";
 import { friendApi } from "src/services/api";
 import { on, off } from "src/services/websocket";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
@@ -70,6 +71,7 @@ const $q = useQuasar();
 const router = useRouter();
 const chatStore = useChatStore();
 const identity = useIdentityStore();
+const groupStore = useGroupStore();
 const { locale, t } = useI18n();
 const friends = ref([]);
 const friendMap = ref({}); //{ chatId: friend } for quick search
@@ -128,42 +130,66 @@ const recentChats = computed(() => {
         }
     }
 
+    // Also include visible groups (even without messages yet)
+    for (const g of groupStore.groups) {
+        chatIds.add(g.group_id);
+    }
+
     const result = [];
     for (const chatId of chatIds) {
         const msgs = chatStore.getMessages(chatId);
         const last = msgs[msgs.length - 1];
-        const friend = friendMap.value[chatId];
+        const isGroup = chatId.startsWith("G-");
         const unreadCount = msgs.filter((m) => !m.mine && !m.read).length;
 
-        result.push({
-            chatId,
-            // Priority is given to the latest friend data on this page; when it is not loaded, it falls back to the nickname/public key cached during the identity startup period.
-            // Make the first frame display the correct nickname instead of the chatID.
-            nickname: friend ? friend.nickname : identity.getFriendName(chatId),
-            // Only determine "logged out" after getFriends returns on this page to avoid mislabeling during loading.
-            deregistered: friendsLoaded.value && !friend,
-            pubkey: friend ? friend.public_key : identity.getFriendPubKey(chatId) || "",
-            lastMessage: last?.decryptionFailed || last?.text === "[Decryption failed]"
-                ? t("chat.decryptionFailed")
-                : last?.kind === "voice"
-                    ? t("chats.voiceMessage")
-                    : last?.type === "file"
-                        ? t("chats.fileMessage", { name: last.filename || "" })
-                        : last?.text || t("chats.startChatting"),
-            ts: last?.ts || 0,
-            unread: unreadCount,
-            online: !!onlineMap.value[chatId],
-        });
+        if (isGroup) {
+            // Only show groups that are in the group store (not dissolved/removed)
+            if (!groupStore.isGroupVisible(chatId)) continue;
+            result.push({
+                chatId,
+                nickname: groupStore.getGroupName(chatId),
+                deregistered: false,
+                pubkey: "",
+                lastMessage: last?.text || t("chats.startChatting"),
+                ts: last?.ts || 0,
+                unread: unreadCount,
+                online: false,
+                isGroup: true,
+            });
+        } else {
+            const friend = friendMap.value[chatId];
+            result.push({
+                chatId,
+                nickname: friend ? friend.nickname : identity.getFriendName(chatId),
+                deregistered: friendsLoaded.value && !friend,
+                pubkey: friend ? friend.public_key : identity.getFriendPubKey(chatId) || "",
+                lastMessage: last?.decryptionFailed || last?.text === "[Decryption failed]"
+                    ? t("chat.decryptionFailed")
+                    : last?.kind === "voice"
+                        ? t("chats.voiceMessage")
+                        : last?.type === "file"
+                            ? t("chats.fileMessage", { name: last.filename || "" })
+                            : last?.text || t("chats.startChatting"),
+                ts: last?.ts || 0,
+                unread: unreadCount,
+                online: !!onlineMap.value[chatId],
+                isGroup: false,
+            });
+        }
     }
 
     return result.sort((a, b) => b.ts - a.ts);
 });
 
 function openChat(chat) {
-    router.push({
-        path: `/chat/${chat.chatId}`,
-        query: { nickname: chat.nickname, pubkey: chat.pubkey },
-    });
+    if (chat.isGroup) {
+        router.push({ path: `/group/${chat.chatId}` });
+    } else {
+        router.push({
+            path: `/chat/${chat.chatId}`,
+            query: { nickname: chat.nickname, pubkey: chat.pubkey },
+        });
+    }
 }
 
 function formatTime(ts) {

@@ -32,6 +32,7 @@ import {
   serializeOfflineAttachmentContent,
   uploadOfflineAttachment,
 } from 'src/services/offline-attachment.mjs'
+import { encryptGroupMessageContent, decryptGroupMessageContent } from 'src/services/group-crypto.mjs'
 
 // ──Safety constants────────────────────────────────────────────
 
@@ -2528,6 +2529,44 @@ function validateMsgId(msgId) {
   return MSG_ID_PATTERN.test(msgId)
 }
 
+  async function sendGroupMessage(groupId, text, reply = null) {
+    const { loadPrivateKey } = await import('src/services/crypto')
+    const privateKey = await loadPrivateKey()
+    if (!privateKey) return false
+    // Get member pub keys from group store via dynamic import to avoid circular dep
+    const { useGroupStore } = await import('src/stores/group')
+    const groupStore = useGroupStore()
+    const members = groupStore.getMemberPubKeys(groupId)
+    if (members.length === 0) return false
+    const msgId = genMsgId()
+    const plaintext = serializeChatMessageContent(text, reply)
+    const envelope = await encryptGroupMessageContent(plaintext, members, msgId)
+    const msg = {
+      id: msgId, chatId: groupId, from: 'me', text, reply,
+      ts: getServerNow(), mine: true, groupId, status: 'pending',
+    }
+    await addMessage(groupId, msg)
+    const payload = {
+      group_id: groupId, msg_id: msgId,
+      iv: envelope.iv, ciphertext: envelope.ciphertext,
+      key_envelopes: envelope.key_envelopes,
+    }
+    send('group_message', payload)
+    if (hasPendingMessage(msgId)) armMessageAckTimer(msgId)
+    return true
+  }
+
+  async function recallGroupMessage(groupId, msgId) {
+    const arr = messages.value[groupId]
+    if (arr) {
+      const idx = arr.findIndex(m => m.id === msgId && m.mine)
+      if (idx < 0) throw new Error('cannot recall: not your message')
+      arr.splice(idx, 1)
+    }
+    await dbDeleteMessage(msgId).catch(() => {})
+    send('group_recall', { group_id: groupId, msg_id: msgId })
+  }
+
 /**
  * Register WebSocket message listening (called when the chat page is mounted)
    */
@@ -2935,6 +2974,86 @@ function validateMsgId(msgId) {
       await maybeAutoCleanReceivedAttachment(msg)
     }
 
+    // ── Group message handlers ──────────────────────────
+    async function onGroupMessage(payload) {
+      if (!payload || !payload.group_id || !payload.msg_id || !payload.iv || !payload.ciphertext) return
+      if (isMsgIdExists(payload.msg_id)) {
+        send('group_message_received_ack', { group_id: payload.group_id, msg_ids: [payload.msg_id] })
+        return
+      }
+      const identity = useIdentityStore()
+      const { loadPrivateKey } = await import('src/services/crypto')
+      let plaintext = null
+      try {
+        if (identity.isLocked) {
+          // Store as pending for later decryption
+          await dbAddPending({
+            msg_id: payload.msg_id, from: payload.from,
+            ephemeral_pub_key: payload.key_envelope?.ephemeral_pub_key,
+            iv: payload.iv, ciphertext: payload.ciphertext,
+            group_id: payload.group_id, key_envelope: payload.key_envelope,
+            ts: payload.ts, group: true,
+          })
+          send('group_message_received_ack', { group_id: payload.group_id, msg_ids: [payload.msg_id] })
+          return
+        }
+        const privateKey = await loadPrivateKey()
+        if (!privateKey) return
+        plaintext = await decryptGroupMessageContent(
+          { iv: payload.iv, ciphertext: payload.ciphertext, key_envelope: payload.key_envelope },
+          privateKey, payload.msg_id,
+        )
+      } catch (e) {
+        console.error('[chat] group message decrypt failed', e)
+        const msg = {
+          id: payload.msg_id, chatId: payload.group_id, from: payload.from,
+          text: null, ts: payload.ts || getServerNow(), mine: false,
+          groupId: payload.group_id, decryptionFailed: true, status: 'sent',
+        }
+        await addMessage(payload.group_id, msg)
+        send('group_message_received_ack', { group_id: payload.group_id, msg_ids: [payload.msg_id] })
+        return
+      }
+      const content = parseChatMessageContent(plaintext)
+      const msg = {
+        id: payload.msg_id, chatId: payload.group_id, from: payload.from,
+        text: content.text, reply: content.reply || null,
+        ts: payload.ts || getServerNow(), mine: false,
+        groupId: payload.group_id, status: 'sent',
+      }
+      await addMessage(payload.group_id, msg)
+      send('group_message_received_ack', { group_id: payload.group_id, msg_ids: [payload.msg_id] })
+      notifyNewMessage()
+    }
+
+    async function onGroupRecall(payload) {
+      if (!payload?.group_id || !payload?.msg_id) return
+      const chatId = payload.group_id
+      const msgId = payload.msg_id
+      const arr = messages.value[chatId]
+      if (arr) {
+        const idx = arr.findIndex(m => m.id === msgId)
+        if (idx >= 0) arr.splice(idx, 1)
+      }
+      await dbDeleteMessage(msgId).catch(() => {})
+      await dbDeletePending(msgId).catch(() => {})
+      send('group_recall_received_ack', { group_id: chatId, msg_ids: [msgId] })
+    }
+
+    async function onGroupDelete(payload) {
+      if (!payload?.group_id || !payload?.msg_id) return
+      const chatId = payload.group_id
+      const msgId = payload.msg_id
+      const arr = messages.value[chatId]
+      if (arr) {
+        const idx = arr.findIndex(m => m.id === msgId)
+        if (idx >= 0) arr.splice(idx, 1)
+      }
+      await dbDeleteMessage(msgId).catch(() => {})
+      await dbDeletePending(msgId).catch(() => {})
+      send('group_delete_received_ack', { group_id: chatId, msg_ids: [msgId] })
+    }
+
     on('message', onMessage)
     on('recall', onRecall)
     on('ack', onAck)
@@ -2945,6 +3064,9 @@ function validateMsgId(msgId) {
     on('file_complete', onFileComplete)
     on('file_error', onFileError)
     on('file_done', onFileDone)
+    on('group_message', onGroupMessage)
+    on('group_recall', onGroupRecall)
+    on('group_delete', onGroupDelete)
     return () => {
       off('message', onMessage)
       off('recall', onRecall)
@@ -2956,6 +3078,9 @@ function validateMsgId(msgId) {
       off('file_complete', onFileComplete)
       off('file_error', onFileError)
       off('file_done', onFileDone)
+      off('group_message', onGroupMessage)
+      off('group_recall', onGroupRecall)
+      off('group_delete', onGroupDelete)
     }
   }
 
@@ -3264,6 +3389,8 @@ function validateMsgId(msgId) {
     recoverOfflineUploads,
     validateFile,
     recallMessage,
+    sendGroupMessage,
+    recallGroupMessage,
     startListening,
     getMessages,
     loadMessages,
