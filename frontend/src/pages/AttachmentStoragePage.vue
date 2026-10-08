@@ -104,6 +104,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { useChatStore } from 'src/stores/chat'
 import { useIdentityStore } from 'src/stores/identity'
+import { useGroupStore } from 'src/stores/group'
 import { useI18n } from 'src/i18n'
 import { formatStorageBytes } from 'src/services/attachment-storage.mjs'
 import { attachmentApi } from 'src/services/api'
@@ -113,6 +114,7 @@ import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
 const $q = useQuasar()
 const chatStore = useChatStore()
 const identity = useIdentityStore()
+const groupStore = useGroupStore()
 const { locale, t } = useI18n()
 const loading = ref(true)
 const cleaningAll = ref(false)
@@ -123,7 +125,7 @@ const serverQuota = reactive({ supported: false, usedBytes: 0, limitBytes: 0, re
 const formatBytes = bytes => formatStorageBytes(bytes, locale.value)
 const storageUsage = computed(() => stats.storage.supported ? formatBytes(stats.storage.usage) : t('attachmentStorage.unavailable'))
 const storageAvailable = computed(() => stats.storage.supported ? formatBytes(stats.storage.available) : t('attachmentStorage.unavailable'))
-const chatName = chatId => identity.getFriendName(chatId) || chatId
+const chatName = chatId => chatId.startsWith('G-') ? groupStore.getGroupName(chatId) : (identity.getFriendName(chatId) || chatId)
 
 function applyStats(next) { Object.assign(stats, next) }
 async function refresh() {

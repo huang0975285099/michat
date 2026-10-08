@@ -3368,6 +3368,43 @@ function validateMsgId(msgId) {
           await dbDeletePending(p.msg_id).catch(() => {})
           continue
         }
+        // Group messages use a different decryption path (content key wrapped in key envelope)
+        if (p.group) {
+          const { loadPrivateKey } = await import('src/services/crypto')
+          const privateKey = await loadPrivateKey()
+          if (!privateKey) break
+          const plaintext = await decryptGroupMessageContent(
+            { iv: p.iv, ciphertext: p.ciphertext, key_envelope: p.key_envelope },
+            privateKey, p.msg_id,
+          )
+          const offlineAttachment = parseOfflineAttachmentContent(plaintext)
+          if (offlineAttachment) {
+            const msg = {
+              id: p.msg_id, chatId: p.group_id, from: p.from,
+              text: null, type: 'file',
+              filename: offlineAttachment.filename, filesize: offlineAttachment.fileSize, filetype: offlineAttachment.filetype,
+              ts: p.ts || getServerNow(), mine: false,
+              groupId: p.group_id, status: 'sent',
+              attachmentId: offlineAttachment.attachmentId, offlineAttachment,
+              attachmentStatus: 'waiting',
+            }
+            await addMessage(p.group_id, msg)
+            await dbDeletePending(p.msg_id).catch(() => {})
+            send('group_message_received_ack', { group_id: p.group_id, msg_ids: [p.msg_id] })
+            continue
+          }
+          const content = parseChatMessageContent(plaintext)
+          const persisted = await addMessage(p.group_id, {
+            id: p.msg_id, from: p.from, ...content,
+            ts: p.ts || getServerNow(), mine: false,
+            groupId: p.group_id, status: 'sent',
+          }, true)
+          if (persisted) {
+            await dbDeletePending(p.msg_id).catch(() => {})
+            send('group_message_received_ack', { group_id: p.group_id, msg_ids: [p.msg_id] })
+          }
+          continue
+        }
         const decryptedContent = await decryptMessage({
           ephemeralPubKey: p.ephemeral_pub_key,
           iv: p.iv,

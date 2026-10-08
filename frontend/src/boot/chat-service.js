@@ -24,8 +24,10 @@ export async function registerPushToken() {
  */
 async function checkPendingNavigation(router) {
   try {
-    const { senderChatId } = await ChatService.getPendingNotification()
-    if (senderChatId) {
+    const { senderChatId, groupId } = await ChatService.getPendingNotification()
+    if (groupId) {
+      router.push('/group/' + groupId)
+    } else if (senderChatId) {
       router.push('/chat/' + senderChatId)
     }
   } catch {

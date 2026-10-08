@@ -625,8 +625,8 @@ func (h *Hub) FlushPersistentInbox(c *Client) {
 		}
 	}
 
-	// Replay pending group messages
-	if h.groupSvc != nil {
+	// Replay pending group messages (only to clients with group capability)
+	if h.groupSvc != nil && c.Group {
 		groupMsgs, err := h.groupSvc.GetPendingGroupMessages(ctx, c.ChatID, 500)
 		if err != nil {
 			log.Printf("[ws] load group inbox failed: %v", err)
@@ -2374,7 +2374,7 @@ func (h *Hub) handleGroupMessage(from *Client, payload json.RawMessage) {
 		h.mu.RLock()
 		recipient, online := h.clients[memberChatID]
 		h.mu.RUnlock()
-		if online {
+		if online && recipient.Group {
 			select {
 			case recipient.send <- fwd:
 			default:
@@ -2432,7 +2432,7 @@ func (h *Hub) handleGroupRecall(from *Client, payload json.RawMessage) {
 		h.mu.RLock()
 		recipient, online := h.clients[memberChatID]
 		h.mu.RUnlock()
-		if online {
+		if online && recipient.Group {
 			select {
 			case recipient.send <- fwd:
 			default:

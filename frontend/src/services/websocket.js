@@ -375,7 +375,7 @@ function queuePendingGroupRecall(payload) {
 
 export function hasPendingMessage(msgId) {
   return typeof msgId === 'string' && pendingQueue.some(item =>
-    item.type === 'message' && item.payload?.msg_id === msgId
+    (item.type === 'message' || item.type === 'group_message') && item.payload?.msg_id === msgId
   )
 }
 
@@ -383,10 +383,10 @@ export function confirmPendingMessage(msgId) {
   if (typeof msgId !== 'string' || !msgId) return
   pendingMessageInFlight.delete(msgId)
   for (let i = pendingQueue.length - 1; i >= 0; i--) {
-    if (pendingQueue[i].type === 'message' && pendingQueue[i].payload?.msg_id === msgId) pendingQueue.splice(i, 1)
+    if ((pendingQueue[i].type === 'message' || pendingQueue[i].type === 'group_message') && pendingQueue[i].payload?.msg_id === msgId) pendingQueue.splice(i, 1)
   }
   savePendingQueue()
-  if (!pendingQueue.some(item => item.type === 'message' || item.type === 'recall')) {
+  if (!pendingQueue.some(item => item.type === 'message' || item.type === 'group_message' || item.type === 'recall' || item.type === 'group_recall')) {
     if (pendingMessageRetryTimer) clearTimeout(pendingMessageRetryTimer)
     pendingMessageRetryTimer = null
     pendingMessageRetryDelay = MESSAGE_RETRY_MS
@@ -395,7 +395,7 @@ export function confirmPendingMessage(msgId) {
 
 export function hasPendingRecall(msgId) {
   return typeof msgId === 'string' && pendingQueue.some(item =>
-    item.type === 'recall' && item.payload?.msg_id === msgId
+    (item.type === 'recall' || item.type === 'group_recall') && item.payload?.msg_id === msgId
   )
 }
 
@@ -403,10 +403,10 @@ export function confirmPendingRecall(msgId) {
   if (typeof msgId !== 'string' || !msgId) return
   pendingRecallInFlight.delete(msgId)
   for (let i = pendingQueue.length - 1; i >= 0; i--) {
-    if (pendingQueue[i].type === 'recall' && pendingQueue[i].payload?.msg_id === msgId) pendingQueue.splice(i, 1)
+    if ((pendingQueue[i].type === 'recall' || pendingQueue[i].type === 'group_recall') && pendingQueue[i].payload?.msg_id === msgId) pendingQueue.splice(i, 1)
   }
   savePendingQueue()
-  if (!pendingQueue.some(item => item.type === 'message' || item.type === 'recall')) {
+  if (!pendingQueue.some(item => item.type === 'message' || item.type === 'group_message' || item.type === 'recall' || item.type === 'group_recall')) {
     if (pendingMessageRetryTimer) clearTimeout(pendingMessageRetryTimer)
     pendingMessageRetryTimer = null
     pendingMessageRetryDelay = MESSAGE_RETRY_MS
@@ -417,13 +417,13 @@ export function discardPendingMessagesTo(chatId) {
   if (typeof chatId !== 'string' || !chatId) return
   for (let i = pendingQueue.length - 1; i >= 0; i--) {
     const item = pendingQueue[i]
-    if (item.type === 'message' && item.payload?.to === chatId) {
+    if ((item.type === 'message' || item.type === 'group_message') && item.payload?.to === chatId) {
       pendingMessageInFlight.delete(item.payload.msg_id)
       pendingQueue.splice(i, 1)
     }
   }
   savePendingQueue()
-  if (!pendingQueue.some(item => item.type === 'message' || item.type === 'recall')) {
+  if (!pendingQueue.some(item => item.type === 'message' || item.type === 'group_message' || item.type === 'recall' || item.type === 'group_recall')) {
     if (pendingMessageRetryTimer) clearTimeout(pendingMessageRetryTimer)
     pendingMessageRetryTimer = null
     pendingMessageRetryDelay = MESSAGE_RETRY_MS
@@ -514,7 +514,7 @@ function schedulePendingRetry() {
 }
 
 function schedulePendingMessageRetry() {
-  if (!pendingQueue.some(item => item.type === 'message' || item.type === 'recall') || pendingMessageRetryTimer) return
+  if (!pendingQueue.some(item => item.type === 'message' || item.type === 'group_message' || item.type === 'recall' || item.type === 'group_recall') || pendingMessageRetryTimer) return
   pendingMessageRetryTimer = setTimeout(() => {
     pendingMessageRetryTimer = null
     pendingMessageInFlight.clear()
@@ -526,7 +526,7 @@ function schedulePendingMessageRetry() {
 
 function pendingMessageIds() {
   return pendingQueue
-    .filter(item => item.type === 'message' && typeof item.payload?.msg_id === 'string')
+    .filter(item => (item.type === 'message' || item.type === 'group_message') && typeof item.payload?.msg_id === 'string')
     .map(item => item.payload.msg_id)
     .slice(0, MAX_PENDING_MESSAGES)
 }
