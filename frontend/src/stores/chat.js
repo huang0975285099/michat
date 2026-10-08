@@ -2532,9 +2532,7 @@ function validateMsgId(msgId) {
 }
 
   async function sendGroupMessage(groupId, text, reply = null) {
-    const { loadPrivateKey } = await import('src/services/crypto')
-    const privateKey = await loadPrivateKey()
-    if (!privateKey) return false
+    // Encryption only needs recipient public keys; sender's private key is not required here.
     // Get member pub keys from group store via dynamic import to avoid circular dep
     const { useGroupStore } = await import('src/stores/group')
     const groupStore = useGroupStore()
@@ -3014,7 +3012,7 @@ function validateMsgId(msgId) {
         return
       }
       const identity = useIdentityStore()
-      const { loadPrivateKey } = await import('src/services/crypto')
+      const { loadKeyPair } = await import('src/services/crypto')
       let plaintext = null
       try {
         if (identity.isLocked) {
@@ -3029,11 +3027,11 @@ function validateMsgId(msgId) {
           send('group_message_received_ack', { group_id: payload.group_id, msg_ids: [payload.msg_id] })
           return
         }
-        const privateKey = await loadPrivateKey()
-        if (!privateKey) return
+        const keyRecord = await loadKeyPair()
+        if (!keyRecord || !keyRecord.privateKey) return
         plaintext = await decryptGroupMessageContent(
           { iv: payload.iv, ciphertext: payload.ciphertext, key_envelope: payload.key_envelope },
-          privateKey, payload.msg_id,
+          keyRecord.privateKey, payload.msg_id,
         )
       } catch (e) {
         console.error('[chat] group message decrypt failed', e)
@@ -3370,12 +3368,12 @@ function validateMsgId(msgId) {
         }
         // Group messages use a different decryption path (content key wrapped in key envelope)
         if (p.group) {
-          const { loadPrivateKey } = await import('src/services/crypto')
-          const privateKey = await loadPrivateKey()
-          if (!privateKey) break
+          const { loadKeyPair } = await import('src/services/crypto')
+          const keyRecord = await loadKeyPair()
+          if (!keyRecord || !keyRecord.privateKey) break
           const plaintext = await decryptGroupMessageContent(
             { iv: p.iv, ciphertext: p.ciphertext, key_envelope: p.key_envelope },
-            privateKey, p.msg_id,
+            keyRecord.privateKey, p.msg_id,
           )
           const offlineAttachment = parseOfflineAttachmentContent(plaintext)
           if (offlineAttachment) {
