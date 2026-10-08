@@ -266,3 +266,49 @@ export async function acknowledgeOfflineAttachment(metadata, options = {}) {
   validateOfflineAttachmentMetadata(metadata)
   return responseData(await requiredAPI(options).acknowledge(metadata.attachmentId, options.signal))
 }
+
+// ── Group attachment variants ──────────────────────────
+// Group attachments use the same chunk upload/download endpoints as DM attachments.
+// Only init (group_id instead of recipient_chat_id) and ack (per-member group-ack) differ.
+
+export async function createGroupAttachmentUpload(file, groupId, options = {}) {
+  const api = requiredAPI(options)
+  const chunkSize = options.chunkSize || OFFLINE_ATTACHMENT_CHUNK_SIZE
+  validateFileMetadata(file?.name, file?.type || '', file?.size)
+  if (typeof groupId !== 'string' || !groupId.startsWith('G-')) throw new Error('Group ID is invalid')
+  if (!Number.isInteger(chunkSize) || chunkSize <= 0) throw new Error('Attachment chunk size is invalid')
+
+  const chunkCount = Math.ceil(file.size / chunkSize)
+  const ciphertextSize = file.size + AES_GCM_TAG_BYTES * chunkCount
+  const rawKey = crypto.getRandomValues(new Uint8Array(FILE_KEY_BYTES))
+  const noncePrefix = crypto.getRandomValues(new Uint8Array(NONCE_PREFIX_BYTES))
+  const created = responseData(await api.initGroupAttachment({
+    group_id: groupId,
+    file_size: file.size,
+    ciphertext_size: ciphertextSize,
+    chunk_size: chunkSize,
+    chunk_count: chunkCount,
+  }, options.signal))
+  if (!ATTACHMENT_ID_PATTERN.test(created?.id || '')) throw new Error('Attachment server returned an invalid ID')
+
+  return {
+    marker: OFFLINE_ATTACHMENT_MARKER,
+    version: OFFLINE_ATTACHMENT_VERSION,
+    attachmentId: created.id,
+    fileKey: bufToB64(rawKey),
+    noncePrefix: bufToB64(noncePrefix),
+    filename: file.name,
+    filetype: file.type || '',
+    fileSize: file.size,
+    ciphertextSize,
+    chunkSize,
+    chunkCount,
+  }
+}
+
+export async function acknowledgeGroupAttachment(metadata, options = {}) {
+  validateOfflineAttachmentMetadata(metadata)
+  const api = requiredAPI(options)
+  if (!api.acknowledgeGroupAttachment) throw new Error('Group attachment ack is not supported')
+  return responseData(await api.acknowledgeGroupAttachment(metadata.attachmentId, options.signal))
+}

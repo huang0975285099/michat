@@ -28,6 +28,7 @@
         <div class="message-bubble" :class="{ mine: msg.mine }">
           <span v-if="msg.text">{{ msg.text }}</span>
           <span v-else-if="msg.decryptionFailed" style="color: #e8463a">[解密失败]</span>
+          <span v-else-if="msg.type === 'file'" class="file-msg">📎 {{ msg.filename }} ({{ formatFileSize(msg.filesize) }})</span>
         </div>
         <div class="message-actions" v-if="msg.mine && !dissolved && !removed">
           <q-btn flat dense size="xs" label="撤回" @click="onRecall(msg)" />
@@ -40,6 +41,7 @@
         你已被禁言<span v-if="muteEndTime"> 至 {{ muteEndTime }}</span>
       </div>
       <div v-else class="input-row">
+        <q-btn flat round dense icon="attach_file" @click="onPickFile" :disable="!canSend" />
         <q-input
           v-model="inputText"
           dense
@@ -52,6 +54,7 @@
         <q-btn flat round dense icon="send" @click="onSend" :disable="!canSend" />
       </div>
     </div>
+    <input ref="fileInput" type="file" style="display:none" @change="onFileSelected" />
   </div>
 </template>
 
@@ -73,6 +76,7 @@ const identity = useIdentityStore()
 const groupId = route.params.groupId
 const inputText = ref('')
 const messagesContainer = ref(null)
+const fileInput = ref(null)
 
 const messages = computed(() => chatStore.messages[groupId] || [])
 const groupName = computed(() => groupStore.getGroupName(groupId))
@@ -121,6 +125,30 @@ async function onRecall(msg) {
     console.warn('recall failed', e)
   }
 }
+
+function onPickFile() {
+  fileInput.value?.click()
+}
+
+async function onFileSelected(e) {
+  const file = e.target.files?.[0]
+  e.target.value = ''
+  if (!file) return
+  try {
+    await chatStore.sendGroupFile(groupId, file)
+    await nextTick()
+    scrollToBottom()
+  } catch (err) {
+    console.error('group file send failed', err)
+  }
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return '0 B'
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB'
+  return Math.round(bytes / (1024 * 1024)) + ' MB'
+}
 </script>
 
 <style scoped>
@@ -141,4 +169,5 @@ async function onRecall(msg) {
 .input-row { display: flex; align-items: center; gap: 8px; }
 .message-input { flex: 1; }
 .muted-notice, .dissolved-notice { text-align: center; color: #e8463a; padding: 8px; font-size: 13px; }
+.file-msg { font-size: 13px; }
 </style>

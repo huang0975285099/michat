@@ -16,7 +16,7 @@ import {
   serializeReplyReference,
 } from 'src/services/chat-message-content.mjs'
 import { useIdentityStore } from 'src/stores/identity'
-import { attachmentApi } from 'src/services/api'
+import { attachmentApi, groupApi } from 'src/services/api'
 import { classifyAttachmentError, isStorageQuotaError } from 'src/services/attachment-errors.mjs'
 import { loadAttachmentAutoClean } from 'src/services/chat-preferences.mjs'
 import {
@@ -27,6 +27,8 @@ import {
 import {
   acknowledgeOfflineAttachment,
   createOfflineAttachmentUpload,
+  createGroupAttachmentUpload,
+  acknowledgeGroupAttachment,
   downloadOfflineAttachment,
   parseOfflineAttachmentContent,
   serializeOfflineAttachmentContent,
@@ -2567,6 +2569,36 @@ function validateMsgId(msgId) {
     send('group_recall', { group_id: groupId, msg_id: msgId })
   }
 
+  async function sendGroupFile(groupId, file) {
+    const { useGroupStore } = await import('src/stores/group')
+    const groupStore = useGroupStore()
+    const members = groupStore.getMemberPubKeys(groupId)
+    if (members.length === 0) return false
+    const msgId = genMsgId()
+    // Create group attachment upload slot
+    const metadata = await createGroupAttachmentUpload(file, groupId, { api: { ...attachmentApi, ...groupApi } })
+    // Upload chunks
+    await uploadOfflineAttachment(file, metadata, { api: attachmentApi })
+    // Send fileKey metadata as a group message
+    const plaintext = serializeOfflineAttachmentContent(metadata)
+    const envelope = await encryptGroupMessageContent(plaintext, members, msgId)
+    const msg = {
+      id: msgId, chatId: groupId, from: 'me', text: null,
+      type: 'file', filename: metadata.filename, filesize: metadata.fileSize, filetype: metadata.filetype,
+      ts: getServerNow(), mine: true, groupId, status: 'pending',
+      attachmentId: metadata.attachmentId, offlineAttachment: metadata,
+    }
+    await addMessage(groupId, msg)
+    const payload = {
+      group_id: groupId, msg_id: msgId,
+      iv: envelope.iv, ciphertext: envelope.ciphertext,
+      key_envelopes: envelope.key_envelopes,
+    }
+    send('group_message', payload)
+    if (hasPendingMessage(msgId)) armMessageAckTimer(msgId)
+    return true
+  }
+
 /**
  * Register WebSocket message listening (called when the chat page is mounted)
    */
@@ -3015,6 +3047,23 @@ function validateMsgId(msgId) {
         return
       }
       const content = parseChatMessageContent(plaintext)
+      // Check if this is an attachment message
+      const attachmentMeta = parseOfflineAttachmentContent(content)
+      if (attachmentMeta) {
+        const msg = {
+          id: payload.msg_id, chatId: payload.group_id, from: payload.from,
+          text: null, type: 'file',
+          filename: attachmentMeta.filename, filesize: attachmentMeta.fileSize, filetype: attachmentMeta.filetype,
+          ts: payload.ts || getServerNow(), mine: false,
+          groupId: payload.group_id, status: 'sent',
+          attachmentId: attachmentMeta.attachmentId, offlineAttachment: attachmentMeta,
+          attachmentStatus: 'waiting',
+        }
+        await addMessage(payload.group_id, msg)
+        send('group_message_received_ack', { group_id: payload.group_id, msg_ids: [payload.msg_id] })
+        notifyNewMessage()
+        return
+      }
       const msg = {
         id: payload.msg_id, chatId: payload.group_id, from: payload.from,
         text: content.text, reply: content.reply || null,
@@ -3390,6 +3439,7 @@ function validateMsgId(msgId) {
     validateFile,
     recallMessage,
     sendGroupMessage,
+    sendGroupFile,
     recallGroupMessage,
     startListening,
     getMessages,
