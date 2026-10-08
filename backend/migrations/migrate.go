@@ -91,11 +91,17 @@ var intelligenceCompaniesSQL string
 //go:embed 030_intelligence_company_seed.sql
 var intelligenceCompanySeedSQL string
 
+//go:embed 031_groups.sql
+var groupsSQL string
+
+//go:embed 032_group_attachments.sql
+var groupAttachmentsSQL string
+
 // AutoMigrate automatically executes table creation SQL, idempotent (IF NOT EXISTS).
 // MySQL 1060 (column already exists), 1061 (index already exists) and 1091 (key to be deleted no longer exists)
 // Considered completed and silently skipped.
 func AutoMigrate(db *sql.DB) error {
-	migrations := []string{initSQL, messageReadsSQL, deviceTokensSQL, fistTokenSQL, ironfistStatsSQL, ironfistMatchesSQL, ironfistFriendModeSQL, ironfistPvpMatchmakingSQL, ironfistMatchPvpRoomSQL, ironfistPvpReportsSQL, fistTxPvpRefundSQL, ironfistPveRewardClaimSQL, messageDeliveriesSQL, messageReadTombstonesSQL, dropSlgTablesSQL, usersIsAdminSQL, ironfistAuthoritySQL, reliableMessageInboxSQL, encryptedAttachmentsSQL, ironfistDragonTigerSQL, robotArticlesSQL, robotArticleViewsSQL, robotDiscoverySQL, robotArticleSourceSQL, intelligenceCompaniesSQL, intelligenceCompanySeedSQL}
+	migrations := []string{initSQL, messageReadsSQL, deviceTokensSQL, fistTokenSQL, ironfistStatsSQL, ironfistMatchesSQL, ironfistFriendModeSQL, ironfistPvpMatchmakingSQL, ironfistMatchPvpRoomSQL, ironfistPvpReportsSQL, fistTxPvpRefundSQL, ironfistPveRewardClaimSQL, messageDeliveriesSQL, messageReadTombstonesSQL, dropSlgTablesSQL, usersIsAdminSQL, ironfistAuthoritySQL, reliableMessageInboxSQL, encryptedAttachmentsSQL, ironfistDragonTigerSQL, robotArticlesSQL, robotArticleViewsSQL, robotDiscoverySQL, robotArticleSourceSQL, intelligenceCompaniesSQL, intelligenceCompanySeedSQL, groupsSQL, groupAttachmentsSQL}
 	for _, sql := range migrations {
 		for _, stmt := range splitStatements(sql) {
 			if _, err := db.Exec(stmt); err != nil {
