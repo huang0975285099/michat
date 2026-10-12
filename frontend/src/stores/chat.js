@@ -3011,6 +3011,17 @@ function validateMsgId(msgId) {
         send('group_message_received_ack', { group_id: payload.group_id, msg_ids: [payload.msg_id] })
         return
       }
+      // 重放是预期行为（此前 ACK 丢失）。消息已持久化时只需补发 ACK，
+      // 避免页面刷新后（内存已清空）重投消息重复入库（与 1:1 onMessage 的 dbHasMessage 检查一致）
+      try {
+        if (await dbHasMessage(payload.msg_id)) {
+          send('group_message_received_ack', { group_id: payload.group_id, msg_ids: [payload.msg_id] })
+          return
+        }
+      } catch (e) {
+        console.error('[chat] check persisted group message failed', e)
+        return
+      }
       const identity = useIdentityStore()
       const { loadKeyPair } = await import('src/services/crypto')
       let plaintext = null

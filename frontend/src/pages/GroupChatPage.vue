@@ -73,7 +73,7 @@
           dense
           outlined
           :placeholder="t('chat.inputPlaceholder')"
-          @keydown.enter.prevent="onSend"
+          @keyup.enter="onSend"
           :disable="!canInput"
           class="message-input"
         />
@@ -87,6 +87,7 @@
 <script setup>
 import { ref, computed, onActivated, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useQuasar } from 'quasar'
 import { useI18n } from 'src/i18n'
 import { useChatStore } from 'src/stores/chat'
 import { useGroupStore } from 'src/stores/group'
@@ -97,6 +98,7 @@ import { attachmentApi, groupApi } from 'src/services/api.js'
 import { downloadOfflineAttachment, acknowledgeGroupAttachment } from 'src/services/offline-attachment.mjs'
 
 const { t } = useI18n()
+const $q = useQuasar()
 const route = useRoute()
 const router = useRouter()
 const chatStore = useChatStore()
@@ -104,6 +106,10 @@ const groupStore = useGroupStore()
 const identity = useIdentityStore()
 
 const groupId = route.params.groupId
+
+// 最大消息长度限制（防止 DoS，与 ChatPage 一致）
+const MAX_MESSAGE_LENGTH = 10000
+
 const inputText = ref('')
 const messagesContainer = ref(null)
 const fileInput = ref(null)
@@ -209,9 +215,16 @@ async function onDownloadFile(msg) {
   }
 }
 
-async function onSend() {
+async function onSend(event) {
+  // 中文等输入法按回车确认候选词时不能触发发送（与 ChatPage.sendMsg 一致）
+  if (event?.isComposing || event?.keyCode === 229) return
   const text = inputText.value.trim()
   if (!text) return
+  // 安全检查：消息长度限制
+  if (text.length > MAX_MESSAGE_LENGTH) {
+    $q.notify({ type: 'warning', message: t('chat.messageTooLong', { count: MAX_MESSAGE_LENGTH }) })
+    return
+  }
   inputText.value = ''
   try {
     await chatStore.sendGroupMessage(groupId, text)
