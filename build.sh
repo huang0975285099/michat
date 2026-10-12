@@ -176,7 +176,7 @@ fi
 
 log_info "Validating Compose and nginx configuration..."
 docker compose config --quiet
-docker compose pull mysql redis edge coturn
+docker compose pull --ignore-pull-failures mysql redis edge coturn
 docker compose run --rm --no-deps edge nginx -t
 
 log_info "Starting the isolated e2eechat stack..."
@@ -216,7 +216,8 @@ done
 log_info "Running local HTTPS smoke test..."
 docker compose exec -T edge wget --no-check-certificate -q -O /dev/null https://127.0.0.1/api/version
 
-log_info "Removing old untagged images without touching other running services..."
+log_info "Removing old e2eechat images, keeping only latest version..."
+docker images --format '{{.Repository}} {{.Tag}}' | awk '/^e2eechat-(backend|frontend) [0-9]/{print $1":"$2}' | while read -r img; do docker rmi "$img" >/dev/null 2>&1 || true; done
 docker image prune -f >/dev/null
 
 docker compose ps
