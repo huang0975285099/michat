@@ -51,6 +51,7 @@
       <div
         :key="msg.id"
         class="row items-end"
+        :ref="(el) => onItemRef(msg.id, el)"
         :class="[
           msg.mine ? 'justify-end' : 'justify-start',
           { 'message-target-highlight': highlightedMessageId === msg.id },
@@ -1512,6 +1513,7 @@ onUnmounted(() => {
   pendingImageBottomIds.clear()
   measuredImageIds.clear()
   cancelRafNudge()
+  disposeItemSizing()
   if (heightResizeObserver) { heightResizeObserver.disconnect(); heightResizeObserver = null }
   window.removeEventListener('resize', updatePageHeight)
   window.visualViewport?.removeEventListener('resize', updatePageHeight)
@@ -2221,6 +2223,61 @@ function isNearBottom() {
   const el = virtualScrollEl.value?.$el
   if (!el) return true
   return el.scrollHeight - el.scrollTop - el.clientHeight < 200
+}
+
+// ---- 动态消息高度：ResizeObserver 检测已渲染消息的真实高度变化，触发 refresh 让
+// Quasar 重算虚拟滚动布局。注意：item-size 仅传数字常量（Quasar 的 prop 类型是
+// Number|String，传函数不会被调用，反而会让内部尺寸计算变成 NaN，导致列表空白）。
+// Quasar 本身在滚动后也会自测渲染项高度，60px 只是未渲染项的初始估算。
+const itemSizes = new Map()
+const elToMsgId = new Map()
+const msgIdToEl = new Map()
+let itemRO = null
+
+function ensureItemRO() {
+  if (itemRO) return
+  itemRO = new ResizeObserver((entries) => {
+    let changed = false
+    for (const entry of entries) {
+      const id = elToMsgId.get(entry.target)
+      if (!id) continue
+      const h = Math.round(entry.target.offsetHeight)
+      if (h > 0 && Math.abs((itemSizes.get(id) ?? 60) - h) > 1) {
+        itemSizes.set(id, h)
+        changed = true
+      }
+    }
+    // 一批高度变化只 refresh 一次（重算整个虚拟滚动布局，仅遍历可见项，幂等）
+    if (changed) virtualScrollEl.value?.refresh?.()
+  })
+}
+
+function onItemRef(msgId, el) {
+  if (el) {
+    ensureItemRO()
+    const prev = msgIdToEl.get(msgId)
+    if (prev && prev !== el) {
+      itemRO.unobserve(prev)
+      elToMsgId.delete(prev)
+    }
+    elToMsgId.set(el, msgId)
+    msgIdToEl.set(msgId, el)
+    itemRO.observe(el)
+  } else {
+    const prev = msgIdToEl.get(msgId)
+    if (prev) {
+      itemRO?.unobserve(prev)
+      elToMsgId.delete(prev)
+      msgIdToEl.delete(msgId)
+    }
+  }
+}
+
+function disposeItemSizing() {
+  if (itemRO) { itemRO.disconnect(); itemRO = null }
+  elToMsgId.clear()
+  msgIdToEl.clear()
+  itemSizes.clear()
 }
 
 function formatTime(ts) {

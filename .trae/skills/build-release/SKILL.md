@@ -7,6 +7,8 @@ description: Build and package Yunmi app — upgrade version, build EXE (Tauri N
 
 ## Version Upgrade
 
+**Do NOT bump the version unless the user explicitly asks to upgrade the version.** "打包最新 exe 和 apk" / "package the latest" means build from current code at the current version — never treat "latest" as a version-bump request. If ambiguous, ask first.
+
 When upgrading the version (e.g. 1.2.4 → 1.2.5), update **all 5 files**:
 
 | File | Field |
@@ -43,11 +45,16 @@ Output: `frontend/src-tauri/target/release/bundle/nsis/Yunmi_<version>_x64-setup
 
 ### APK only (Android release)
 
-**Preferred — use Git Bash directly** (avoids `build-android.cmd` path issues):
+**Preferred — use Git Bash directly** (avoids `build-android.cmd` path issues).
+
+When running from an agent/background terminal, MSYS bash may inherit an invalid stdout handle and die immediately with `echo: write error: Bad file descriptor` (exit 1, no visible output). Always redirect output to a log file in that case:
 
 ```powershell
-& "D:\Program Files\Git\bin\bash.exe" "D:\project\michat\frontend\build-android.sh" release
+cd d:\project\michat\frontend
+& "D:\Program Files\Git\bin\bash.exe" "./build-android.sh" release *> .\build-android.log
 ```
+
+Then poll `build-android.log` to watch progress. (Interactive terminals usually work without the redirect.)
 
 Or if `build-android.cmd` finds Git Bash correctly:
 

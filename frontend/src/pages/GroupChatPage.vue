@@ -85,7 +85,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onActivated, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onActivated, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useQuasar } from 'quasar'
 import { useI18n } from 'src/i18n'
@@ -167,6 +167,10 @@ onMounted(async () => {
   await chatStore.loadMessages(groupId)
   await nextTick()
   scrollToBottom()
+  // 容器高度在 updatePageHeight 的最终 rAF 后才稳定，再校正一次保证停在最新消息
+  requestAnimationFrame(() => {
+    requestAnimationFrame(scrollToBottom)
+  })
 })
 
 onUnmounted(() => {
@@ -177,7 +181,7 @@ onUnmounted(() => {
 })
 
 onActivated(() => {
-  scrollToBottom()
+  nextTick(() => requestAnimationFrame(scrollToBottom))
 })
 
 function scrollToBottom() {
@@ -185,6 +189,26 @@ function scrollToBottom() {
     messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
   }
 }
+
+// 用户是否已在（接近）底部：仅在此情况下新消息才自动跟随，避免打断上翻历史
+function isNearBottom() {
+  const el = messagesContainer.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 200
+}
+
+// 新消息到达时自动跟随到底（与单聊行为一致）：用户在底部或最新一条是自己发的才滚动，
+// 正在上翻历史时不强制拉回，防止阅读被打断
+watch(
+  () => messages.value.length,
+  () => {
+    const list = messages.value
+    const last = list[list.length - 1]
+    if (isNearBottom() || (last && last.mine)) {
+      nextTick(scrollToBottom)
+    }
+  }
+)
 
 // ── 群文件下载 ──
 const fileBusy = ref({})
