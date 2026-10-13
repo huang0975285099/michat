@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { encryptMessage, decryptMessage, encryptFile, decryptFile, bufToB64, b64ToBuf } from 'src/services/crypto'
 import {
   send, on, off, confirmPendingReads, confirmPendingMessage,
-  discardPendingMessagesTo, retryPendingMessage, hasPendingMessage,
+  discardPendingMessagesTo, retryPendingMessage, hasPendingMessage, hasPendingRecall,
   isConnected, getServerNow
 } from 'src/services/websocket'
 import { notifyNewMessage } from 'src/services/notify'
@@ -28,7 +28,6 @@ import {
   acknowledgeOfflineAttachment,
   createOfflineAttachmentUpload,
   createGroupAttachmentUpload,
-  acknowledgeGroupAttachment,
   downloadOfflineAttachment,
   parseOfflineAttachmentContent,
   serializeOfflineAttachmentContent,
@@ -2569,6 +2568,40 @@ export const useChatStore = defineStore('chat', () => {
     return sendOfflineFile(toChatId, recipientPubKey, file, burnAfterRead, options)
   }
 
+  async function deleteLocalMessage(chatId, msgId) {
+    confirmPendingMessage(msgId)
+    const pendingTimer = ackTimers.get(msgId)
+    if (pendingTimer) {
+      clearTimeout(pendingTimer)
+      ackTimers.delete(msgId)
+    }
+    const thread = messages.value[chatId]
+    const index = thread?.findIndex(message => message.id === msgId) ?? -1
+    const removed = index >= 0 ? thread.splice(index, 1)[0] : null
+    if (removed?.mine && removed.offlineAttachment && removed.status !== 'sent') {
+      await attachmentApi.cancel(removed.offlineAttachment.attachmentId).catch(() => {})
+    }
+    await dbDeleteMessage(msgId)
+    await deleteFileArtifacts(removed, msgId)
+  }
+
+  async function cacheGroupAttachment(groupId, msgId, blob, filetype) {
+    const message = messages.value[groupId]?.find(item => item.id === msgId && item.type === 'file')
+    if (!message || blob.size !== message.filesize) return false
+    await assertLocalAttachmentSpace(blob.size)
+    await persistFileSource(groupId, msgId, blob, filetype, message.offlineAttachment?.chunkSize)
+    const current = messages.value[groupId]?.find(item => item.id === msgId)
+    if (!current) {
+      await deleteFileArtifacts(null, msgId)
+      return false
+    }
+    current.localFileAvailable = true
+    if (!current.objectUrl && blob.size <= AUTO_PREVIEW_FILE_BYTES) {
+      current.objectUrl = URL.createObjectURL(blob)
+    }
+    return true
+  }
+
   async function recallMessage(chatId, msgId, toChatId) {
     confirmPendingMessage(msgId)
     const pendingTimer = ackTimers.get(msgId)
@@ -2639,23 +2672,35 @@ function validateMsgId(msgId) {
       iv: envelope.iv, ciphertext: envelope.ciphertext,
       key_envelopes: envelope.key_envelopes,
     }
-    send('group_message', payload)
-    if (hasPendingMessage(msgId)) armMessageAckTimer(msgId)
+    const sentNow = send('group_message', payload)
+    const queued = hasPendingMessage(msgId)
+    if (!sentNow && !queued) {
+      await deleteLocalMessage(groupId, msgId)
+      return false
+    }
+    const status = sentNow ? 'pending' : 'queued'
+    const message = messages.value[groupId]?.find(item => item.id === msgId)
+    if (message) message.status = status
+    await dbUpdateMessageDelivery(msgId, status).catch(() => {})
+    if (sentNow) armMessageAckTimer(msgId)
     return true
   }
 
   async function recallGroupMessage(groupId, msgId) {
     const arr = messages.value[groupId]
-    if (arr) {
-      const idx = arr.findIndex(m => m.id === msgId && m.mine)
-      if (idx < 0) throw new Error('cannot recall: not your message')
-      arr.splice(idx, 1)
+    if (!arr?.some(message => message.id === msgId && message.mine)) {
+      throw new Error('cannot recall: not your message')
     }
-    await dbDeleteMessage(msgId).catch(() => {})
-    send('group_recall', { group_id: groupId, msg_id: msgId })
+    const sentNow = send('group_recall', { group_id: groupId, msg_id: msgId })
+    if (!sentNow && !hasPendingRecall(msgId)) {
+      throw new Error('Group recall outbox is full')
+    }
+    await deleteLocalMessage(groupId, msgId)
   }
 
   async function sendGroupFile(groupId, file) {
+    validateFile(file)
+    await assertLocalAttachmentSpace(file.size)
     const { useGroupStore } = await import('src/stores/group')
     const groupStore = useGroupStore()
     const members = groupStore.getMemberPubKeys(groupId)
@@ -2663,26 +2708,45 @@ function validateMsgId(msgId) {
     const msgId = genMsgId()
     // Create group attachment upload slot
     const metadata = await createGroupAttachmentUpload(file, groupId, { api: { ...attachmentApi, ...groupApi } })
-    // Upload chunks
-    await uploadOfflineAttachment(file, metadata, { api: attachmentApi })
-    // Send fileKey metadata as a group message
-    const plaintext = serializeOfflineAttachmentContent(metadata)
-    const envelope = await encryptGroupMessageContent(plaintext, members, msgId)
-    await addFileMessage(groupId, {
-      id: msgId, chatId: groupId, from: 'me',
-      type: 'file', filename: metadata.filename, filesize: metadata.fileSize, filetype: metadata.filetype,
-      ts: getServerNow(), mine: true, groupId, status: 'pending',
-      attachmentId: metadata.attachmentId, offlineAttachment: metadata,
-      localFileAvailable: false,
-    })
-    const payload = {
-      group_id: groupId, msg_id: msgId,
-      iv: envelope.iv, ciphertext: envelope.ciphertext,
-      key_envelopes: envelope.key_envelopes,
+    try {
+      await uploadOfflineAttachment(file, metadata, { api: attachmentApi })
+      await persistFileSource(groupId, msgId, file, file.type, metadata.chunkSize)
+      const plaintext = serializeOfflineAttachmentContent(metadata)
+      const envelope = await encryptGroupMessageContent(plaintext, members, msgId)
+      const added = await addFileMessage(groupId, {
+        id: msgId, chatId: groupId, from: 'me',
+        type: 'file', filename: metadata.filename, filesize: metadata.fileSize, filetype: metadata.filetype,
+        ts: getServerNow(), mine: true, groupId, status: 'pending',
+        attachmentId: metadata.attachmentId, offlineAttachment: metadata,
+        localFileAvailable: true,
+        objectUrl: file.size <= AUTO_PREVIEW_FILE_BYTES ? URL.createObjectURL(file) : null,
+      })
+      if (!added) {
+        await deleteLocalMessage(groupId, msgId)
+        throw new Error('Unable to save the group attachment message')
+      }
+      const payload = {
+        group_id: groupId, msg_id: msgId,
+        iv: envelope.iv, ciphertext: envelope.ciphertext,
+        key_envelopes: envelope.key_envelopes,
+      }
+      const sentNow = send('group_message', payload)
+      const queued = hasPendingMessage(msgId)
+      if (!sentNow && !queued) {
+        await deleteLocalMessage(groupId, msgId)
+        throw new Error('Group message outbox is full')
+      }
+      const status = sentNow ? 'pending' : 'queued'
+      const message = messages.value[groupId]?.find(item => item.id === msgId)
+      if (message) message.status = status
+      await dbUpdateMessageDelivery(msgId, status).catch(() => {})
+      if (sentNow) armMessageAckTimer(msgId)
+      return true
+    } catch (error) {
+      await attachmentApi.cancel(metadata.attachmentId).catch(() => {})
+      await deleteFileArtifacts(null, msgId)
+      throw error
     }
-    send('group_message', payload)
-    if (hasPendingMessage(msgId)) armMessageAckTimer(msgId)
-    return true
   }
 
 /**
@@ -3154,6 +3218,7 @@ function validateMsgId(msgId) {
           ts: payload.ts || getServerNow(), mine: false,
           groupId: payload.group_id, status: 'sent',
           attachmentId: attachmentMeta.attachmentId, offlineAttachment: attachmentMeta,
+          localFileAvailable: false,
         })
         send('group_message_received_ack', { group_id: payload.group_id, msg_ids: [payload.msg_id] })
         notifyNewMessage()
@@ -3602,6 +3667,8 @@ function validateMsgId(msgId) {
     recoverOfflineUploads,
     validateFile,
     recallMessage,
+    deleteLocalMessage,
+    cacheGroupAttachment,
     sendGroupMessage,
     sendGroupFile,
     recallGroupMessage,
