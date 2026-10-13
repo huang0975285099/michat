@@ -47,6 +47,7 @@
         class="chat-message-scroll q-px-sm q-py-md"
         :style="{ overflowAnchor: 'none', opacity: scrolled ? 1 : 0, transition: 'opacity 0.08s' }"
         v-slot="{ item: msg, index: idx }"
+        @virtual-scroll="onVirtualScroll"
       >
       <div
         :key="msg.id"
@@ -605,6 +606,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { copyToClipboard, useQuasar } from 'quasar'
 import { useChatStore } from 'src/stores/chat'
+import { useChatHistoryWindow } from 'src/composables/useChatHistoryWindow'
 import { useIdentityStore } from 'src/stores/identity'
 import { useCallStore } from 'src/stores/call'
 import { friendApi } from 'src/services/api'
@@ -715,7 +717,6 @@ const now = ref(getServerNow())
 const watermarkNow = ref(getCalibratedServerNow())
 const watermarkText = computed(() => createChatWatermark(identityStore.chatId, watermarkNow.value))
 let nowTimer = null
-let nudgeTimer = null
 let heightResizeObserver = null
 let rafNudgeId = null
 let highlightTimer = null
@@ -1391,7 +1392,10 @@ const friendOnline = ref(false)
 // Obtain friend's public key: only obtain it from trusted sources (local cache or API), prohibit injection from URL parameters
 const friendPubKey = ref(identityStore.getFriendPubKey(friendChatId) || '')
 
-const messages = computed(() => chatStore.getMessages(friendChatId))
+// 历史窗口：全量消息留在 store（聊天列表未读数/预览依赖），页面只渲染最近一窗口，
+// 滚动到顶部补页——与 GroupChatPage 共用同一机制（useChatHistoryWindow）
+const { visibleMessages, hasOlder, loadingOlder, loadOlder } = useChatHistoryWindow(chatStore, friendChatId)
+const messages = visibleMessages
 const galleryImages = computed(() => messages.value
   .filter(message => isMsgImage(message) && message.objectUrl)
   .map(message => ({
@@ -1460,7 +1464,9 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', handleVoiceVisibilityChange)
 
   // Loading messages - scroll to the end as soon as the message arrives, without waiting for subsequent network requests
-  await chatStore.loadMessages(friendChatId)
+  // 历史窗口化加载：热路径（启动时 loadAllMessages 已全量解密）只补窗口内 file blob；
+  // 冷路径（内存无会话数据）内部走 loadMessages 全量加载，行为与旧版一致
+  await chatStore.ensureMessagesLoaded(friendChatId)
 
   // Wait for the DOM to update and scroll immediately after the page height takes effect.
   nextTick(() => {
@@ -1473,17 +1479,8 @@ onMounted(async () => {
         // Lightly align frame by frame after the content is visible (only scrollTop is set, vs.scrollTo() is not called),
         // Correct the slight deviation in the measured item height caused by virtual scrolling
         startRafNudge(30)
-        // Start a 3-second nudge timer to cover bounces caused by asynchronous status updates (read receipts, online status, etc.)
-        let nudgeCount = 0
-        nudgeTimer = setInterval(() => {
-          nudgeCount++
-          if (nudgeCount > 20 || !isNearBottom()) {
-            clearInterval(nudgeTimer)
-            nudgeTimer = null
-            return
-          }
-          nudgeToBottom()
-        }, 150)
+        // 监听用户上滚意图，立即让出滚动权（替代原 3 秒无脑钉底定时器）
+        setupScrollIntentGuard()
       })
     })
   })
@@ -1497,7 +1494,7 @@ onMounted(async () => {
   // The following are asynchronous operations that do not affect the layout of the first screen and do not block scrolling:
   // Obtaining friend information, marking read, and synchronizing read receipts—these network requests take a long time.
   // But it will not change the message list height (only update the avatar/online status/read mark),
-  // nudgeTimer automatically corrects possible small offsets after they trigger a reactive update.
+  // 高度类变化会由消息行的 ResizeObserver 捕获，通过 refresh + 仅底部时回贴及时纠正。
   fetchFriendInfo()
   chatStore.markAsRead(friendChatId)
   chatStore.syncReadStatus(friendChatId)
@@ -1508,7 +1505,7 @@ onUnmounted(() => {
   setSecureScreen(false)
   stopStatus && stopStatus()
   if (nowTimer) { clearTimeout(nowTimer); nowTimer = null }
-  if (nudgeTimer) { clearInterval(nudgeTimer); nudgeTimer = null }
+  scrollIntentCleanup?.()
   if (highlightTimer) { clearTimeout(highlightTimer); highlightTimer = null }
   pendingImageBottomIds.clear()
   measuredImageIds.clear()
@@ -1531,8 +1528,13 @@ onUnmounted(() => {
 
 // Only monitor changes in the number of messages (new/deleted) to avoid deep traversal of the entire array.
 // It also avoids unnecessary forced scrolling caused by changes in fields such as read receipts.
-watch(() => messages.value.length, (newLength, oldLength) => {
-  const newMsgs = messages.value
+// 注意监听的是全量数组长度：窗口化后新消息追加时窗口滑动、可见长度不变，
+// 若监听可见长度，新消息将不会自动跟随也不会标记已读。
+watch(() => chatStore.getMessages(friendChatId).length, (newLength, oldLength) => {
+  // 补页/扩窗造成的长度增长不等于"来了新消息"：窗口顶部新进入的旧消息若被误判为
+  // 追加且含 mine 消息，会触发强制跳底打断回看历史，须整段跳过（含标记已读）
+  if (prependingHistory) return
+  const newMsgs = chatStore.getMessages(friendChatId)
   const appended = newLength > oldLength ? newMsgs.slice(oldLength) : []
   const keepBottom = isNearBottom() || appended.some(message => message.mine)
   // Automatically scroll only when the user is already near the bottom, without interrupting when reviewing history
@@ -2081,12 +2083,26 @@ function replyPreviewText(reply) {
   return reply.preview || t('chat.originalUnavailable')
 }
 
-function scrollToRepliedMessage(reply) {
-  const index = messages.value.findIndex(message => message.id === reply?.messageId)
-  if (index < 0) {
+async function scrollToRepliedMessage(reply) {
+  // 被引用消息可能在当前窗口之外：先在全量数组定位，一次性扩窗覆盖后再滚动
+  const full = chatStore.getMessages(friendChatId)
+  const fullIndex = full.findIndex(message => message.id === reply?.messageId)
+  if (fullIndex < 0) {
     $q.notify({ type: 'info', message: t('chat.originalNotFound'), timeout: 1800 })
     return
   }
+
+  if (prependingHistory) return
+  prependingHistory = true
+  try {
+    await chatStore.ensureHistoryWindowAtLeast(friendChatId, full.length - fullIndex)
+    await nextTick()
+  } finally {
+    requestAnimationFrame(() => { prependingHistory = false })
+  }
+
+  const index = messages.value.findIndex(message => message.id === reply.messageId)
+  if (index < 0) return
 
   highlightedMessageId.value = reply.messageId
   virtualScrollEl.value?.scrollTo(index, 'center-force')
@@ -2218,6 +2234,76 @@ function scrollToBottomReliable(tries = 30) {
   startRafNudge(tries)
 }
 
+// ---- 用户滚动意图守卫 ----
+// 旧实现的问题：挂载后无脑钉底 3 秒（150ms×20）+ 每张图片 settle 后再钉 90 帧，
+// 期间完全不感知用户，上翻历史会被反复拽回底部（"等几秒才能自由滚动"）。
+// 现在改为事件驱动：一旦用户主动上滚（滚轮向上/触摸拖动/翻页键），立即取消
+// 进行中的钉底、让出滚动权；后续高度变化由 ResizeObserver 的"仅底部时回贴"兜底。
+let scrollIntentCleanup = null
+
+function cancelBottomPinning() {
+  cancelRafNudge()
+}
+
+function setupScrollIntentGuard() {
+  const el = virtualScrollEl.value?.$el
+  if (!el || scrollIntentCleanup) return
+  const onWheel = (e) => {
+    if (e.deltaY < 0) cancelBottomPinning()
+  }
+  // 钉底期间用户必然在底部，任何触摸拖动都视为想离开底部（回看历史）
+  const onTouchMove = () => cancelBottomPinning()
+  const onKeyDown = (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'PageUp' && e.key !== 'Home') return
+    const t = e.target
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+    cancelBottomPinning()
+  }
+  el.addEventListener('wheel', onWheel, { passive: true })
+  el.addEventListener('touchmove', onTouchMove, { passive: true })
+  window.addEventListener('keydown', onKeyDown)
+  scrollIntentCleanup = () => {
+    el.removeEventListener('wheel', onWheel)
+    el.removeEventListener('touchmove', onTouchMove)
+    window.removeEventListener('keydown', onKeyDown)
+    scrollIntentCleanup = null
+  }
+}
+
+// ---- 历史消息补页（与 GroupChatPage 共用同一窗口机制）----
+// 滚动接近顶部时扩窗 HISTORY_PAGE_SIZE 条。QVirtualScroll 检测到 items 长度变化会
+// 重置内部状态并从当前 scrollTop 重锚定，无法保证阅读位置，因此补页后显式把
+// "原顶部可见消息"（在扩窗后的新数组中索引整体后移 added）用 start-force 顶回视口上沿。
+let topVisibleIndex = 0        // 最近一次虚拟滚动上报的可见起始索引
+let prependingHistory = false  // 补页/扩窗期间抑制"新消息追底"的 watch（长度增长会被误判为追加）
+
+function onVirtualScroll({ index }) {
+  topVisibleIndex = index
+  // 初始定位（scrolled=false）期间不触发，避免与挂载后的 scrollToBottom 打架；
+  // 锚定后 index = prevFirstVisible + added > 4，天然不会无限循环补页
+  if (scrolled.value && index <= 4 && hasOlder.value) {
+    prependHistory()
+  }
+}
+
+async function prependHistory() {
+  if (loadingOlder.value || prependingHistory || !hasOlder.value) return
+  prependingHistory = true
+  try {
+    const prevFirstVisible = topVisibleIndex
+    const added = await loadOlder()
+    if (added > 0) {
+      await nextTick()
+      requestAnimationFrame(() => {
+        virtualScrollEl.value?.scrollTo(prevFirstVisible + added, 'start-force')
+      })
+    }
+  } finally {
+    // watch 是 pre-flush：赋值当帧先执行（此时标志仍为 true），下一帧再释放
+    requestAnimationFrame(() => { prependingHistory = false })
+  }
+}
+
 // Whether the user is at (nearly) the bottom: only in this case new messages will be automatically scrolled to avoid being forced back when looking back in history
 function isNearBottom() {
   const el = virtualScrollEl.value?.$el
@@ -2242,13 +2328,27 @@ function ensureItemRO() {
       const id = elToMsgId.get(entry.target)
       if (!id) continue
       const h = Math.round(entry.target.offsetHeight)
-      if (h > 0 && Math.abs((itemSizes.get(id) ?? 60) - h) > 1) {
+      if (h <= 0) continue
+      const prev = itemSizes.get(id)
+      if (prev === undefined) {
+        // 首次测量：只记录。虚拟滚动渲染新条目必然触发首次回调，
+        // 此时 refresh 只会在用户滚动时产生无谓重排（Quasar 滚动中会自测修正高度）
+        itemSizes.set(id, h)
+      } else if (Math.abs(prev - h) > 1) {
         itemSizes.set(id, h)
         changed = true
       }
     }
-    // 一批高度变化只 refresh 一次（重算整个虚拟滚动布局，仅遍历可见项，幂等）
-    if (changed) virtualScrollEl.value?.refresh?.()
+    if (!changed) return
+    // 静止状态下的高度变化（图片解码、文件状态等）：一批只 refresh 一次重算虚拟滚动布局
+    virtualScrollEl.value?.refresh?.()
+    // 用户仍停在底部时，把被高度变化撑开的内容重新贴回底部。
+    // rAF 排在 refresh 内部 rAF 之后执行，钉底最终生效（事件驱动，替代原 3 秒轮询且永不超时）
+    if (isNearBottom()) {
+      requestAnimationFrame(() => {
+        if (isNearBottom()) nudgeToBottom()
+      })
+    }
   })
 }
 
@@ -2818,21 +2918,24 @@ function shouldCompact(msgs, idx) {
 .file-card {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 8px;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
   min-width: 180px;
-  max-width: min(100%, 320px);
+  max-width: min(100%, 280px);
+  background: #f7f8fa;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
 }
 .file-card-mine {
-  background: rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.92);
 }
 .file-card-theirs {
-  background: rgba(0,0,0,0.06);
+  background: #f7f8fa;
 }
 .file-icon {
-  font-size: 28px;
+  font-size: 32px;
   flex-shrink: 0;
+  line-height: 1;
 }
 .file-meta {
   flex: 1;
@@ -2841,31 +2944,35 @@ function shouldCompact(msgs, idx) {
 .file-name {
   font-size: 13px;
   font-weight: 500;
+  color: #111;
   word-break: break-all;
   line-height: 1.3;
 }
 .file-size {
   font-size: 11px;
-  opacity: 0.65;
-  margin-top: 2px;
+  color: #888;
+  margin-top: 3px;
 }
 .file-dl {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 0;
   border-radius: 50%;
-  background: rgba(25, 118, 210, 0.12);
-  color: #1565c0;
+  background: rgba(25, 118, 210, 0.1);
+  color: #1976d2;
   flex-shrink: 0;
   cursor: pointer;
 }
+.file-dl:hover {
+  background: rgba(25, 118, 210, 0.18);
+}
 .file-dl-mine {
-  background: rgba(255,255,255,0.2);
-  color: white;
+  background: rgba(25, 118, 210, 0.1);
+  color: #1976d2;
 }
 .file-dl.complete {
   color: #2e7d32;

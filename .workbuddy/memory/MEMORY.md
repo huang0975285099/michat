@@ -28,3 +28,19 @@
 
 ## 上手阅读顺序
 1. main.go → 2. ws/hub.go → 3. service/identity.go → 4. frontend crypto.js/group-crypto.mjs → 5. websocket.js/api.js → 6. docker-compose + nginx 配置 → 7. migrations
+
+## 版本号与升级提示（发布必读，易漏）
+升级提示是**服务端驱动**的：客户端只在启动时调一次 `GET /api/version`（`MainLayout.checkAppUpdate`，无轮询），用 `getUpdateStatus(APP_VERSION, latest, min_supported)` 判断——`current == latest` 返回 `current`，**不提示**。因此「本地打包出 exe/apk」不等于「发布了新版本」。
+
+提升版本时必须同步改 **7 处**（历史上多次只改了前 5 处，导致老用户收不到升级提示）：
+1. `frontend/package.json` → `"version"`
+2. `frontend/src-capacitor/package.json` → `"version"`
+3. `frontend/src-tauri/Cargo.toml` → `version =`
+4. `frontend/src-tauri/Cargo.lock` → `[[package]] name = "yunmi"` 下的 `version =`
+5. `frontend/src-capacitor/android/app/build.gradle` → `versionName` + `versionCode`（+1）
+6. `docker-compose.yml` → `APP_LATEST_VERSION`（生产 `/api/version` 的真正来源）
+7. `backend/config.yaml` → `version.latest`（本地/开发值；生产被 compose 环境变量覆盖）
+
+发布还须：把新包上传到服务器 `/usr/share/nginx/html/download/{yunChat.exe,yunChat.apk}`（下载 URL 是固定文件名，见 `APP_WINDOWS_UPDATE_URL` / `APP_APK_UPDATE_URL`），并重建 backend 容器（环境变量仅启动时读取）。改完用 `curl https://m.yzs88.com:8088/api/version` 核对 `latest`。
+
+用户侧：已打开的客户端不会立即弹提示，需重启 App，或在「我的」页手动「检查更新」。

@@ -7,6 +7,7 @@ downloads/
 # 后端
 backend/tmp/
 backend/*.exe
+backend/data/
 
 # 前端
 frontend/node_modules/

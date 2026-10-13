@@ -16,7 +16,7 @@
       你已被移出群聊
     </div>
 
-    <div class="messages-container" ref="messagesContainer">
+    <div class="messages-container" ref="messagesContainer" @scroll="onMessagesScroll">
       <div v-if="messages.length === 0" class="empty-hint">{{ t('chats.emptyHint') }}</div>
       <div
         v-for="(msg, idx) in messages"
@@ -30,14 +30,35 @@
           <deterministic-avatar v-if="!shouldCompact(messages, idx)" :seed="msg.from" :size="28" class="avatar-side q-mr-xs" />
           <div v-else class="avatar-placeholder" />
           <div class="message-content">
-            <div class="message-sender" v-if="!shouldCompact(messages, idx)">{{ senderName(msg.from) }} · {{ formatTime(msg.ts) }}</div>
+            <div class="message-sender" v-if="!shouldCompact(messages, idx)">{{ senderName(msg.from) }}</div>
             <div class="message-bubble">
-              <span v-if="msg.text">{{ msg.text }}</span>
+              <div v-if="msg.text" class="message-text">{{ msg.text }}</div>
               <span v-else-if="msg.decryptionFailed" style="color: #e8463a">[解密失败]</span>
-              <button v-else-if="msg.type === 'file'" class="file-msg file-download" :disabled="fileBusy[msg.id]" @click="onDownloadFile(msg)">
-                <q-icon :name="fileBusy[msg.id] ? 'downloading' : 'download'" size="14px" />
-                {{ msg.filename }} ({{ formatFileSize(msg.filesize) }}){{ fileBusy[msg.id] ? ' …' : '' }}
-              </button>
+              <template v-else-if="msg.type === 'file'">
+                <img
+                  v-if="isMsgImage(msg) && msg.objectUrl"
+                  :src="msg.objectUrl"
+                  :alt="msg.filename || t('chat.imageMessage')"
+                  class="file-img"
+                  @click="openImagePreview(msg)"
+                />
+                <div v-else class="file-card" :class="msg.mine ? 'file-card-mine' : 'file-card-theirs'">
+                  <span class="file-icon">{{ getFileIcon(msg.filetype, msg.filename) }}</span>
+                  <div class="file-meta">
+                    <div class="file-name">{{ msg.filename }}</div>
+                    <div class="file-size">{{ formatFileSize(msg.filesize) }}</div>
+                  </div>
+                  <button
+                    type="button"
+                    class="file-dl"
+                    :disabled="fileBusy[msg.id]"
+                    @click.stop="onDownloadFile(msg)"
+                  >
+                    <q-icon :name="fileBusy[msg.id] ? 'downloading' : 'download'" size="18px" />
+                  </button>
+                </div>
+              </template>
+              <div class="message-meta">{{ formatTime(msg.ts) }}</div>
               <message-action-menu :can-copy="!!msg.text" @copy="copyMessage(msg)" />
             </div>
           </div>
@@ -47,14 +68,34 @@
           <deterministic-avatar v-if="!shouldCompact(messages, idx)" :seed="identity.chatId" :size="28" class="avatar-side q-ml-xs" />
           <div v-else class="avatar-placeholder" />
           <div class="message-content">
-            <div class="message-sender mine-sender" v-if="!shouldCompact(messages, idx)">{{ formatTime(msg.ts) }}</div>
             <div class="message-bubble mine">
-              <span v-if="msg.text">{{ msg.text }}</span>
+              <div v-if="msg.text" class="message-text">{{ msg.text }}</div>
               <span v-else-if="msg.decryptionFailed" style="color: #e8463a">[解密失败]</span>
-              <button v-else-if="msg.type === 'file'" class="file-msg file-download" :disabled="fileBusy[msg.id]" @click="onDownloadFile(msg)">
-                <q-icon :name="fileBusy[msg.id] ? 'downloading' : 'download'" size="14px" />
-                {{ msg.filename }} ({{ formatFileSize(msg.filesize) }}){{ fileBusy[msg.id] ? ' …' : '' }}
-              </button>
+              <template v-else-if="msg.type === 'file'">
+                <img
+                  v-if="isMsgImage(msg) && msg.objectUrl"
+                  :src="msg.objectUrl"
+                  :alt="msg.filename || t('chat.imageMessage')"
+                  class="file-img"
+                  @click="openImagePreview(msg)"
+                />
+                <div v-else class="file-card" :class="msg.mine ? 'file-card-mine' : 'file-card-theirs'">
+                  <span class="file-icon">{{ getFileIcon(msg.filetype, msg.filename) }}</span>
+                  <div class="file-meta">
+                    <div class="file-name">{{ msg.filename }}</div>
+                    <div class="file-size">{{ formatFileSize(msg.filesize) }}</div>
+                  </div>
+                  <button
+                    type="button"
+                    class="file-dl"
+                    :disabled="fileBusy[msg.id]"
+                    @click.stop="onDownloadFile(msg)"
+                  >
+                    <q-icon :name="fileBusy[msg.id] ? 'downloading' : 'download'" size="18px" />
+                  </button>
+                </div>
+              </template>
+              <div class="message-meta">{{ formatTime(msg.ts) }}</div>
               <message-action-menu :can-copy="!!msg.text" :can-recall="!dissolved && !removed" @copy="copyMessage(msg)" @recall="onRecall(msg)" />
             </div>
           </div>
@@ -81,6 +122,13 @@
       </div>
     </div>
     <input ref="fileInput" type="file" style="display:none" @change="onFileSelected" />
+
+    <image-gallery-dialog
+      v-model="imagePreview.show"
+      :images="galleryImages"
+      :start-id="imagePreview.startId"
+      @download="downloadGalleryImage"
+    />
   </q-page>
 </template>
 
@@ -94,8 +142,10 @@ import { useGroupStore } from 'src/stores/group'
 import { useIdentityStore } from 'src/stores/identity'
 import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
 import MessageActionMenu from 'src/components/MessageActionMenu.vue'
+import ImageGalleryDialog from 'src/components/ImageGalleryDialog.vue'
 import { attachmentApi, groupApi } from 'src/services/api.js'
 import { downloadOfflineAttachment, acknowledgeGroupAttachment } from 'src/services/offline-attachment.mjs'
+import { useChatHistoryWindow } from 'src/composables/useChatHistoryWindow'
 
 const { t } = useI18n()
 const $q = useQuasar()
@@ -116,7 +166,31 @@ const fileInput = ref(null)
 const pageEl = ref(null)
 let heightResizeObserver = null
 
-const messages = computed(() => chatStore.messages[groupId] || [])
+// 历史窗口：全量消息留在 store（群信息页等依赖全量数组），页面只渲染最近一窗口，
+// 滚动到顶部补页——与 ChatPage 共用同一机制（useChatHistoryWindow）
+const { visibleMessages, hasOlder, loadingOlder, loadOlder } = useChatHistoryWindow(chatStore, groupId)
+const messages = visibleMessages
+
+// 图片预览画廊（与 ChatPage 一致）
+const imagePreview = ref({ show: false, startId: '' })
+const galleryImages = computed(() => messages.value
+  .filter(message => isMsgImage(message) && message.objectUrl)
+  .map(message => ({
+    id: message.id,
+    url: message.objectUrl,
+    name: message.filename || t('chat.imageMessage'),
+  })))
+
+function openImagePreview(message) {
+  if (!message?.id || !message.objectUrl) return
+  imagePreview.value = { show: true, startId: message.id }
+}
+
+function downloadGalleryImage(image) {
+  const message = messages.value.find(item => item.id === image?.id)
+  if (message) onDownloadFile(message)
+}
+
 const groupName = computed(() => groupStore.getGroupName(groupId))
 const memberCount = computed(() => groupStore.getMembers(groupId).length)
 const dissolved = computed(() => groupStore.isDissolved(groupId))
@@ -164,7 +238,8 @@ onMounted(async () => {
   window.addEventListener('resize', updatePageHeight)
   window.visualViewport?.addEventListener('resize', updatePageHeight)
   await groupStore.loadGroupDetail(groupId)
-  await chatStore.loadMessages(groupId)
+  // 历史窗口化加载：与 ChatPage 同一入口（冷路径全量、热路径只补窗口内 file blob）
+  await chatStore.ensureMessagesLoaded(groupId)
   await nextTick()
   scrollToBottom()
   // 容器高度在 updatePageHeight 的最终 rAF 后才稳定，再校正一次保证停在最新消息
@@ -180,8 +255,11 @@ onUnmounted(() => {
   window.visualViewport?.removeEventListener('resize', updatePageHeight)
 })
 
+// 回到本页时：仅当离开时就在底部附近才钉底，否则保留用户上翻历史的阅读位置
 onActivated(() => {
-  nextTick(() => requestAnimationFrame(scrollToBottom))
+  nextTick(() => requestAnimationFrame(() => {
+    if (isNearBottom()) scrollToBottom()
+  }))
 })
 
 function scrollToBottom() {
@@ -197,14 +275,57 @@ function isNearBottom() {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 200
 }
 
+// 钉底状态由 scroll 事件维护（始终反映用户最近一次滚动后的位置）。
+// 比 watch 回调里现测 isNearBottom() 更可靠：pre-flush 的 watch 在 DOM 更新前执行，
+// 测到的是旧布局，内容增长时会误判
+const pinnedToBottom = ref(true)
+
+function onMessagesScroll() {
+  pinnedToBottom.value = isNearBottom()
+  // 接近顶部且有更旧历史时补页（80px 阈值；内容不足一屏时没有滚动事件，天然不触发）
+  const el = messagesContainer.value
+  if (el && el.scrollTop <= 80 && hasOlder.value) {
+    prependHistory()
+  }
+}
+
+// ---- 历史消息补页（与 ChatPage 共用同一窗口机制）----
+// 普通滚动容器：补页插在顶部会使内容整体下移，用 scrollHeight 差值补偿 scrollTop，
+// 保持原顶部消息贴在视口上沿，阅读位置不跳动
+let prependingHistory = false  // 补页期间抑制"新消息追底"的 watch（长度增长会被误判为追加）
+
+async function prependHistory() {
+  if (loadingOlder.value || prependingHistory || !hasOlder.value) return
+  prependingHistory = true
+  try {
+    const el = messagesContainer.value
+    const prevScrollTop = el ? el.scrollTop : 0
+    const prevScrollHeight = el ? el.scrollHeight : 0
+    const added = await loadOlder()
+    if (added > 0) {
+      await nextTick()
+      const el2 = messagesContainer.value
+      if (el2) {
+        el2.scrollTop = prevScrollTop + (el2.scrollHeight - prevScrollHeight)
+      }
+    }
+  } finally {
+    // watch 是 pre-flush：赋值当帧先执行（此时标志仍为 true），下一帧再释放
+    requestAnimationFrame(() => { prependingHistory = false })
+  }
+}
+
 // 新消息到达时自动跟随到底（与单聊行为一致）：用户在底部或最新一条是自己发的才滚动，
-// 正在上翻历史时不强制拉回，防止阅读被打断
+// 正在上翻历史时不强制拉回，防止阅读被打断。
+// 注意监听的是全量数组长度：窗口化后新消息追加时窗口滑动、可见长度不变，
+// 若监听可见长度，新消息将不会自动跟随。
 watch(
-  () => messages.value.length,
+  () => (chatStore.messages[groupId] || []).length,
   () => {
+    if (prependingHistory) return
     const list = messages.value
     const last = list[list.length - 1]
-    if (isNearBottom() || (last && last.mine)) {
+    if (pinnedToBottom.value || (last && last.mine)) {
       nextTick(scrollToBottom)
     }
   }
@@ -300,6 +421,25 @@ function formatFileSize(bytes) {
   return Math.round(bytes / (1024 * 1024)) + ' MB'
 }
 
+function isMsgImage(msg) {
+  return msg.filetype?.startsWith('image/')
+}
+
+function getFileIcon(filetype, filename) {
+  const ext = filename?.split('.').pop()?.toLowerCase() ?? ''
+  if (filetype?.startsWith('image/')) return '🖼️'
+  if (filetype?.startsWith('video/')) return '🎬'
+  if (filetype?.startsWith('audio/')) return '🎵'
+  if (filetype?.includes('pdf')) return '📄'
+  if (filetype?.includes('word') || filetype?.includes('document')) return '📝'
+  if (filetype?.includes('excel') || filetype?.includes('sheet')) return '📊'
+  if (filetype?.includes('powerpoint') || filetype?.includes('presentation')) return '📋'
+  if (filetype?.includes('zip') || filetype?.includes('rar') || filetype?.includes('7z') || filetype?.includes('tar') || filetype?.includes('gzip')) return '🗜️'
+  if (filetype?.includes('android') || filetype?.includes('apk')) return '🤖'
+  if (['txt', 'md', 'json', 'xml', 'csv', 'log'].includes(ext)) return '📃'
+  return '📎'
+}
+
 function formatTime(ts) {
   if (!ts) return ''
   const d = new Date(ts)
@@ -325,33 +465,85 @@ function shouldCompact(msgs, idx) {
 </script>
 
 <style scoped>
-.group-chat-page { background: #fff; }
-.header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid rgba(0,0,0,0.08); flex-shrink: 0; }
+.group-chat-page { background: #f5f7fa; }
+.header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid rgba(0,0,0,0.08); flex-shrink: 0; background: #fff; }
 .header-info { flex: 1; cursor: pointer; }
 .header-name { font-weight: 600; font-size: 16px; }
 .header-sub { font-size: 12px; color: #888; }
-.messages-container { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
+.messages-container { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 12px; }
 .empty-hint { text-align: center; color: #999; padding: 40px 20px; font-size: 14px; }
 .message-row { display: flex; align-items: flex-start; margin-bottom: 0; }
 .message-row.mine { flex-direction: row-reverse; }
-.message-content { display: flex; flex-direction: column; min-width: 0; max-width: 75%; }
+.message-content { display: flex; flex-direction: column; min-width: 0; max-width: 80%; }
+.message-row:not(.mine) .message-content { align-items: flex-start; }
 .message-row.mine .message-content { align-items: flex-end; }
 .message-sender { font-size: 11px; color: #888; margin-bottom: 2px; }
-.mine-sender { text-align: right; }
-.message-bubble { padding: 8px 12px; border-radius: 12px; background: #f0f0f0; word-break: break-word; }
-.message-bubble.mine { background: #95EC69; color: #111; }
+.message-meta { font-size: 11px; color: #888; margin-top: 4px; line-height: 1.2; }
+.message-bubble.mine .message-meta { text-align: right; }
+.message-bubble {
+  display: inline-block;
+  vertical-align: top;
+  padding: 8px;
+  border-radius: 5px 16px 16px 16px;
+  background: #f0f0f0;
+  color: #111;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.035);
+}
+.message-bubble.mine {
+  background: #95EC69;
+  border-radius: 16px 5px 16px 16px;
+  box-shadow: 0 3px 10px rgba(149, 236, 105, 0.35);
+}
+.message-text { white-space: pre-wrap; line-height: 1.5; }
+.file-img {
+  width: auto;
+  max-width: 100%;
+  max-height: min(42vh, 360px);
+  border-radius: 10px;
+  display: block;
+  object-fit: contain;
+  background: rgba(0,0,0,0.04);
+  cursor: zoom-in;
+}
 .avatar-side { flex-shrink: 0; align-self: flex-start; border-radius: 8px; overflow: hidden; }
 .avatar-placeholder { width: 28px; flex-shrink: 0; }
-.composer { border-top: 1px solid rgba(0,0,0,0.08); padding: 8px 12px; flex-shrink: 0; }
+.composer { border-top: 1px solid rgba(0,0,0,0.08); padding: 8px 12px; flex-shrink: 0; background: #fff; }
 .input-row { display: flex; align-items: center; gap: 8px; }
 .message-input { flex: 1; }
 .muted-notice, .dissolved-notice { text-align: center; color: #e8463a; padding: 8px; font-size: 13px; }
-.file-msg { font-size: 13px; }
-.file-download {
-  display: inline-flex; align-items: center; gap: 4px;
-  background: transparent; border: none; padding: 0;
-  cursor: pointer; font: inherit; color: inherit;
-  text-decoration: underline; text-underline-offset: 3px;
+.file-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  min-width: 180px;
+  max-width: min(100%, 280px);
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
 }
-.file-download:disabled { cursor: wait; opacity: 0.7; }
+.file-card-mine { background: rgba(255,255,255,0.92); }
+.file-card-theirs { background: #fff; }
+.file-icon { font-size: 32px; flex-shrink: 0; line-height: 1; }
+.file-meta { flex: 1; min-width: 0; }
+.file-name { font-size: 13px; font-weight: 500; color: #111; word-break: break-all; line-height: 1.3; }
+.file-size { font-size: 11px; color: #888; margin-top: 3px; }
+.file-dl {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(25, 118, 210, 0.1);
+  color: #1976d2;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.file-dl:hover { background: rgba(25, 118, 210, 0.18); }
+.file-dl:disabled { cursor: wait; opacity: 0.7; }
 </style>

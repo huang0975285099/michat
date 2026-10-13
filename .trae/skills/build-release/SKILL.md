@@ -9,7 +9,7 @@ description: Build and package Yunmi app — upgrade version, build EXE (Tauri N
 
 **Do NOT bump the version unless the user explicitly asks to upgrade the version.** "打包最新 exe 和 apk" / "package the latest" means build from current code at the current version — never treat "latest" as a version-bump request. If ambiguous, ask first.
 
-When upgrading the version (e.g. 1.2.4 → 1.2.5), update **all 5 files**:
+When upgrading the version (e.g. 1.2.4 → 1.2.5), update **all 7 places** — the 5 client build files **and the 2 server-advertised fields**:
 
 | File | Field |
 |------|-------|
@@ -18,10 +18,14 @@ When upgrading the version (e.g. 1.2.4 → 1.2.5), update **all 5 files**:
 | `frontend/src-tauri/Cargo.toml` | `version =` |
 | `frontend/src-tauri/Cargo.lock` | `version =` (under `[[package]] name = "yunmi"`) |
 | `frontend/src-capacitor/android/app/build.gradle` | `versionName` **and** `versionCode` (increment by 1) |
+| `docker-compose.yml` | `APP_LATEST_VERSION` (production source of truth for `/api/version`) |
+| `backend/config.yaml` | `version.latest` (local/dev value; compose env overrides it in production) |
 
 `tauri.conf.json` reads version from `../package.json` — no change needed there.
 
 The `build-release.ps1` script validates that `package.json` version matches Android `versionName`; mismatch will throw.
+
+**Do NOT stop at the binaries.** The upgrade prompt is entirely server-driven: the client calls `GET /api/version` once at app startup and compares its own `APP_VERSION` with `latest`. If the server still advertises the old version, old clients see nothing — building the installer locally publishes nothing. See [Publishing](#publishing-server-side-steps) below.
 
 ## Build Commands
 
@@ -129,6 +133,16 @@ $files = @("downloads\yunChat.exe", "downloads\yunChat.apk")
 $lines = foreach ($f in $files) { $h = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower(); "$h  $(Split-Path $f -Leaf)" }
 [System.IO.File]::WriteAllText("downloads\SHA256SUMS.txt", ($lines -join "`n") + "`n", [System.Text.UTF8Encoding]::new($false))
 ```
+
+## Publishing (server-side steps)
+
+The in-app upgrade prompt reads `GET /api/version` (served by `backend/internal/handler/version.go`, values injected by `main.go` from env / `config.yaml`). Shipping a release requires all of:
+
+1. **Advertise the new version** — `docker-compose.yml` `APP_LATEST_VERSION` (and `backend/config.yaml` `version.latest`). Env vars are read once at process start, so the backend container must be recreated (`docker compose up -d backend`).
+2. **Upload the installers** — `APP_WINDOWS_UPDATE_URL` / `APP_APK_UPDATE_URL` point at fixed canonical names (`/download/yunChat.exe`, `/download/yunChat.apk`), nginx-served from `/usr/share/nginx/html/download/`. Copy the freshly built `downloads/yunChat.exe` and `downloads/yunChat.apk` there, otherwise users are prompted to update and then download the previous build.
+3. **Verify** — `curl https://m.yzs88.com:8088/api/version` must return the new `latest`.
+
+Behavior of `getUpdateStatus(current, latest, min_supported)`: `current < min_supported` → forced update; `current < latest` → "available" banner (native clients only); equal/greater → no prompt. So users on the version being replaced see nothing until `APP_LATEST_VERSION` is bumped. The check runs once at app startup — users must restart the app (or use "检查更新" in ProfilePage) to see it.
 
 ## Output Files
 

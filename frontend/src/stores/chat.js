@@ -734,6 +734,13 @@ export const useChatStore = defineStore('chat', () => {
   // messages: { [chatId]: [ { id, chatId, from, text, ts, mine, read } ] }
   const messages = ref({})
 
+  // ---- 历史消息窗口化渲染（单聊/群聊共用同一机制）----
+  // 全量消息仍保留在 messages.value（聊天列表的未读数/最后一条预览、群信息页等依赖全量数组），
+  // 聊天页只渲染窗口内的最近 HISTORY_PAGE_SIZE 条；滚动到顶部时补页（loadOlderMessages）。
+  const HISTORY_PAGE_SIZE = 50
+  // historyWindowSizes: { [chatId]: 当前可见条数 }
+  const historyWindowSizes = ref({})
+
   // fileTransfers: { [transferId]: { direction, status, progress, filename, ... } }
   const fileTransfers = ref({})
 
@@ -970,6 +977,26 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
+   * Lazy loading of file bodies: Rebuild from IndexedDB only for file messages with "no valid blob URL in memory".
+   * Only works on messages that have entered the rendering window to avoid reading all files into memory at once.
+   */
+  async function rehydrateFileBlobs(msgs) {
+    await Promise.all(msgs.map(async (m) => {
+      if (m.type !== 'file') return
+      try {
+        const rec = await dbGetFile(m.id)
+        m.localFileAvailable = !!rec
+        if (!rec || m.objectUrl) return  //No persistent copy (old data/not saved successfully) → keep null and display "Expired"
+        if (rec.chunked && rec.filesize > AUTO_PREVIEW_FILE_BYTES) return
+        const blob = await loadStoredFileBlob(m.id, m.filetype || rec.filetype)
+        if (blob) m.objectUrl = URL.createObjectURL(blob)
+      } catch (e) {
+        console.warn('[chat] rehydrate file blob failed:', m.id, e)
+      }
+    }))
+  }
+
+  /**
    * Load the message with the specified chatId from IndexedDB and decrypt it
    */
   async function loadMessages(chatId) {
@@ -1002,20 +1029,7 @@ export const useChatStore = defineStore('chat', () => {
       }))
 
       // Lazy loading of file bodies: Rebuild from IndexedDB only for file messages with "no valid blob URL in memory".
-      // Only works on the currently open session to avoid reading all files into memory at once.
-      await Promise.all(decryptedMsgs.map(async (m) => {
-        if (m.type !== 'file') return
-        try {
-          const rec = await dbGetFile(m.id)
-          m.localFileAvailable = !!rec
-          if (!rec || m.objectUrl) return  //No persistent copy (old data/not saved successfully) → keep null and display "Expired"
-          if (rec.chunked && rec.filesize > AUTO_PREVIEW_FILE_BYTES) return
-          const blob = await loadStoredFileBlob(m.id, m.filetype || rec.filetype)
-          if (blob) m.objectUrl = URL.createObjectURL(blob)
-        } catch (e) {
-          console.warn('[chat] rehydrate file blob failed:', m.id, e)
-        }
-      }))
+      await rehydrateFileBlobs(decryptedMsgs)
 
       // Merge messages that are already in the memory but not in the DB snapshot (deletion by id) to avoid messages arriving during loading being
       // Clear the entire coverage. See the similar fix instructions in loadAllMessages for details.
@@ -1115,6 +1129,78 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // ---- 历史窗口 API（单聊/群聊聊天页共用：全量留在 store，页面按窗口渲染）----
+
+  // 初始化会话的历史窗口（已初始化则保持不变：切回会话不丢失已展开的历史）
+  function initHistoryWindow(chatId) {
+    if (historyWindowSizes.value[chatId] == null) {
+      historyWindowSizes.value[chatId] = HISTORY_PAGE_SIZE
+    }
+  }
+
+  // 当前应渲染的窗口切片（取最近的 win 条）。未初始化窗口的会话返回全量，
+  // 兼容聊天列表/群信息页等只消费全量数组的调用方。
+  function getVisibleMessages(chatId) {
+    const list = messages.value[chatId] || []
+    const win = historyWindowSizes.value[chatId]
+    if (win == null || win >= list.length) return list
+    return list.slice(list.length - win)
+  }
+
+  function hasOlderMessages(chatId) {
+    const list = messages.value[chatId] || []
+    const win = historyWindowSizes.value[chatId]
+    return win != null && win < list.length
+  }
+
+  // 补一页历史（窗口 +HISTORY_PAGE_SIZE），并静默重建新进入窗口的 file 消息 blob。
+  // 返回新增条数（0 表示已到最早）。
+  async function loadOlderMessages(chatId) {
+    const list = messages.value[chatId] || []
+    let win = historyWindowSizes.value[chatId]
+    if (win == null) {
+      win = Math.min(HISTORY_PAGE_SIZE, list.length)
+      historyWindowSizes.value[chatId] = win
+    }
+    if (win >= list.length) return 0
+    const added = Math.min(HISTORY_PAGE_SIZE, list.length - win)
+    const newWin = win + added
+    historyWindowSizes.value[chatId] = newWin
+    // 新进入窗口的 file 消息补 blob（静默完成，不产生滚动行为）
+    const entering = list.slice(list.length - newWin, list.length - win)
+    const files = entering.filter(m => m.type === 'file' && !m.objectUrl)
+    if (files.length) await rehydrateFileBlobs(files)
+    return added
+  }
+
+  // 一次性把窗口扩到至少覆盖 size 条（如点击引用跳转到窗口之外的很早消息）
+  async function ensureHistoryWindowAtLeast(chatId, size) {
+    if (!size || size <= 0) return
+    const list = messages.value[chatId] || []
+    const cur = historyWindowSizes.value[chatId] ?? 0
+    if (cur >= size || cur >= list.length) return
+    const newWin = Math.min(size, list.length)
+    historyWindowSizes.value[chatId] = newWin
+    const entering = list.slice(list.length - newWin, list.length - cur)
+    const files = entering.filter(m => m.type === 'file' && !m.objectUrl)
+    if (files.length) await rehydrateFileBlobs(files)
+  }
+
+  /**
+   * 聊天页统一加载入口：
+   * 热路径——消息已在内存（启动时 loadAllMessages 已全量解密），只补窗口内缺失的 file blob；
+   * 冷路径——内存无会话数据（如刷新后直接落在聊天页），全量解密入库。
+   */
+  async function ensureMessagesLoaded(chatId) {
+    initHistoryWindow(chatId)
+    if (!messages.value[chatId]) {
+      await loadMessages(chatId)
+    }
+    // 冷路径 loadMessages 已全量补过（这里有 objectUrl 的会自动跳过）；热路径只补当前窗口
+    const files = getVisibleMessages(chatId).filter(m => m.type === 'file' && !m.objectUrl)
+    if (files.length) await rehydrateFileBlobs(files)
+  }
+
   /**
    * Clear messages with specified chatId (clear IndexedDB and memory)
    */
@@ -1138,6 +1224,8 @@ export const useChatStore = defineStore('chat', () => {
       console.error('[chat] clear messages failed:', e)
     }
     delete messages.value[chatId]
+    // 同步重置历史窗口：清空后重新进入会话从默认页开始
+    delete historyWindowSizes.value[chatId]
   }
 
   /**
@@ -3172,6 +3260,7 @@ function validateMsgId(msgId) {
     }
     await clearAllMessagesDB()
     messages.value = {}
+    historyWindowSizes.value = {}
   }
 
   /**
@@ -3487,6 +3576,11 @@ function validateMsgId(msgId) {
     getMessages,
     loadMessages,
     loadAllMessages,
+    ensureMessagesLoaded,
+    getVisibleMessages,
+    hasOlderMessages,
+    loadOlderMessages,
+    ensureHistoryWindowAtLeast,
     clearChatMessages,
     clearAll,
     markAsRead,

@@ -6,6 +6,7 @@ import { on, off } from '../services/websocket.js'
 export const useGroupStore = defineStore('group', () => {
   const groups = ref([]) // [{group_id, name, member_count, last_message_at}]
   const membersByGroup = ref({}) // { [groupId]: [{chat_id, nickname, public_key, muted_until, state}] }
+  const groupDetails = ref({}) // { [groupId]: { group_id, name, created_at, members } }
   const dissolvedGroups = ref(new Set()) // group_ids that received 'dissolved' event
   const removedFromGroups = ref(new Set()) // group_ids where self was removed
 
@@ -29,8 +30,12 @@ export const useGroupStore = defineStore('group', () => {
   async function loadGroupDetail(groupId) {
     try {
       const res = await groupApi.detail(groupId)
-      membersByGroup.value[groupId] = res.data?.members || []
-      return res.data
+      const detail = res.data || null
+      if (detail) {
+        groupDetails.value[groupId] = detail
+        membersByGroup.value[groupId] = detail.members || []
+      }
+      return detail
     } catch (e) {
       console.warn('[group] loadGroupDetail failed', e)
       return null
@@ -51,6 +56,10 @@ export const useGroupStore = defineStore('group', () => {
 
   function getMembers(groupId) {
     return membersByGroup.value[groupId] || []
+  }
+
+  function getGroupDetail(groupId) {
+    return groupDetails.value[groupId] || null
   }
 
   function amIMuted(groupId) {
@@ -105,6 +114,7 @@ export const useGroupStore = defineStore('group', () => {
   function clear() {
     groups.value = []
     membersByGroup.value = {}
+    groupDetails.value = {}
     dissolvedGroups.value = new Set()
     removedFromGroups.value = new Set()
     myChatId = ''
@@ -113,6 +123,7 @@ export const useGroupStore = defineStore('group', () => {
   return {
     groups,
     membersByGroup,
+    groupDetails,
     dissolvedGroups,
     removedFromGroups,
     setMyChatId,
@@ -121,6 +132,7 @@ export const useGroupStore = defineStore('group', () => {
     getMemberPubKeys,
     getGroupName,
     getMembers,
+    getGroupDetail,
     amIMuted,
     isDissolved,
     isRemoved,
