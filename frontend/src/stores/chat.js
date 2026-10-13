@@ -3321,6 +3321,39 @@ function validateMsgId(msgId) {
   }
 
   /**
+   * Mark messages as read locally without sending a read receipt.
+   * Used for contexts where the server does not (yet) track read receipts
+   * (e.g. group chats) but the local unread badge must still be cleared.
+   */
+  async function markAsReadLocal(chatId) {
+    const msgs = messages.value[chatId] || []
+    const readReceivedAt = getServerNow()
+    const newlyRead = []
+    const burnReads = []
+    for (const m of msgs) {
+      if (m.mine) continue
+      if (!m.read) {
+        m.read = true
+        newlyRead.push(m.id)
+        if (m.burnAfterRead) {
+          m.readReceivedAt = readReceivedAt
+          m.burnAt = readReceivedAt + BURN_AFTER_READ_DELAY
+          burnReads.push(m.id)
+        }
+      }
+      // There is no receipt to send, so mark it as sent to avoid later retries.
+      m.receiptSent = true
+    }
+    if (newlyRead.length === 0) return
+    const burnSet = new Set(burnReads)
+    await Promise.all(newlyRead.map(id =>
+      burnSet.has(id)
+        ? dbStartBurnCountdown(id, readReceivedAt, readReceivedAt + BURN_AFTER_READ_DELAY).catch(() => {})
+        : dbMarkMessageRead(id).catch(() => {})
+    ))
+  }
+
+  /**
    * Handle the read receipt notification sent by the other party (the message I sent was read by the other party)
    * For messages that disappear after reading, the first reading time recorded by the server is used.
    */
@@ -3584,6 +3617,7 @@ function validateMsgId(msgId) {
     clearChatMessages,
     clearAll,
     markAsRead,
+    markAsReadLocal,
     syncReadStatus,
     handleReadReceipt,
     startBurnTimer,

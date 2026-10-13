@@ -133,7 +133,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onActivated, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onActivated, onDeactivated, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useQuasar } from 'quasar'
 import { useI18n } from 'src/i18n'
@@ -165,6 +165,7 @@ const messagesContainer = ref(null)
 const fileInput = ref(null)
 const pageEl = ref(null)
 let heightResizeObserver = null
+const isPageActive = ref(false)
 
 // 历史窗口：全量消息留在 store（群信息页等依赖全量数组），页面只渲染最近一窗口，
 // 滚动到顶部补页——与 ChatPage 共用同一机制（useChatHistoryWindow）
@@ -240,6 +241,8 @@ onMounted(async () => {
   await groupStore.loadGroupDetail(groupId)
   // 历史窗口化加载：与 ChatPage 同一入口（冷路径全量、热路径只补窗口内 file blob）
   await chatStore.ensureMessagesLoaded(groupId)
+  // 进入群聊时把已加载的未读消息标为已读（群聊没有服务端已读回执，只清本地红点）
+  chatStore.markAsReadLocal(groupId).catch(() => {})
   await nextTick()
   scrollToBottom()
   // 容器高度在 updatePageHeight 的最终 rAF 后才稳定，再校正一次保证停在最新消息
@@ -257,9 +260,15 @@ onUnmounted(() => {
 
 // 回到本页时：仅当离开时就在底部附近才钉底，否则保留用户上翻历史的阅读位置
 onActivated(() => {
+  isPageActive.value = true
+  chatStore.markAsReadLocal(groupId).catch(() => {})
   nextTick(() => requestAnimationFrame(() => {
     if (isNearBottom()) scrollToBottom()
   }))
+})
+
+onDeactivated(() => {
+  isPageActive.value = false
 })
 
 function scrollToBottom() {
@@ -327,6 +336,10 @@ watch(
     const last = list[list.length - 1]
     if (pinnedToBottom.value || (last && last.mine)) {
       nextTick(scrollToBottom)
+    }
+    // 群聊没有服务端已读回执，只在本地清红点；切到后台时不清，避免没看就消失
+    if (isPageActive.value) {
+      chatStore.markAsReadLocal(groupId).catch(() => {})
     }
   }
 )
@@ -401,16 +414,37 @@ function onPickFile() {
   fileInput.value?.click()
 }
 
+function attachmentFailureText(error) {
+  if (error?.code === 'attachment_file_too_large') {
+    return t('chat.attachmentFileTooLarge', {
+      size: formatFileSize(error.fileSize || 0),
+      max: formatFileSize(error.maxBytes || 500 * 1024 * 1024),
+    })
+  }
+  if (error?.code === 'attachment_file_empty') return t('chat.attachmentFileEmpty')
+  if (error?.code === 'attachment_filename_invalid') return t('chat.attachmentFilenameInvalid')
+  if (error?.code === 'attachment_filetype_invalid') return t('chat.attachmentFiletypeInvalid')
+  if (error?.code === 'attachment_filetype_unsupported') return t('chat.attachmentFiletypeUnsupported')
+  return error?.message || t('chat.unknownError')
+}
+
 async function onFileSelected(e) {
   const file = e.target.files?.[0]
   e.target.value = ''
   if (!file) return
+  try {
+    chatStore.validateFile(file)
+  } catch (error) {
+    $q.notify({ type: 'warning', message: attachmentFailureText(error) })
+    return
+  }
   try {
     await chatStore.sendGroupFile(groupId, file)
     await nextTick()
     scrollToBottom()
   } catch (err) {
     console.error('group file send failed', err)
+    $q.notify({ type: 'negative', message: t('chat.fileSendFailed', { error: attachmentFailureText(err) }) })
   }
 }
 

@@ -4,12 +4,12 @@ const MAX_FILE_SIZE = 500 * 1024 * 1024
 const MAX_FILENAME_BYTES = 255
 const MAX_FILETYPE_BYTES = 255
 const ALLOWED_FILE_EXTENSIONS = new Set([
-  'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg',
-  'mp4', 'webm', 'mov',
-  'ogg', 'm4a', 'aac', 'mp3', 'wav',
+  'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic', 'heif', 'tif', 'tiff', 'avif',
+  'mp4', 'webm', 'mov', 'mkv', 'avi', 'flv', 'm4v', '3gp', 'wmv', 'm2ts', 'ts', 'vob', 'mpg', 'mpeg',
+  'ogg', 'm4a', 'aac', 'mp3', 'wav', 'wma', 'flac', 'ape', 'amr',
   'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'pdf',
-  'zip', 'rar', '7z', 'tar', 'gz', 'apk',
-  'txt', 'log', 'csv', 'json', 'xml', 'html', 'htm', 'md', 'rtf',
+  'zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'apk', 'iso',
+  'txt', 'log', 'csv', 'json', 'xml', 'html', 'htm', 'md', 'rtf', 'epub',
 ])
 
 const MAX_VOICE_DURATION_MS = 5 * 60 * 1000
