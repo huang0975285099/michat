@@ -27,6 +27,75 @@ The `build-release.ps1` script validates that `package.json` version matches And
 
 **Do NOT stop at the binaries.** The upgrade prompt is entirely server-driven: the client calls `GET /api/version` once at app startup and compares its own `APP_VERSION` with `latest`. If the server still advertises the old version, old clients see nothing — building the installer locally publishes nothing. See [Publishing](#publishing-server-side-steps) below.
 
+## Agent Quick-Build Procedure
+
+当用户说"打包"、"重新打包"、"打 exe"、"打 apk"、"打包发布"时，按此流程自动执行。**默认不升版本**、**默认 `-SkipTests`**。
+
+### 1. 决策：升不升版本
+
+- 只有用户显式说"升级版本"、"升版本"、"bump version"时，才先执行 Version Upgrade 清单（7 处）。
+- 用户只说"打包最新"、"重新打包"、"修复 bug 后打包"——走当前版本，**不触碰任何版本字段**。
+
+### 2. 启动构建
+
+在 `d:\project\michat\frontend` 下后台启动，**必须重定向到日志文件**（Windows agent 后台 stdout 会损坏，已知坑）：
+
+```powershell
+.\build-release.cmd -SkipTests *> .\build-release.log
+```
+
+用 `Shell` 工具，`run_in_background: true`，拿到 `command_id`。
+
+### 3. 轮询进度
+
+后台构建约 5-7 分钟。用 `Start-Sleep` + `Get-Content .\build-release.log -Tail N` 轮询：
+
+- 首次：180s 后读日志尾部 15 行
+- 若无完成标志：再等 120s 读尾部
+- 最多 3 轮；超时或脚本 exit ≠ 0 → 停止并报告日志尾部错误
+
+### 4. 完成判定（同时满足）
+
+1. `CheckCommandStatus(command_id)` → `exit_code` = 0
+2. 日志含 `==> Release build completed`
+3. 日志含 `Verified using v2 scheme (APK Signature Scheme v2): true`
+
+### 5. 产物核验
+
+构建脚本已自动复制到 `downloads/` 与 `frontend/dist/` 并生成 `SHA256SUMS.txt`。核验：
+
+```powershell
+Get-ChildItem d:\project\michat\downloads\yunChat.exe, yunChat.apk | Select Name, Length, LastWriteTime
+Get-Content d:\project\michat\downloads\SHA256SUMS.txt
+```
+
+SHA256 应与日志尾部 `SHA256: XXXX` 输出一致。
+
+### 6. 清理
+
+```powershell
+Remove-Item d:\project\michat\frontend\build-release.log -Force
+```
+
+### 7. 报告
+
+向用户报告：
+
+```
+打包完成，版本保持 x.y.z，一次跑通（退出码 0）。
+
+产物（已同步到 downloads\ 与 frontend\dist\）：
+
+| 文件 | 大小 | SHA256 |
+|------|------|--------|
+| yunChat.exe | N B | `...` |
+| yunChat.apk | N B | `...` |
+
+APK 签名校验通过（v2 scheme: true）。
+
+如需推送到线上：上传两包到服务器 /usr/share/nginx/html/download/ 覆盖同名文件即可。[若升过版本则加：另需 docker compose up -d backend 让 APP_LATEST_VERSION 生效，然后 curl /api/version 验证]
+```
+
 ## Build Commands
 
 ### One-shot (EXE + APK)
