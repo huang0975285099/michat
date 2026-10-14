@@ -19,7 +19,8 @@ const routes = [
       { path: 'robot/:id', component: () => import('src/pages/RobotDetailPage.vue') },
       { path: 'games/:pathMatch(.*)*', redirect: '/robot' },
       { path: 'profile', component: () => import('src/pages/ProfilePage.vue') },
-      { path: 'attachment-storage', component: () => import('src/pages/AttachmentStoragePage.vue') }
+      { path: 'attachment-storage', component: () => import('src/pages/AttachmentStoragePage.vue') },
+      { path: 'app-download', component: () => import('src/pages/AppDownloadPage.vue') }
     ]
   },
   {

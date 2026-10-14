@@ -154,6 +154,19 @@
                 </q-item-section>
             </q-item>
 
+            <q-item clickable @click="router.push('/app-download')">
+                <q-item-section avatar>
+                    <q-icon name="download" color="primary" />
+                </q-item-section>
+                <q-item-section>
+                    <q-item-label>{{ t("profile.downloadApp") }}</q-item-label>
+                    <q-item-label caption>{{ t("profile.downloadAppHint") }}</q-item-label>
+                </q-item-section>
+                <q-item-section side>
+                    <q-icon name="chevron_right" color="grey-6" />
+                </q-item-section>
+            </q-item>
+
         </q-list>
 
         <div class="profile-section-title">{{ t("profile.accountActions") }}</div>

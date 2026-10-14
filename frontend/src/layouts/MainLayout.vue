@@ -215,7 +215,7 @@ const showNav = computed(() => {
 
 // Chat details use the full available height; the global header remains visible.
 const showFooter = computed(
-    () => showNav.value && !route.path.startsWith("/chat/") && (!route.path.startsWith("/robot/") || route.path === "/robot/tracker") && route.path !== "/attachment-storage",
+    () => showNav.value && !route.path.startsWith("/chat/") && (!route.path.startsWith("/robot/") || route.path === "/robot/tracker") && route.path !== "/attachment-storage" && route.path !== "/app-download",
 );
 
 const chatStore = useChatStore();
@@ -373,7 +373,7 @@ watch(() => identity.isReady, ready => {
     if (ready) refreshPendingRequestCount();
 });
 
-const canGoBack = computed(() => route.path.startsWith("/chat/") || route.path.startsWith("/robot/") || route.path === "/attachment-storage");
+const canGoBack = computed(() => route.path.startsWith("/chat/") || route.path.startsWith("/robot/") || route.path === "/attachment-storage" || route.path === "/app-download");
 
 function goBack() {
     if (route.path.startsWith('/robot/tracker/companies/')) {
@@ -431,6 +431,7 @@ const pageTitle = computed(() => {
     if (route.path.startsWith("/robot")) return t("header.robot");
     if (route.path === "/profile") return t("header.profile");
     if (route.path === "/attachment-storage") return t("attachmentStorage.title");
+    if (route.path === "/app-download") return t("profile.downloadApp");
     return t("header.app");
 });
 </script>
