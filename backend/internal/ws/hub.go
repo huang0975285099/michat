@@ -1403,6 +1403,19 @@ func (h *Hub) NotifyFriendRequest(toChatID, fromChatID string) {
 	}
 }
 
+func (h *Hub) NotifyFriendRequestCanceled(toChatID string) {
+	msg, _ := json.Marshal(Message{Type: "friend_request_canceled"})
+	h.mu.RLock()
+	c, ok := h.clients[toChatID]
+	h.mu.RUnlock()
+	if ok {
+		select {
+		case c.send <- msg:
+		default:
+		}
+	}
+}
+
 // NotifyFriendAccepted Notifies the initiator of friend application: the other party has accepted it
 func (h *Hub) NotifyFriendAccepted(toChatID string) {
 	msg, _ := json.Marshal(Message{

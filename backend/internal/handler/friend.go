@@ -128,7 +128,8 @@ func (h *FriendHandler) CancelRequest(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request id"})
 		return
 	}
-	if err = h.svc.CancelRequest(c.Request.Context(), reqID, userID); err != nil {
+	toChatID, err := h.svc.CancelRequest(c.Request.Context(), reqID, userID)
+	if err != nil {
 		if errors.Is(err, service.ErrRequestNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "request not found"})
 			return
@@ -136,6 +137,7 @@ func (h *FriendHandler) CancelRequest(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.hub.NotifyFriendRequestCanceled(toChatID)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

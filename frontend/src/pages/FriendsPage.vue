@@ -205,6 +205,7 @@ const outgoing = ref([]);
 const friends = ref([]);
 const cancelingId = ref(null);
 const loadError = ref(false);
+let loadVersion = 0;
 
 // Sorted friends list: online first, then descending by last online time
 const sortedFriends = computed(() => {
@@ -238,6 +239,7 @@ function formatLastSeen(lastSeen, online) {
 }
 
 async function loadData() {
+    const version = ++loadVersion;
     loadError.value = false;
     try {
         const [reqRes, outRes, friendRes] = await Promise.all([
@@ -245,13 +247,12 @@ async function loadData() {
             friendApi.getOutgoing(),
             friendApi.getFriends(),
         ]);
+        if (version !== loadVersion) return;
         requests.value = reqRes.data || [];
         outgoing.value = outRes.data || [];
         friends.value = friendRes.data || [];
-        identityStore.setPendingRequestCount(
-            requests.value.filter((r) => r.status === "pending").length
-        );
     } catch (error) {
+        if (version !== loadVersion) return;
         loadError.value = true;
         console.warn('[FriendsPage] failed to load friends', error);
     }
@@ -312,6 +313,9 @@ async function handle(reqId, accept) {
         type: "positive",
         message: accept ? t("friends.requestAccepted") : t("friends.requestRejected"),
     });
+    await identityStore.refreshPendingRequestCount().catch(error => {
+        console.warn('[FriendsPage] failed to refresh pending friend requests', error);
+    });
     loadData();
 }
 
@@ -350,7 +354,11 @@ function onStatus(payload) {
 
 onActivated(() => {
     loadData();
+    identityStore.refreshPendingRequestCount().catch(error => {
+        console.warn('[FriendsPage] failed to load pending friend requests', error);
+    });
     on("friend_request", onFriendRequest);
+    on("friend_request_canceled", loadData);
     on("friend_accepted", onFriendAccepted);
     on("friend_rejected", onFriendRejected);
     on("status", onStatus);
@@ -358,6 +366,7 @@ onActivated(() => {
 
 onDeactivated(() => {
     off("friend_request", onFriendRequest);
+    off("friend_request_canceled", loadData);
     off("friend_accepted", onFriendAccepted);
     off("friend_rejected", onFriendRejected);
     off("status", onStatus);

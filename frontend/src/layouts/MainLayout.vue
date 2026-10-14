@@ -225,9 +225,20 @@ let stopListening = null;
 let stopCallListening = null;
 let stopGroupListening = null;
 let stopConnectionRecovery = null;
+function refreshPendingRequestCount() {
+    return identity.refreshPendingRequestCount().catch(error => {
+        console.warn("[MainLayout] failed to load pending friend requests", error);
+    });
+}
+
 function onFriendRequestGlobal() {
     identity.incPendingRequestCount();
+    refreshPendingRequestCount();
     notifyNewMessage();
+}
+
+function onVisibilityChange() {
+    if (document.visibilityState === "visible") refreshPendingRequestCount();
 }
 
 // Forced update: Block use when the current version is lower than the backend min_supported
@@ -300,6 +311,9 @@ onMounted(() => {
     groupStore.setMyChatId(identity.chatId);
     groupStore.loadGroups();
     on("friend_request", onFriendRequestGlobal);
+    on("friend_request_canceled", refreshPendingRequestCount);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    refreshPendingRequestCount();
     initNotifications();
     checkAppUpdate();
     // If it is already unlocked at startup, the ciphertext temporarily stored during the last lock period will be decrypted.
@@ -327,6 +341,8 @@ watch(
 );
 onUnmounted(() => {
     off("friend_request", onFriendRequestGlobal);
+    off("friend_request_canceled", refreshPendingRequestCount);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
     stopListening?.();
     stopCallListening?.();
     stopGroupListening?.();
@@ -350,6 +366,11 @@ watch(wsConnected, (connected) => {
         refreshing.value = false;
         Notify.create({ type: "positive", message: t("header.reconnected"), timeout: 2000 });
     }
+    if (connected) refreshPendingRequestCount();
+});
+
+watch(() => identity.isReady, ready => {
+    if (ready) refreshPendingRequestCount();
 });
 
 const canGoBack = computed(() => route.path.startsWith("/chat/") || route.path.startsWith("/robot/") || route.path === "/attachment-storage");

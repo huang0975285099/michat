@@ -28,6 +28,20 @@ export const useIdentityStore = defineStore('identity', () => {
   const friendNames = ref({})
   // Number of friend requests pending
   const pendingRequestCount = ref(0)
+  let pendingRequestRefresh = Promise.resolve()
+
+  function refreshPendingRequestCount() {
+    pendingRequestRefresh = pendingRequestRefresh.catch(() => {}).then(async () => {
+      if (!isReady.value) return
+      const accountId = chatId.value
+      const token = localStorage.getItem('session_token')
+      const { data } = await friendApi.getRequests()
+      if (isReady.value && chatId.value === accountId && localStorage.getItem('session_token') === token) {
+        pendingRequestCount.value = (data || []).filter(request => request.status === 'pending').length
+      }
+    })
+    return pendingRequestRefresh
+  }
 
   /**
    * trigger lock
@@ -280,6 +294,7 @@ export const useIdentityStore = defineStore('identity', () => {
         hasCode.value = false
         isLocked.value = false
         friendPubKeys.value = {}
+        pendingRequestCount.value = 0
   }
 
   async function updateNickname(name) {
@@ -295,6 +310,7 @@ export const useIdentityStore = defineStore('identity', () => {
     pendingRequestCount,
     setPendingRequestCount: (n) => { pendingRequestCount.value = n },
     incPendingRequestCount: () => { pendingRequestCount.value++ },
+    refreshPendingRequestCount,
     load, loadFriendPubKeys, initialize, exportKey, clear, logout,
     unlockWithCode, lockNow, enableSecurityCode, disableSecCode, setLockTimeout,
     updateNickname

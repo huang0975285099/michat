@@ -14,10 +14,10 @@ import (
 )
 
 var (
-	ErrAlreadyFriends   = errors.New("already friends")
-	ErrRequestNotFound  = errors.New("friend request not found")
-	ErrCannotAddSelf    = errors.New("cannot add yourself")
-	ErrNotRequestOwner  = errors.New("not the request owner")
+	ErrAlreadyFriends  = errors.New("already friends")
+	ErrRequestNotFound = errors.New("friend request not found")
+	ErrCannotAddSelf   = errors.New("cannot add yourself")
+	ErrNotRequestOwner = errors.New("not the request owner")
 )
 
 type FriendService struct {
@@ -220,19 +220,31 @@ func (s *FriendService) GetFriends(ctx context.Context, userID uint64) ([]*Frien
 }
 
 // CancelRequest cancels the pending friend request issued by yourself
-func (s *FriendService) CancelRequest(ctx context.Context, reqID, fromUserID uint64) error {
+func (s *FriendService) CancelRequest(ctx context.Context, reqID, fromUserID uint64) (string, error) {
+	var toChatID string
+	err := s.db.QueryRowContext(ctx, `
+    SELECT u.chat_id FROM friend_requests fr
+    JOIN users u ON u.id = fr.to_user_id
+    WHERE fr.id = ? AND fr.from_user_id = ? AND fr.status = 'pending'`, reqID, fromUserID,
+	).Scan(&toChatID)
+	if err == sql.ErrNoRows {
+		return "", ErrRequestNotFound
+	}
+	if err != nil {
+		return "", err
+	}
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM friend_requests WHERE id = ? AND from_user_id = ? AND status = 'pending'`,
 		reqID, fromUserID,
 	)
 	if err != nil {
-		return err
+		return "", err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return ErrRequestNotFound
+		return "", ErrRequestNotFound
 	}
-	return nil
+	return toChatID, nil
 }
 
 // AutoRejectExpired marks pending requests that have not been processed for more than 7 days as rejected
