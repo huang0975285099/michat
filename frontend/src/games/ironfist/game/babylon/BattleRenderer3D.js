@@ -8,8 +8,7 @@ import '@babylonjs/loaders/glTF'  //Register glTF/glb loader (side-effect import
 import { Fighter3D, PAL_ME_3D, PAL_OPP_3D } from './Fighter3D.js'
 
 // glb is placed under public/. Splice with BASE_URL to be compatible with both deployments:
-// Web BASE_URL='/' → '/games/ironfist/'; Electron BASE_URL='./' → './games/ironfist/'
-// (Electron is loaded using file://, the absolute path '/games' will point to the root of the disk and the loading will fail)
+// Web BASE_URL='/' → '/games/ironfist/'; Tauri uses its configured asset base URL.
 const GLB_ROOT = import.meta.env.BASE_URL + 'games/ironfist/'
 const GLB_FILE = 'fighter.glb'       //Our model (Vanguard)
 const GLB_FILE_OPP = 'fighter2.glb' //Opponent model (Mutant); falls back to fighter.glb if loading fails

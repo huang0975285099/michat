@@ -239,14 +239,13 @@ func TestGroupMuteLifecycle(t *testing.T) {
 		t.Fatal("alice still muted after unmute")
 	}
 
-	// expired muted_until behaves as not muted
 	expired := time.Now().Add(-time.Minute)
 	if err := svc.MuteMember(ctx, group.GroupID, "1101-AAAA", &expired); err != nil {
 		t.Fatal(err)
 	}
 	muted, _ = svc.IsMuted(ctx, group.GroupID, "1101-AAAA")
-	if muted {
-		t.Fatal("alice muted with past timestamp")
+	if !muted {
+		t.Fatal("mute must remain active until an administrator explicitly unmutes")
 	}
 
 	// muted member still appears in ListMyGroups and ActiveMemberChatIDs
@@ -312,7 +311,7 @@ func TestGroupDeleteMessage(t *testing.T) {
 
 	// insert a message directly
 	var groupDBID uint64
-	if err := db.QueryRow(`SELECT id FROM ` + "`groups`" + ` WHERE group_id = ?`, group.GroupID).Scan(&groupDBID); err != nil {
+	if err := db.QueryRow(`SELECT id FROM `+"`groups`"+` WHERE group_id = ?`, group.GroupID).Scan(&groupDBID); err != nil {
 		t.Fatal(err)
 	}
 	msgID := "abc123-test-def456"
@@ -355,7 +354,7 @@ func TestGroupRecallMessage(t *testing.T) {
 	}
 
 	var groupDBID uint64
-	if err := db.QueryRow(`SELECT id FROM ` + "`groups`" + ` WHERE group_id = ?`, group.GroupID).Scan(&groupDBID); err != nil {
+	if err := db.QueryRow(`SELECT id FROM `+"`groups`"+` WHERE group_id = ?`, group.GroupID).Scan(&groupDBID); err != nil {
 		t.Fatal(err)
 	}
 	msgID := "recall123-test-abc"
@@ -415,7 +414,7 @@ func TestListGroupMessageMetadata(t *testing.T) {
 	}
 
 	var groupDBID uint64
-	if err := db.QueryRow(`SELECT id FROM ` + "`groups`" + ` WHERE group_id = ?`, group.GroupID).Scan(&groupDBID); err != nil {
+	if err := db.QueryRow(`SELECT id FROM `+"`groups`"+` WHERE group_id = ?`, group.GroupID).Scan(&groupDBID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO group_messages (msg_id, group_db_id, sender_chat_id, iv, ciphertext, envelope_size) VALUES ('meta1-test-abc', ?, '1501-AAAA', 'iv', 'ct', 100)`,

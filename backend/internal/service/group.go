@@ -186,7 +186,7 @@ func (s *GroupService) CreateGroup(ctx context.Context, name string, memberChatI
 			return nil, err
 		}
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO ` + "`groups`" + ` (group_id, name) VALUES (?, ?)`, groupID, strings.TrimSpace(name))
+			`INSERT INTO `+"`groups`"+` (group_id, name) VALUES (?, ?)`, groupID, strings.TrimSpace(name))
 		if err == nil {
 			break
 		}
@@ -202,7 +202,7 @@ func (s *GroupService) CreateGroup(ctx context.Context, name string, memberChatI
 	}
 
 	var groupDBID uint64
-	if err = tx.QueryRowContext(ctx, `SELECT id FROM ` + "`groups`" + ` WHERE group_id = ?`, groupID).Scan(&groupDBID); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM `+"`groups`"+` WHERE group_id = ?`, groupID).Scan(&groupDBID); err != nil {
 		return nil, err
 	}
 
@@ -234,7 +234,7 @@ func (s *GroupService) DissolveGroup(ctx context.Context, groupID string) error 
 	defer tx.Rollback()
 
 	var groupDBID uint64
-	err = tx.QueryRowContext(ctx, `SELECT id FROM ` + "`groups`" + ` WHERE group_id = ? FOR UPDATE`, groupID).Scan(&groupDBID)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM `+"`groups`"+` WHERE group_id = ? FOR UPDATE`, groupID).Scan(&groupDBID)
 	if err == sql.ErrNoRows {
 		return ErrGroupNotFound
 	}
@@ -253,7 +253,7 @@ func (s *GroupService) DissolveGroup(ctx context.Context, groupID string) error 
 		SELECT id FROM attachments WHERE group_db_id = ?)`, groupDBID); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM ` + "`groups`" + ` WHERE id = ?`, groupDBID); err != nil {
+	if _, err = tx.ExecContext(ctx, `DELETE FROM `+"`groups`"+` WHERE id = ?`, groupDBID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -261,23 +261,25 @@ func (s *GroupService) DissolveGroup(ctx context.Context, groupID string) error 
 
 // PendingGroupMessage is a pending group message delivery with its key envelope.
 type PendingGroupMessage struct {
-	MsgID        string    `json:"msg_id"`
-	GroupID      string    `json:"group_id"`
-	SenderChatID string    `json:"sender_chat_id"`
-	IV           string    `json:"iv"`
-	Ciphertext   string    `json:"ciphertext"`
-	KeyEnvelope  string    `json:"key_envelope"`
-	SentAt       time.Time `json:"sent_at"`
+	MsgID        string     `json:"msg_id"`
+	GroupID      string     `json:"group_id"`
+	SenderChatID string     `json:"sender_chat_id"`
+	IV           string     `json:"iv"`
+	Ciphertext   string     `json:"ciphertext"`
+	KeyEnvelope  string     `json:"key_envelope"`
+	SentAt       time.Time  `json:"sent_at"`
 	RecalledAt   *time.Time `json:"recalled_at"`
 	DeletedAt    *time.Time `json:"deleted_at"`
 }
 
 // PendingGroupTombstone is a pending recall/delete tombstone for replay.
 type PendingGroupTombstone struct {
-	MsgID     string     `json:"msg_id"`
-	GroupID   string     `json:"group_id"`
-	Kind      string     `json:"kind"` // "recall" or "delete"
-	Timestamp time.Time  `json:"timestamp"`
+	From      string    `json:"from"`
+	Proof     string    `json:"proof,omitempty"`
+	MsgID     string    `json:"msg_id"`
+	GroupID   string    `json:"group_id"`
+	Kind      string    `json:"kind"` // "recall" or "delete"
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // AcceptGroupMessage persists one ciphertext + N per-member delivery rows.
@@ -304,7 +306,7 @@ func (s *GroupService) AcceptGroupMessage(ctx context.Context, senderChatID, gro
 	defer tx.Rollback()
 
 	var groupDBID uint64
-	err = tx.QueryRowContext(ctx, `SELECT id FROM ` + "`groups`" + ` WHERE group_id = ? FOR UPDATE`, groupID).Scan(&groupDBID)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM `+"`groups`"+` WHERE group_id = ? FOR UPDATE`, groupID).Scan(&groupDBID)
 	if err == sql.ErrNoRows {
 		return time.Time{}, false, ErrGroupNotFound
 	}
@@ -393,6 +395,9 @@ func (s *GroupService) AcceptGroupMessage(ctx context.Context, senderChatID, gro
 		if err != nil {
 			return time.Time{}, false, fmt.Errorf("insert delivery: %w", err)
 		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO group_message_reads (msg_id, member_chat_id) VALUES (?, ?)`, msgID, env.To); err != nil {
+			return time.Time{}, false, fmt.Errorf("insert group read recipient: %w", err)
+		}
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -414,7 +419,7 @@ func (s *GroupService) GetPendingGroupMessages(ctx context.Context, memberChatID
 		SELECT gmd.msg_id, g.group_id, gm.sender_chat_id, gm.iv, gm.ciphertext, gmd.key_envelope, gm.sent_at, gm.recalled_at, gm.deleted_at
 		FROM group_message_deliveries gmd
 		JOIN group_messages gm ON gm.msg_id = gmd.msg_id
-		JOIN ` + "`groups`" + ` g ON g.id = gm.group_db_id
+		JOIN `+"`groups`"+` g ON g.id = gm.group_db_id
 		WHERE gmd.member_chat_id = ? AND gmd.applied_at IS NULL
 			AND gm.deleted_at IS NULL AND gm.recalled_at IS NULL
 		ORDER BY gm.sent_at ASC
@@ -462,10 +467,10 @@ func (s *GroupService) GetPendingGroupTombstones(ctx context.Context, memberChat
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT gmd.msg_id, g.group_id,
 			CASE WHEN gm.recalled_at IS NOT NULL THEN 'recall' ELSE 'delete' END AS kind,
-			COALESCE(gm.recalled_at, gm.deleted_at) AS ts
+			COALESCE(gm.recalled_at, gm.deleted_at) AS ts, gm.sender_chat_id, COALESCE(gm.recall_proof, '')
 		FROM group_message_deliveries gmd
 		JOIN group_messages gm ON gm.msg_id = gmd.msg_id
-		JOIN ` + "`groups`" + ` g ON g.id = gm.group_db_id
+		JOIN `+"`groups`"+` g ON g.id = gm.group_db_id
 		WHERE gmd.member_chat_id = ? AND gmd.removed_applied_at IS NULL
 			AND (gm.recalled_at IS NOT NULL OR gm.deleted_at IS NOT NULL)
 		ORDER BY ts ASC
@@ -478,7 +483,7 @@ func (s *GroupService) GetPendingGroupTombstones(ctx context.Context, memberChat
 	var result []*PendingGroupTombstone
 	for rows.Next() {
 		t := &PendingGroupTombstone{}
-		if err = rows.Scan(&t.MsgID, &t.GroupID, &t.Kind, &t.Timestamp); err != nil {
+		if err = rows.Scan(&t.MsgID, &t.GroupID, &t.Kind, &t.Timestamp, &t.From, &t.Proof); err != nil {
 			return nil, err
 		}
 		result = append(result, t)
@@ -522,7 +527,7 @@ func (s *GroupService) isMutedTx(ctx context.Context, tx *sql.Tx, groupDBID uint
 	if mutedUntil == nil {
 		return false, nil
 	}
-	return mutedUntil.After(time.Now()), nil
+	return true, nil
 }
 
 // isMemberTx checks membership within a transaction.
@@ -571,7 +576,7 @@ func (s *GroupService) AddMembers(ctx context.Context, groupID string, chatIDs [
 	defer tx.Rollback()
 
 	var groupDBID uint64
-	err = tx.QueryRowContext(ctx, `SELECT id FROM ` + "`groups`" + ` WHERE group_id = ? FOR UPDATE`, groupID).Scan(&groupDBID)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM `+"`groups`"+` WHERE group_id = ? FOR UPDATE`, groupID).Scan(&groupDBID)
 	if err == sql.ErrNoRows {
 		return ErrGroupNotFound
 	}
@@ -638,7 +643,7 @@ func (s *GroupService) RemoveMember(ctx context.Context, groupID, chatID string)
 	defer tx.Rollback()
 
 	var groupDBID uint64
-	err = tx.QueryRowContext(ctx, `SELECT id FROM ` + "`groups`" + ` WHERE group_id = ? FOR UPDATE`, groupID).Scan(&groupDBID)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM `+"`groups`"+` WHERE group_id = ? FOR UPDATE`, groupID).Scan(&groupDBID)
 	if err == sql.ErrNoRows {
 		return ErrGroupNotFound
 	}
@@ -684,7 +689,7 @@ func (s *GroupService) RenameGroup(ctx context.Context, groupID, name string) er
 	if !groupIDPattern.MatchString(groupID) {
 		return ErrGroupNotFound
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE ` + "`groups`" + ` SET name = ? WHERE group_id = ?`, strings.TrimSpace(name), groupID)
+	res, err := s.db.ExecContext(ctx, `UPDATE `+"`groups`"+` SET name = ? WHERE group_id = ?`, strings.TrimSpace(name), groupID)
 	if err != nil {
 		return err
 	}
@@ -711,7 +716,7 @@ func (s *GroupService) MuteMember(ctx context.Context, groupID, chatID string, u
 	defer tx.Rollback()
 
 	var groupDBID uint64
-	err = tx.QueryRowContext(ctx, `SELECT id FROM ` + "`groups`" + ` WHERE group_id = ? FOR UPDATE`, groupID).Scan(&groupDBID)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM `+"`groups`"+` WHERE group_id = ? FOR UPDATE`, groupID).Scan(&groupDBID)
 	if err == sql.ErrNoRows {
 		return ErrGroupNotFound
 	}
@@ -731,7 +736,7 @@ func (s *GroupService) MuteMember(ctx context.Context, groupID, chatID string, u
 	// NULL until means unmute
 	var sqlUntil interface{}
 	if until != nil {
-		sqlUntil = *until
+		sqlUntil = time.Date(9999, time.December, 31, 0, 0, 0, 0, time.UTC)
 	}
 
 	res, err := tx.ExecContext(ctx,
@@ -753,7 +758,7 @@ func (s *GroupService) ListGroupsWithCounts(ctx context.Context) ([]*GroupSummar
 		SELECT g.group_id, g.name,
 			(SELECT COUNT(*) FROM group_members gm WHERE gm.group_db_id = g.id AND gm.state = 'active'),
 			(SELECT MAX(sent_at) FROM group_messages gm2 WHERE gm2.group_db_id = g.id)
-		FROM ` + "`groups`" + ` g
+		FROM `+"`groups`"+` g
 		ORDER BY g.created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -780,7 +785,7 @@ func (s *GroupService) ListMyGroups(ctx context.Context, chatID string) ([]*Grou
 		SELECT g.group_id, g.name,
 			(SELECT COUNT(*) FROM group_members gm2 WHERE gm2.group_db_id = g.id AND gm2.state = 'active'),
 			(SELECT MAX(sent_at) FROM group_messages gm3 WHERE gm3.group_db_id = g.id)
-		FROM ` + "`groups`" + ` g
+		FROM `+"`groups`"+` g
 		JOIN group_members gm ON gm.group_db_id = g.id
 		JOIN users u ON u.id = gm.user_id
 		WHERE u.chat_id = ? AND gm.state = 'active'
@@ -830,7 +835,7 @@ func (s *GroupService) getGroupDetail(ctx context.Context, groupID, requesterCha
 		name      string
 		createdAt time.Time
 	)
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at FROM ` + "`groups`" + ` WHERE group_id = ?`, groupID).
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at FROM `+"`groups`"+` WHERE group_id = ?`, groupID).
 		Scan(&groupDBID, &name, &createdAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrGroupNotFound
@@ -897,7 +902,7 @@ func (s *GroupService) IsGroupMember(ctx context.Context, groupID, chatID string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM group_members gm
 		JOIN users u ON u.id = gm.user_id
-		JOIN ` + "`groups`" + ` g ON g.id = gm.group_db_id
+		JOIN `+"`groups`"+` g ON g.id = gm.group_db_id
 		WHERE g.group_id = ? AND u.chat_id = ? AND gm.state = 'active'`,
 		groupID, chatID).Scan(&count)
 	if err != nil {
@@ -914,7 +919,7 @@ func (s *GroupService) ActiveMemberChatIDs(ctx context.Context, groupID string) 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT u.chat_id FROM group_members gm
 		JOIN users u ON u.id = gm.user_id
-		JOIN ` + "`groups`" + ` g ON g.id = gm.group_db_id
+		JOIN `+"`groups`"+` g ON g.id = gm.group_db_id
 		WHERE g.group_id = ? AND gm.state = 'active'`, groupID)
 	if err != nil {
 		return nil, err
@@ -941,7 +946,7 @@ func (s *GroupService) IsMuted(ctx context.Context, groupID, chatID string) (boo
 	err := s.db.QueryRowContext(ctx, `
 		SELECT gm.muted_until FROM group_members gm
 		JOIN users u ON u.id = gm.user_id
-		JOIN ` + "`groups`" + ` g ON g.id = gm.group_db_id
+		JOIN `+"`groups`"+` g ON g.id = gm.group_db_id
 		WHERE g.group_id = ? AND u.chat_id = ? AND gm.state = 'active'`,
 		groupID, chatID).Scan(&mutedUntil)
 	if err == sql.ErrNoRows {
@@ -953,7 +958,7 @@ func (s *GroupService) IsMuted(ctx context.Context, groupID, chatID string) (boo
 	if mutedUntil == nil {
 		return false, nil
 	}
-	return mutedUntil.After(time.Now()), nil
+	return true, nil
 }
 
 // ListGroupMessageMetadata returns ciphertext metadata only (admin panel).
@@ -967,7 +972,7 @@ func (s *GroupService) ListGroupMessageMetadata(ctx context.Context, groupID str
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT msg_id, sender_chat_id, sent_at, envelope_size, recalled_at, deleted_at
 		FROM group_messages gm
-		JOIN ` + "`groups`" + ` g ON g.id = gm.group_db_id
+		JOIN `+"`groups`"+` g ON g.id = gm.group_db_id
 		WHERE g.group_id = ?
 		ORDER BY gm.sent_at DESC
 		LIMIT ? OFFSET ?`, groupID, limit, offset)
@@ -994,7 +999,7 @@ func (s *GroupService) DeleteGroupMessage(ctx context.Context, groupID, msgID st
 	}
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE group_messages gm
-		JOIN ` + "`groups`" + ` g ON g.id = gm.group_db_id
+		JOIN `+"`groups`"+` g ON g.id = gm.group_db_id
 		SET gm.deleted_at = CURRENT_TIMESTAMP(3)
 		WHERE g.group_id = ? AND gm.msg_id = ? AND gm.deleted_at IS NULL`,
 		groupID, msgID)
@@ -1010,16 +1015,25 @@ func (s *GroupService) DeleteGroupMessage(ctx context.Context, groupID, msgID st
 
 // RecallGroupMessage sets recalled_at (user self-recall, 144h window).
 func (s *GroupService) RecallGroupMessage(ctx context.Context, senderChatID, groupID, msgID string) error {
+	_, err := s.RecallGroupMessageWithProof(ctx, senderChatID, groupID, msgID, "")
+	return err
+}
+
+func (s *GroupService) RecallGroupMessageWithProof(ctx context.Context, senderChatID, groupID, msgID, proof string) (string, error) {
+	if _, err := controlProof([]string{proof}); err != nil {
+		return "", err
+	}
+	var storedProof string
 	if !groupIDPattern.MatchString(groupID) {
-		return ErrGroupNotFound
+		return "", ErrGroupNotFound
 	}
 	if !chatIDPattern.MatchString(senderChatID) {
-		return ErrNotMessageSender
+		return "", ErrNotMessageSender
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback()
 
@@ -1030,35 +1044,35 @@ func (s *GroupService) RecallGroupMessage(ctx context.Context, senderChatID, gro
 		recalledAt     *time.Time
 	)
 	err = tx.QueryRowContext(ctx, `
-		SELECT gm.sender_chat_id, gm.sent_at, gm.deleted_at, gm.recalled_at
+		SELECT gm.sender_chat_id, gm.sent_at, gm.deleted_at, gm.recalled_at, COALESCE(gm.recall_proof, '')
 		FROM group_messages gm
-		JOIN ` + "`groups`" + ` g ON g.id = gm.group_db_id
+		JOIN `+"`groups`"+` g ON g.id = gm.group_db_id
 		WHERE g.group_id = ? AND gm.msg_id = ? FOR UPDATE`,
-		groupID, msgID).Scan(&dbSenderChatID, &sentAt, &deletedAt, &recalledAt)
+		groupID, msgID).Scan(&dbSenderChatID, &sentAt, &deletedAt, &recalledAt, &storedProof)
 	if err == sql.ErrNoRows {
-		return ErrMessageNotFound
+		return "", ErrMessageNotFound
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if dbSenderChatID != senderChatID {
-		return ErrNotMessageSender
+		return "", ErrNotMessageSender
 	}
 	if recalledAt != nil {
-		return nil // idempotent
+		return storedProof, nil // idempotent
 	}
 	if deletedAt != nil {
-		return ErrMessageNotFound // admin-deleted, cannot recall
+		return "", ErrMessageNotFound // admin-deleted, cannot recall
 	}
 	if time.Since(sentAt) > time.Duration(GroupRecallLimitHours)*time.Hour {
-		return errors.New("recall window expired")
+		return "", errors.New("recall window expired")
 	}
 
 	if _, err = tx.ExecContext(ctx,
-		`UPDATE group_messages SET recalled_at = CURRENT_TIMESTAMP(3) WHERE msg_id = ?`,
-		msgID); err != nil {
-		return err
+		`UPDATE group_messages SET recalled_at = CURRENT_TIMESTAMP(3), recall_proof = ? WHERE msg_id = ?`,
+		proof, msgID); err != nil {
+		return "", err
 	}
-	return tx.Commit()
+	return proof, tx.Commit()
 }

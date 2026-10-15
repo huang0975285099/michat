@@ -155,6 +155,7 @@ try {
             'test:file-download',
             'test:voice',
             'test:call',
+            'test:group-reads',
             'test:ironfist'
         )
         foreach ($testScript in $testScripts) {

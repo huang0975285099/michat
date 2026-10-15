@@ -4,7 +4,8 @@
         <div class="lock-bg" />
 
         <!-- Lock interface -->
-        <div class="lock-card">
+        <form class="lock-card" @submit.prevent="tryUnlock">
+            <input type="hidden" name="username" :value="identity.chatId" autocomplete="username" />
             <!-- Avatar + Nickname -->
             <div style="display: flex;justify-content: center;align-items: center;">
                 <deterministic-avatar
@@ -17,37 +18,7 @@
             </div>
             <div class="text-caption text-grey-7 q-mb-md q-mt-md">{{ t("lock.enterCode") }}</div>
 
-            <!-- 6-digit PIN entry -->
-            <div class="pin-row q-mb-lg">
-                <input
-                    ref="pinInput"
-                    :value="pinCode"
-                    maxlength="6"
-                    type="password"
-                    inputmode="numeric"
-                    pattern="[0-9]*"
-                    autocomplete="off"
-                    class="pin-capture"
-                    :aria-label="t('lock.enterCode')"
-                    :disabled="isUnlocking || isCoolingDown"
-                    @input="onPinInput"
-                    @compositionend="onPinInput"
-                    @paste="onPinPaste"
-                    @click="moveCaretToEnd"
-                    @focus="moveCaretToEnd"
-                />
-                <span
-                    v-for="i in 6"
-                    :key="i"
-                    aria-hidden="true"
-                    class="pin-input"
-                    :class="{
-                        active: activeIdx === i - 1,
-                        filled: pinCode.length >= i,
-                        error: showError,
-                    }"
-                >{{ pinCode.length >= i ? "•" : "" }}</span>
-            </div>
+            <q-input ref="pinInput" v-model="pinCode" outlined type="password" maxlength="128" autocomplete="current-password" class="q-mb-lg" :aria-label="t('lock.enterCode')" :disable="isUnlocking || isCoolingDown" @update:model-value="showError = false" />
 
             <!-- Error message -->
             <div v-if="showError" class="text-negative text-center q-mb-md">
@@ -72,9 +43,9 @@
                 color="primary"
                 :label="t('lock.unlock')"
                 class="full-width"
-                :disable="pinCode.length !== 6 || isUnlocking"
+                :disable="!pinCode.length || isUnlocking"
                 :loading="isUnlocking"
-                @click="tryUnlock"
+                type="submit"
             />
 
             <!-- bottom -->
@@ -84,7 +55,7 @@
                     >{{ t("lock.deleteAccount") }}</span
                 >
             </div>
-        </div>
+        </form>
     </div>
 </template>
 
@@ -106,9 +77,8 @@ const router = useRouter();
 const identity = useIdentityStore();
 const { t } = useI18n();
 
-const show = computed(() => identity.isLocked);
+const show = computed(() => identity.isLocked || identity.restoringLocalData);
 const pinCode = ref("");
-const activeIdx = computed(() => Math.min(pinCode.value.length, 5));
 const pinInput = ref(null);
 const isUnlocking = ref(false);
 const showError = ref(false);
@@ -159,35 +129,8 @@ function resetPin() {
     });
 }
 
-function setPin(value) {
-    pinCode.value = value.replace(/[^0-9]/g, "").slice(0, 6);
-    if (pinInput.value) pinInput.value.value = pinCode.value;
-    showError.value = false;
-
-    if (pinCode.value.length === 6) {
-        tryUnlock();
-    }
-}
-
-function onPinInput(event) {
-    if (event.isComposing) return;
-    setPin(event.target.value);
-}
-
-function onPinPaste(event) {
-    event.preventDefault();
-    setPin(event.clipboardData?.getData("text") || "");
-}
-
-function moveCaretToEnd() {
-    nextTick(() => {
-        const input = pinInput.value;
-        input?.setSelectionRange(input.value.length, input.value.length);
-    });
-}
-
 async function tryUnlock() {
-    if (pinCode.value.length !== 6 || isUnlocking.value || isCoolingDown.value)
+    if (!pinCode.value.length || isUnlocking.value || isCoolingDown.value)
         return;
 
     isUnlocking.value = true;
@@ -312,57 +255,6 @@ function startCooldown(endTime) {
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
 }
 
-.pin-row {
-    position: relative;
-    display: flex;
-    justify-content: center;
-    gap: 6px;
-    flex-wrap: nowrap;
-}
-
-.pin-capture {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    z-index: 1;
-    opacity: 0.01;
-    cursor: text;
-}
-
-.pin-input {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: calc((100% - 30px) / 6);
-    min-width: 0;
-    max-width: 48px;
-    height: 52px;
-    text-align: center;
-    font-size: 24px;
-    font-weight: 700;
-    border: 2px solid #e0e0e0;
-    border-radius: 12px;
-    outline: none;
-    background: #fafafa;
-    color: #333;
-    transition: all 0.15s;
-    flex-shrink: 0;
-}
-.pin-input.active {
-    border-color: #1976d2;
-    background: #fff;
-    box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.15);
-}
-.pin-input.filled {
-    border-color: #1976d2;
-    color: #1976d2;
-}
-.pin-input.error {
-    border-color: #c62828;
-    background: #ffebee;
-    color: #c62828;
-}
 .cursor-pointer {
     cursor: pointer;
     text-decoration: underline;

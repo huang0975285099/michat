@@ -1,10 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { Notify } from 'quasar'
-import { send, on, off, wsConnected } from 'src/services/websocket'
+import { send, on, off, wsConnected, getServerNow } from 'src/services/websocket'
 import { callApi } from 'src/services/api'
 import { acquireCallMedia } from './call-media.mjs'
 import { t } from 'src/i18n'
+import { loadKeyPair } from 'src/services/crypto'
+import { useIdentityStore } from './identity'
+import { createCallSignaling } from '../services/call-signaling.mjs'
 
 function deviceErrorMessage(e, video) {
   const noun = t(video ? 'call.deviceCameraMic' : 'call.deviceMic')
@@ -30,6 +33,59 @@ const MAX_BUFFERED_ICE = 256
 const CALL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 export const useCallStore = defineStore('call', () => {
+  const identity = useIdentityStore()
+  const signaling = createCallSignaling({
+    identity, loadKeyPair, now: getServerNow,
+    isCurrentCall: (callId, peer) => callId === currentCallId && peer === peerId.value && state.value !== 'idle' && identity.chatId === callAccountId,
+  })
+  let preparedHangup = null
+  let lifecycle = 0
+  let incomingQueue = Promise.resolve()
+  let outgoingQueue = Promise.resolve()
+
+  function sendAuthenticated(type, payload, terminal = false) {
+    const generation = lifecycle
+    const account = identity.chatId
+    const valid = () => terminal || generation === lifecycle
+    const dispatch = async () => {
+      if (!valid() || identity.chatId !== account) return false
+      const signed = await signaling.seal(type, payload)
+      if (!valid() || identity.chatId !== account || (!terminal && identity.isLocked)) return false
+      return send(type, signed)
+    }
+    const task = terminal
+      ? dispatch().finally(() => signaling.release(payload.call_id))
+      : outgoingQueue.then(dispatch)
+    if (!terminal) outgoingQueue = task.catch(() => {})
+    return task
+  }
+
+  function sendControl(type, payload, terminal = false) {
+    return sendAuthenticated(type, payload, terminal).catch(error => {
+      console.warn('[call] sign control:', error)
+      return false
+    })
+  }
+
+  async function prepareHangup(callId, peer) {
+    const account = identity.chatId
+    const payload = await signaling.seal('call_hangup', { to: peer, call_id: callId, prepared: true })
+    if (isCurrentSession(callId, peer) && identity.chatId === account) preparedHangup = { account, payload }
+  }
+
+  function authenticatedHandler(type, handler) {
+    return payload => {
+      const generation = lifecycle
+      const task = incomingQueue.then(async () => {
+        if (generation !== lifecycle) return
+        const verified = await signaling.open(type, payload)
+        if (generation !== lifecycle) return
+        await handler(verified)
+      })
+      incomingQueue = task.catch(error => { console.warn('[call] authenticated signaling rejected:', error) })
+      return incomingQueue
+    }
+  }
   const state = ref('idle')   // idle | calling | ringing | active
   const media = ref('audio')  //audio | video (type of this call)
   const peerId = ref('')
@@ -51,9 +107,11 @@ export const useCallStore = defineStore('call', () => {
   let reconnectTicker = null
   let connectTimer = null
   let currentCallId = ''
+  let callAccountId = ''
   let isInitiator = false
   let restartInFlight = false
   let awaitingRestartAnswer = false
+  let restartToken = ''
   let lastRestartAttempt = 0
   let answerAttemptGeneration = 0
   let cameraAttemptGeneration = 0
@@ -78,7 +136,8 @@ export const useCallStore = defineStore('call', () => {
   }
 
   function isCurrentSession(callId, fromId = peerId.value) {
-    return !!callId && callId === currentCallId && fromId === peerId.value && state.value !== 'idle'
+    return !!callId && callId === currentCallId && fromId === peerId.value && state.value !== 'idle' &&
+      identity.chatId === callAccountId && !identity.isLocked
   }
 
   function clearConnectTimer() {
@@ -137,7 +196,7 @@ export const useCallStore = defineStore('call', () => {
     if (!isInitiator) {
       if (now - lastRestartAttempt < 2000) return
       lastRestartAttempt = now
-      send('call_restart_request', { to: targetPeerId, call_id: callId })
+      sendControl('call_restart_request', { to: targetPeerId, call_id: callId })
       return
     }
     if (awaitingRestartAnswer && now - lastRestartAttempt < 2500) return
@@ -147,16 +206,20 @@ export const useCallStore = defineStore('call', () => {
       // If you did not receive an Answer during the last reconnection Offer, you must roll back before you can safely initiate the next round of negotiation.
       if (connection.signalingState === 'have-local-offer') {
         await connection.setLocalDescription({ type: 'rollback' })
+        if (pc !== connection || !isCurrentSession(callId, targetPeerId)) return
       }
       connection.restartIce()
       const offer = await connection.createOffer({ iceRestart: true })
+      if (pc !== connection || !isCurrentSession(callId, targetPeerId)) return
       await connection.setLocalDescription(offer)
       if (pc !== connection || !isCurrentSession(callId, targetPeerId) || connectionStatus.value !== 'reconnecting') return
-      awaitingRestartAnswer = send('call_restart_offer', { to: targetPeerId, call_id: callId, sdp: offer })
+      restartToken = crypto.randomUUID()
+      const sent = await sendAuthenticated('call_restart_offer', { to: targetPeerId, call_id: callId, sdp: offer, negotiation: restartToken })
+      if (pc === connection && isCurrentSession(callId, targetPeerId)) awaitingRestartAnswer = sent
     } catch (e) {
       console.warn('[call] ICE restart offer:', e)
     } finally {
-      restartInFlight = false
+      if (pc === connection && isCurrentSession(callId, targetPeerId)) restartInFlight = false
     }
   }
 
@@ -200,7 +263,7 @@ export const useCallStore = defineStore('call', () => {
 
     connection.onicecandidate = (event) => {
       if (event.candidate && pc === connection && isCurrentSession(callId, targetPeerId)) {
-        send('call_ice', { to: targetPeerId, call_id: callId, ice: event.candidate.toJSON() })
+        sendAuthenticated('call_ice', { to: targetPeerId, call_id: callId, ice: event.candidate.toJSON() }).catch(error => console.warn('[call] sign ICE:', error))
       }
     }
 
@@ -219,16 +282,19 @@ export const useCallStore = defineStore('call', () => {
   }
 
   async function flushIceCandidates() {
-    while (iceCandidateBuffer.length && pc?.remoteDescription) {
+    const connection = pc
+    while (pc === connection && iceCandidateBuffer.length && connection?.remoteDescription) {
       const ice = iceCandidateBuffer.shift()
-      try { await pc.addIceCandidate(ice) } catch {}
+      try { await connection.addIceCandidate(ice) } catch {}
     }
   }
 
   async function startCall(chatId, nickname, callMedia = 'audio') {
     if (state.value !== 'idle') return
+    lifecycle++
     const callId = crypto.randomUUID()
     currentCallId = callId
+    callAccountId = identity.chatId
     isInitiator = true
     media.value = callMedia === 'video' ? 'video' : 'audio'
     peerId.value = chatId
@@ -236,6 +302,8 @@ export const useCallStore = defineStore('call', () => {
     state.value = 'calling'
 
     try {
+      await prepareHangup(callId, chatId)
+      if (!isCurrentSession(callId, chatId)) return
       const { stream, videoError } = await acquireCallMedia(navigator.mediaDevices, {
         video: isVideo(),
         facingMode,
@@ -265,10 +333,11 @@ export const useCallStore = defineStore('call', () => {
         })
       }
       const offer = await connection.createOffer()
+      if (pc !== connection || !isCurrentSession(callId, chatId)) return
       await connection.setLocalDescription(offer)
       if (pc !== connection || !isCurrentSession(callId, chatId) || state.value !== 'calling') return
       // The signaling carries the media type, and the called end decides whether to turn on the camera based on this.
-      if (!send('call_offer', {
+      if (!await sendAuthenticated('call_offer', {
         to: chatId,
         call_id: callId,
         sdp: offer,
@@ -277,6 +346,7 @@ export const useCallStore = defineStore('call', () => {
       })) {
         throw new Error('Signaling connection disconnected')
       }
+      if (pc !== connection || !isCurrentSession(callId, chatId)) return
       callingTimer = setTimeout(() => {
         if (state.value === 'calling' && currentCallId === callId) {
           hangup()
@@ -293,18 +363,19 @@ export const useCallStore = defineStore('call', () => {
     }
   }
 
-  function handleIncomingOffer(fromId, callId, sdp, callMedia, videoEnabled) {
+  async function handleIncomingOffer(fromId, callId, sdp, callMedia, videoEnabled) {
     if (!CALL_ID_PATTERN.test(callId || '') || !fromId || !sdp) return
     if (state.value !== 'idle') {
       // When the same two parties call each other at the same time, if the call_id is kept smaller with certainty, both parties will reach the same conclusion.
       if (state.value === 'calling' && fromId === peerId.value && callId < currentCallId) {
         cleanup()
       } else {
-        send('call_reject', { to: fromId, call_id: callId, reason: fromId === peerId.value ? 'glare' : 'busy' })
+        sendControl('call_reject', { to: fromId, call_id: callId, reason: fromId === peerId.value ? 'glare' : 'busy' }, true)
         return
       }
     }
     currentCallId = callId
+    callAccountId = identity.chatId
     isInitiator = false
     media.value = callMedia === 'video' ? 'video' : 'audio'
     remoteVideoOn.value = isVideo() && typeof videoEnabled === 'boolean' ? videoEnabled : null
@@ -314,10 +385,16 @@ export const useCallStore = defineStore('call', () => {
     state.value = 'ringing'
     incomingTimer = setTimeout(() => {
       if (state.value === 'ringing' && currentCallId === callId) {
-        send('call_reject', { to: fromId, call_id: callId, reason: 'timeout' })
+        sendControl('call_reject', { to: fromId, call_id: callId, reason: 'timeout' }, true)
         cleanup()
       }
     }, INCOMING_TIMEOUT_MS)
+    try {
+      await prepareHangup(callId, fromId)
+    } catch (error) {
+      if (currentCallId === callId) cleanup()
+      console.warn('[call] prepare terminal signaling failed:', error)
+    }
   }
 
   async function answerCall() {
@@ -348,14 +425,17 @@ export const useCallStore = defineStore('call', () => {
       const connection = createPC(iceConfig, callId, fromId)
       connectionStatus.value = 'connecting'
       await connection.setRemoteDescription(offer)
+      if (pc !== connection || !isCurrentSession(callId, fromId)) return
       await flushIceCandidates()
+      if (pc !== connection || !isCurrentSession(callId, fromId)) return
       localStream.value.getAudioTracks().forEach(track => connection.addTrack(track, localStream.value))
       const videoTrack = localStream.value.getVideoTracks()[0]
       if (videoTrack) connection.addTrack(videoTrack, localStream.value)
       const answer = await connection.createAnswer()
+      if (pc !== connection || !isCurrentSession(callId, fromId)) return
       await connection.setLocalDescription(answer)
       if (pc !== connection || !isCurrentSession(callId, fromId) || state.value !== 'ringing') return
-      if (!send('call_answer', {
+      if (!await sendAuthenticated('call_answer', {
         to: fromId,
         call_id: callId,
         sdp: answer,
@@ -363,6 +443,7 @@ export const useCallStore = defineStore('call', () => {
       })) {
         throw new Error('Signaling connection disconnected')
       }
+      if (pc !== connection || !isCurrentSession(callId, fromId)) return
       state.value = 'active'
       pendingOffer = null
       if (incomingTimer) { clearTimeout(incomingTimer); incomingTimer = null }
@@ -370,7 +451,7 @@ export const useCallStore = defineStore('call', () => {
     } catch (e) {
       console.error('[call] answerCall:', e)
       if (currentCallId === callId) {
-        send('call_reject', { to: fromId, call_id: callId, reason: 'device_error' })
+        sendControl('call_reject', { to: fromId, call_id: callId, reason: 'device_error' }, true)
         cleanup()
         const message = e.message === 'Signaling connection disconnected' ? e.message : deviceErrorMessage(e, false)
         Notify.create({ type: 'negative', message })
@@ -381,15 +462,22 @@ export const useCallStore = defineStore('call', () => {
   }
 
   function rejectCall() {
-    send('call_reject', { to: peerId.value, call_id: currentCallId, reason: 'rejected' })
+    if (state.value === 'idle') return
+    sendControl('call_reject', { to: peerId.value, call_id: currentCallId, reason: 'rejected' }, true)
     cleanup()
   }
 
   function hangup() {
+    let completion = Promise.resolve(false)
     if (state.value !== 'idle') {
-      send('call_hangup', { to: peerId.value, call_id: currentCallId })
+      if (preparedHangup?.account === identity.chatId && preparedHangup.payload.call_id === currentCallId && preparedHangup.payload.to === peerId.value) {
+        completion = Promise.resolve(send('call_hangup', preparedHangup.payload))
+      } else {
+        completion = sendControl('call_hangup', { to: peerId.value, call_id: currentCallId }, true)
+      }
     }
     cleanup()
+    return completion
   }
 
   function setMuted(val) {
@@ -409,13 +497,13 @@ export const useCallStore = defineStore('call', () => {
       cameraStarting.value = false
       if (existingTrack) existingTrack.enabled = false
       localVideoOn.value = false
-      sendMediaState()
+      await sendMediaState()
       return
     }
     if (existingTrack) {
       existingTrack.enabled = true
       localVideoOn.value = true
-      sendMediaState()
+      await sendMediaState()
       return
     }
     if (cameraStarting.value) return
@@ -454,7 +542,7 @@ export const useCallStore = defineStore('call', () => {
       bindTrackEndHandlers({ getTracks: () => [newTrack] }, callId, targetPeerId)
       localVideoOn.value = true
       cameraStream = null
-      sendMediaState()
+      await sendMediaState()
     } catch (e) {
       cameraStream?.getTracks().forEach(track => track.stop())
       console.warn('[call] enable camera:', e)
@@ -527,6 +615,9 @@ export const useCallStore = defineStore('call', () => {
   }
 
   function cleanup() {
+    preparedHangup = null
+    signaling.release(currentCallId)
+    lifecycle++
     answerAttemptGeneration++
     cameraAttemptGeneration++
     answering.value = false
@@ -552,10 +643,12 @@ export const useCallStore = defineStore('call', () => {
     pendingOffer = null
     iceCandidateBuffer = []
     currentCallId = ''
+    callAccountId = ''
     isInitiator = false
     restartInFlight = false
     awaitingRestartAnswer = false
     lastRestartAttempt = 0
+    restartToken = ''
     facingMode = 'user'
     localVideoOn.value = false
     remoteVideoOn.value = null
@@ -570,7 +663,7 @@ export const useCallStore = defineStore('call', () => {
   // WS handlers
   function onCallOffer(payload) {
     if (!payload) return
-    handleIncomingOffer(payload.from, payload.call_id, payload.sdp, payload.media, payload.video_enabled)
+    return handleIncomingOffer(payload.from, payload.call_id, payload.sdp, payload.media, payload.video_enabled)
   }
 
   async function onCallAnswer(payload) {
@@ -582,8 +675,10 @@ export const useCallStore = defineStore('call', () => {
       await connection.setRemoteDescription(payload.sdp)
       if (pc !== connection || !isCurrentSession(payload.call_id, payload.from)) return
       await flushIceCandidates()
+      if (pc !== connection || !isCurrentSession(payload.call_id, payload.from)) return
       state.value = 'active'
-      sendMediaState()
+      await sendMediaState()
+      if (pc !== connection || !isCurrentSession(payload.call_id, payload.from)) return
       if (callingTimer) { clearTimeout(callingTimer); callingTimer = null }
       startConnectTimeout(payload.call_id, payload.from)
     } catch (e) {
@@ -597,7 +692,7 @@ export const useCallStore = defineStore('call', () => {
 
   function sendMediaState() {
     if (!isVideo() || !isCurrentSession(currentCallId)) return false
-    return send('call_media_state', {
+    return sendControl('call_media_state', {
       to: peerId.value,
       call_id: currentCallId,
       video_enabled: localVideoOn.value,
@@ -629,11 +724,14 @@ export const useCallStore = defineStore('call', () => {
     beginRecovery(payload.call_id, payload.from)
     try {
       await connection.setRemoteDescription(payload.sdp)
+      if (pc !== connection || !isCurrentSession(payload.call_id, payload.from)) return
       await flushIceCandidates()
+      if (pc !== connection || !isCurrentSession(payload.call_id, payload.from)) return
       const answer = await connection.createAnswer()
+      if (pc !== connection || !isCurrentSession(payload.call_id, payload.from)) return
       await connection.setLocalDescription(answer)
       if (pc === connection && isCurrentSession(payload.call_id, payload.from)) {
-        send('call_restart_answer', { to: payload.from, call_id: payload.call_id, sdp: answer })
+        await sendAuthenticated('call_restart_answer', { to: payload.from, call_id: payload.call_id, sdp: answer, negotiation: payload.negotiation })
       }
     } catch (e) {
       console.warn('[call] ICE restart answer:', e)
@@ -647,16 +745,21 @@ export const useCallStore = defineStore('call', () => {
   }
 
   async function onCallRestartAnswer(payload) {
-    if (!payload?.sdp || !isInitiator || !pc || state.value !== 'active' ||
-        !isCurrentSession(payload.call_id, payload.from)) return
+    if (!payload?.sdp || !isInitiator || !awaitingRestartAnswer || !pc || state.value !== 'active' ||
+        !isCurrentSession(payload.call_id, payload.from) || payload.negotiation !== restartToken) return
     const connection = pc
+    const negotiation = restartToken
+    restartInFlight = true
     try {
       await connection.setRemoteDescription(payload.sdp)
+      if (pc !== connection || !isCurrentSession(payload.call_id, payload.from) || restartToken !== negotiation) return
       awaitingRestartAnswer = false
       await flushIceCandidates()
     } catch (e) {
       console.warn('[call] apply ICE restart answer:', e)
-      awaitingRestartAnswer = false
+      if (pc === connection && isCurrentSession(payload.call_id, payload.from) && restartToken === negotiation) awaitingRestartAnswer = false
+    } finally {
+      if (pc === connection && isCurrentSession(payload.call_id, payload.from) && restartToken === negotiation) restartInFlight = false
     }
   }
 
@@ -688,26 +791,23 @@ export const useCallStore = defineStore('call', () => {
   }
 
   function startListening() {
-    on('call_offer', onCallOffer)
-    on('call_answer', onCallAnswer)
-    on('call_ice', onCallIce)
-    on('call_hangup', onCallHangup)
-    on('call_reject', onCallReject)
-    on('call_restart_offer', onCallRestartOffer)
-    on('call_restart_answer', onCallRestartAnswer)
-    on('call_restart_request', onCallRestartRequest)
-    on('call_media_state', onCallMediaState)
+    const handlers = {
+      call_offer: onCallOffer,
+      call_answer: onCallAnswer,
+      call_ice: onCallIce,
+      call_hangup: onCallHangup,
+      call_reject: onCallReject,
+      call_restart_offer: onCallRestartOffer,
+      call_restart_answer: onCallRestartAnswer,
+      call_restart_request: onCallRestartRequest,
+      call_media_state: onCallMediaState,
+    }
+    const bindings = Object.entries(handlers).map(([type, handler]) => [type, authenticatedHandler(type, handler)])
+    for (const [type, handler] of bindings) on(type, handler)
     return () => {
       if (state.value !== 'idle') hangup()
-      off('call_offer', onCallOffer)
-      off('call_answer', onCallAnswer)
-      off('call_ice', onCallIce)
-      off('call_hangup', onCallHangup)
-      off('call_reject', onCallReject)
-      off('call_restart_offer', onCallRestartOffer)
-      off('call_restart_answer', onCallRestartAnswer)
-      off('call_restart_request', onCallRestartRequest)
-      off('call_media_state', onCallMediaState)
+      else lifecycle++
+      for (const [type, handler] of bindings) off(type, handler)
     }
   }
 

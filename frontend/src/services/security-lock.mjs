@@ -1,6 +1,10 @@
 export const MAX_SECURITY_CODE_ATTEMPTS = 5
 export const SECURITY_CODE_COOLDOWN_MS = 30 * 60 * 1000
 
+export function isStrongSecurityCode(value) {
+  return typeof value === 'string' && value.length >= 12 && value.length <= 128 && /[a-zA-Z]/.test(value) && /[0-9]/.test(value)
+}
+
 export function registerSecurityCodeFailure(currentCount, now = Date.now()) {
   const normalizedCount = Number.isFinite(currentCount)
     ? Math.max(0, Math.floor(currentCount))

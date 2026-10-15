@@ -193,6 +193,7 @@ export async function uploadOfflineAttachment(file, metadata, options = {}) {
     const start = index * metadata.chunkSize
     const end = Math.min(metadata.fileSize, start + metadata.chunkSize)
     const plaintext = await file.slice(start, end).arrayBuffer()
+    if (options.signal?.aborted) throw new DOMException('Attachment upload aborted', 'AbortError')
     const plainSize = expectedPlainChunkSize(metadata.fileSize, metadata.chunkSize, metadata.chunkCount, index)
     if (plaintext.byteLength !== plainSize) throw new Error('Attachment source chunk changed')
     const ciphertext = await crypto.subtle.encrypt({
@@ -201,6 +202,7 @@ export async function uploadOfflineAttachment(file, metadata, options = {}) {
       additionalData: attachmentAAD(metadata, index, plainSize),
       tagLength: 128,
     }, key, plaintext)
+    if (options.signal?.aborted) throw new DOMException('Attachment upload aborted', 'AbortError')
     await api.putChunk(metadata.attachmentId, index, ciphertext, await sha256Hex(ciphertext), options.signal)
     completedBytes += ciphertext.byteLength
     options.onProgress?.(Math.min(95, Math.round(completedBytes / metadata.ciphertextSize * 95)))
@@ -240,6 +242,7 @@ export async function downloadOfflineAttachment(metadata, options = {}) {
     }
     const storedChunk = await options.getStoredCiphertextChunk?.(index)
     const response = storedChunk ? null : await api.downloadChunk(metadata.attachmentId, index, options.signal)
+    if (options.signal?.aborted) throw new DOMException('Attachment download aborted', 'AbortError')
     const ciphertext = toUint8Array(storedChunk || responseData(response))
     const expectedHash = response?.headers?.['x-chunk-sha256']
     if (typeof expectedHash === 'string' && expectedHash && await sha256Hex(ciphertext) !== expectedHash.toLowerCase()) {
@@ -253,6 +256,7 @@ export async function downloadOfflineAttachment(metadata, options = {}) {
       additionalData: attachmentAAD(metadata, index, plainSize),
       tagLength: 128,
     }, key, ciphertext)
+    if (options.signal?.aborted) throw new DOMException('Attachment download aborted', 'AbortError')
     await options.onPlaintextChunk?.(index, plaintext)
     if (collectPlaintext) plaintextChunks.push(plaintext)
     received += plaintext.byteLength

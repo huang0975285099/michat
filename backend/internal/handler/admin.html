@@ -1079,13 +1079,13 @@
       row.style.marginBottom = '4px';
       const info = document.createElement('div'); info.className = 'article-row-meta';
       info.textContent = m.chat_id + ' · ' + m.nickname + (m.state === 'removed' ? ' · 已移除' : '');
-      const muted = m.muted_until && new Date(m.muted_until) > new Date();
-      if (muted) info.textContent += ' · 禁言至 ' + new Date(m.muted_until).toLocaleString();
+      const muted = !!m.muted_until;
+      if (muted) info.textContent += ' · 已禁言';
       const actions = document.createElement('div'); actions.className = 'article-row-actions';
       if (m.state === 'active') {
         const muteBtn = document.createElement('button'); muteBtn.textContent = muted ? '解除禁言' : '禁言'; muteBtn.type = 'button';
         muteBtn.addEventListener('click', async () => {
-          const body = muted ? {muted_until: null} : {muted_until: new Date(Date.now() + 3600000).toISOString()};
+          const body = {muted: !muted};
           await fetch('/api/admin/groups/' + g.group_id + '/members/' + m.chat_id + '/mute', {
             method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
           });

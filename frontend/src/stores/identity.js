@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { loadKeyPair, generateAndStoreKeyPair, clearKeyPair, exportPrivateKey, hasSecurityCode, isUnlocked, unlock, lock, startAutoLock, loadLockConfig, saveLockConfig, setupSecurityCode, disableSecurityCode } from 'src/services/crypto'
+import { loadKeyPair, generateAndStoreKeyPair, clearKeyPair, exportPrivateKey, hasSecurityCode, isUnlocked, unlock, lock, startAutoLock, loadLockConfig, saveLockConfig, setupSecurityCode, disableSecurityCode, pinPeerPublicKey, canonicalPeerPublicKey } from 'src/services/crypto'
 import { identityApi, friendApi } from 'src/services/api'
 import { registerPushToken } from 'src/boot/chat-service'
 import { connect, disconnect, clearPendingQueue } from 'src/services/websocket'
@@ -16,6 +16,7 @@ export const useIdentityStore = defineStore('identity', () => {
 
   // Security code locked status
   const isLocked = ref(false)        //Is it currently locked?
+  const restoringLocalData = ref(false)
   const hasCode = ref(false)         //Is a security code set?
   const lockTimeout = ref(1/6)       //Timeout (hours), default 10 minutes
   let autoLockCleanup = null         //Automatic lock cleaning function
@@ -24,6 +25,7 @@ export const useIdentityStore = defineStore('identity', () => {
 
   // Friend public key cache
   const friendPubKeys = ref({})
+  const friendKeyChanges = ref({})
   // Friend nickname cache { chatId -> nickname }
   const friendNames = ref({})
   // Number of friend requests pending
@@ -48,6 +50,7 @@ export const useIdentityStore = defineStore('identity', () => {
    */
   function onLocked() {
     isLocked.value = true
+    useChatStore().lockLocalData()
     sessionStorage.removeItem('sec_code_unlocked')
   }
 
@@ -117,10 +120,23 @@ export const useIdentityStore = defineStore('identity', () => {
    * Unlock (enter security code)
    */
   async function unlockWithCode(code) {
+    if (restoringLocalData.value) return false
     const success = await unlock(code)
     if (success) {
+      restoringLocalData.value = true
       isLocked.value = false
       serverReady.value = true
+      try {
+        await useChatStore().waitForSecurityCleanup()
+        await useChatStore().protectLocalData()
+        await useChatStore().loadAllMessages()
+      } catch (error) {
+        lock()
+        onLocked()
+        throw error
+      } finally {
+        restoringLocalData.value = false
+      }
       // Mark the current session as unlocked (not lost on refresh)
       sessionStorage.setItem('sec_code_unlocked', '1')
       // A correct local security code must unlock even when the network layer
@@ -151,9 +167,10 @@ export const useIdentityStore = defineStore('identity', () => {
    * Set security code
    */
   async function enableSecurityCode(code, timeoutHours = 1) {
+    await useChatStore().protectLocalData()
     await setupSecurityCode(code)
     hasCode.value = true
-    isLocked.value = true
+    onLocked()
     lockTimeout.value = timeoutHours
     await saveLockConfig(timeoutHours)
   }
@@ -191,8 +208,12 @@ export const useIdentityStore = defineStore('identity', () => {
       const keys = {}
       const names = {}
       for (const f of data) {
-        keys[f.chat_id] = f.public_key
         names[f.chat_id] = f.nickname
+        try {
+          keys[f.chat_id] = await cacheFriendPubKey(f.chat_id, f.public_key)
+        } catch (error) {
+          throw error
+        }
       }
       friendPubKeys.value = keys
       friendNames.value = names
@@ -205,12 +226,26 @@ export const useIdentityStore = defineStore('identity', () => {
     return friendPubKeys.value[chatId] || null
   }
 
+  function hasFriendKeyChanged(peerId) {
+    return !!friendKeyChanges.value[peerId]
+  }
+
   function getFriendName(chatId) {
     return friendNames.value[chatId] || chatId
   }
 
-  function cacheFriendPubKey(chatId, pubKey) {
-    friendPubKeys.value[chatId] = pubKey
+  async function cacheFriendPubKey(peerId, pubKey) {
+    try {
+      const pinned = await pinPeerPublicKey(chatId.value, peerId, pubKey)
+      friendPubKeys.value[peerId] = pinned
+      return pinned
+    } catch (error) {
+      if (error.code !== 'peer_key_changed') throw error
+      const currentKey = await canonicalPeerPublicKey(pubKey)
+      friendPubKeys.value[peerId] = currentKey
+      friendKeyChanges.value[peerId] = true
+      return currentKey
+    }
   }
 
   /**
@@ -294,6 +329,7 @@ export const useIdentityStore = defineStore('identity', () => {
         hasCode.value = false
         isLocked.value = false
         friendPubKeys.value = {}
+        friendKeyChanges.value = {}
         pendingRequestCount.value = 0
   }
 
@@ -305,8 +341,8 @@ export const useIdentityStore = defineStore('identity', () => {
 
   return {
     chatId, nickname, hasPrivateKey, serverReady, isReady, isAdmin,
-    isLocked, hasCode, lockTimeout,
-    friendPubKeys, getFriendPubKey, getFriendName, cacheFriendPubKey,
+    isLocked, restoringLocalData, hasCode, lockTimeout,
+    friendPubKeys, friendKeyChanges, getFriendPubKey, getFriendName, cacheFriendPubKey, hasFriendKeyChanged,
     pendingRequestCount,
     setPendingRequestCount: (n) => { pendingRequestCount.value = n },
     incPendingRequestCount: () => { pendingRequestCount.value++ },

@@ -328,6 +328,8 @@ func main() {
 		auth.DELETE("/attachments/:id", attachmentHandler.Cancel)
 		auth.GET("/groups", groupHandler.ListMyGroups)
 		auth.GET("/groups/:groupId", groupHandler.GetGroupDetail)
+		auth.GET("/groups/:groupId/reads", groupHandler.GetReads)
+		auth.POST("/groups/:groupId/reads", groupHandler.RecordReads)
 		auth.POST("/robot/articles/:id/view", robotHandler.RecordView)
 		auth.GET("/robot/feed", robotHandler.List)
 		auth.GET("/robot/articles/:id/state", robotHandler.GetState)

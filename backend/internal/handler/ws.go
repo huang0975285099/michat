@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -166,22 +167,21 @@ func (h *WSHandler) Serve(c *gin.Context) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	chatID, err := h.identSvc.ValidateSession(ctx, authPayload.Token)
 	if err != nil {
-		writeAuthResult(conn, false, "invalid token")
+		writeAuthResult(conn, false, "session validation failed", !errors.Is(err, service.ErrInvalidSession))
 		conn.Close()
 		return
 	}
 
 	user, err := h.identSvc.GetByChatID(ctx, chatID)
 	if err != nil {
-		writeAuthResult(conn, false, "user not found")
+		writeAuthResult(conn, false, "user lookup failed", !errors.Is(err, service.ErrUserNotFound))
 		conn.Close()
 		return
 	}
-
-	writeAuthResult(conn, true, "")
 
 	client := &ws.Client{
 		ChatID:        chatID,
@@ -190,19 +190,35 @@ func (h *WSHandler) Serve(c *gin.Context) {
 		Group:         authPayload.Group,
 	}
 	ws.InitClient(client, conn, make(chan []byte, 256))
+	if !completeWSAuthentication(conn, client, authPayload.Token, h.identSvc) {
+		conn.Close()
+		return
+	}
 
 	handedOff = true
 	go func() {
 		defer h.releaseConn(ip)
 		h.hub.ServeClient(client)
-		h.identSvc.UpdateLastSeen(ctx, chatID)
+		lastSeenCtx, lastSeenCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer lastSeenCancel()
+		h.identSvc.UpdateLastSeen(lastSeenCtx, chatID)
 	}()
 }
 
-func writeAuthResult(conn *websocket.Conn, success bool, reason string) {
+func completeWSAuthentication(conn *websocket.Conn, client *ws.Client, token string, validator ws.SessionValidator) bool {
+	if err := client.BindSession(token, validator); err != nil {
+		writeAuthResult(conn, false, "session binding failed", !errors.Is(err, service.ErrInvalidSession))
+		return false
+	}
+	writeAuthResult(conn, true, "")
+	return true
+}
+
+func writeAuthResult(conn *websocket.Conn, success bool, reason string, retryable ...bool) {
 	type payload struct {
 		Success       bool   `json:"success"`
 		Reason        string `json:"reason,omitempty"`
+		Retryable     bool   `json:"retryable,omitempty"`
 		ServerTime    int64  `json:"server_time"`
 		ReadAck       bool   `json:"read_ack"`
 		MessageSync   bool   `json:"message_sync"`
@@ -215,7 +231,8 @@ func writeAuthResult(conn *websocket.Conn, success bool, reason string) {
 		Payload payload `json:"payload"`
 	}
 	data, _ := json.Marshal(envelope{Type: "auth_result", Payload: payload{
-		Success: success, Reason: reason, ServerTime: time.Now().UnixMilli(), ReadAck: true, MessageSync: true, HealthCheck: true, ReliableInbox: true, Group: true,
+		Success: success, Reason: reason, Retryable: len(retryable) > 0 && retryable[0], ServerTime: time.Now().UnixMilli(), ReadAck: true, MessageSync: true, HealthCheck: true, ReliableInbox: true, Group: true,
 	}})
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	conn.WriteMessage(websocket.TextMessage, data)
 }

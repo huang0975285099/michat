@@ -45,7 +45,7 @@ func (f *fakeMessageReadStore) DeleteMessage(context.Context, string, string, st
 	f.deleted = true
 	return nil
 }
-func (*fakeMessageReadStore) RecordReads(context.Context, []string, string, string) ([]service.ReadReceipt, error) {
+func (*fakeMessageReadStore) RecordReads(context.Context, []string, string, string, ...map[string]string) ([]service.ReadReceipt, error) {
 	return nil, nil
 }
 func (*fakeMessageReadStore) GetReadReceiptsForSender(context.Context, string) (map[string][]service.ReadReceipt, error) {
@@ -61,7 +61,7 @@ func (f *fakeMessageReadStore) MarkEncryptedMessagesApplied(_ context.Context, i
 	f.applied = append(f.applied, ids...)
 	return nil
 }
-func (f *fakeMessageReadStore) RecallMessage(context.Context, string, string, string) (service.MessageDelivery, bool, error) {
+func (f *fakeMessageReadStore) RecallMessage(context.Context, string, string, string, ...string) (service.MessageDelivery, bool, error) {
 	f.recalled = true
 	return f.delivery, !f.recallNotFound, f.acceptErr
 }
@@ -187,7 +187,7 @@ func TestPersistentInboxReplaysWithoutDeletingBeforeClientAck(t *testing.T) {
 			MessageDelivery: service.MessageDelivery{MsgID: testMessageID, MsgFrom: testCallerChatID, MsgTo: testPeerChatID, SentAt: 1234000},
 			Envelope:        envelope,
 		}},
-		recalls: []service.PendingRecall{{MsgID: testMessageID2, MsgFrom: testCallerChatID, RecalledAt: 1235000}},
+		recalls: []service.PendingRecall{{MsgID: testMessageID2, MsgFrom: testCallerChatID, RecalledAt: 1235000, Proof: "opaque-recall"}},
 	}
 	client := &Client{ChatID: testPeerChatID, ReliableInbox: true, send: make(chan []byte, 2), closed: make(chan struct{})}
 	hub := &Hub{messageReadSvc: store}
@@ -201,6 +201,12 @@ func TestPersistentInboxReplaysWithoutDeletingBeforeClientAck(t *testing.T) {
 			t.Fatal(err)
 		}
 		types = append(types, message.Type)
+		if message.Type == "recall" {
+			var recall service.PendingRecall
+			if err := json.Unmarshal(message.Payload, &recall); err != nil || recall.Proof != "opaque-recall" {
+				t.Fatalf("lost replay proof: %s", message.Payload)
+			}
+		}
 	}
 	if types[0] != "message" || types[1] != "recall" {
 		t.Fatalf("unexpected replay order: %v", types)

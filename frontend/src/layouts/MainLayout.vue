@@ -326,7 +326,7 @@ onMounted(() => {
 
 // After unlocking (lock → unlock), the messages temporarily stored during the lock period will be decrypted.
 watch(
-    () => identity.isLocked,
+    () => identity.isLocked || identity.restoringLocalData,
     (locked, wasLocked) => {
         if (locked) {
             applySecurityLockEffects(callStore, chatStore);
@@ -337,6 +337,20 @@ watch(
             chatStore.processPendingMessages();
             chatStore.recoverOfflineUploads();
         }
+    },
+);
+watch(
+    () => Object.keys(groupStore.membershipStatus).filter(groupId => groupStore.isMembershipTrusted(groupId)).sort().join("\u0000"),
+    () => {
+        if (identity.isLocked || identity.restoringLocalData) return;
+        chatStore.processPendingMessages().catch(error => console.warn("[chat] retry trusted group messages failed", error));
+    },
+);
+watch(
+    () => Object.keys(groupStore.membershipStatus).filter(groupId => groupStore.isRosterAvailable(groupId)).sort().join("\u0000"),
+    () => {
+        if (identity.isLocked || identity.restoringLocalData) return;
+        chatStore.processPendingMessages().catch(error => console.warn("[chat] retry available group messages failed", error));
     },
 );
 onUnmounted(() => {

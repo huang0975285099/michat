@@ -201,9 +201,13 @@ func (h *AdminGroupHandler) MuteMember(c *gin.Context) {
 	groupID := c.Param("groupId")
 	chatID := c.Param("chatId")
 	var body struct {
+		Muted      *bool   `json:"muted"`
 		MutedUntil *string `json:"muted_until"` // RFC3339 or null
 	}
-	_ = c.ShouldBindJSON(&body)
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid mute request"})
+		return
+	}
 
 	var until *time.Time
 	if body.MutedUntil != nil && *body.MutedUntil != "" {
@@ -213,6 +217,17 @@ func (h *AdminGroupHandler) MuteMember(c *gin.Context) {
 			return
 		}
 		until = &t
+	}
+	if body.Muted != nil {
+		until = nil
+		if *body.Muted {
+			value := time.Date(9999, time.December, 31, 0, 0, 0, 0, time.UTC)
+			until = &value
+		}
+	}
+	if until != nil {
+		value := time.Date(9999, time.December, 31, 0, 0, 0, 0, time.UTC)
+		until = &value
 	}
 
 	if err := h.svc.MuteMember(c.Request.Context(), groupID, chatID, until); err != nil {

@@ -1,6 +1,5 @@
 /**
  * Message reminder tool
- * - Electron: Taskbar flash (window.myAPI.flashWindow)
  * - Tauri: Taskbar flash (requestUserAttention) + notification plugin
  * - Web page: System desktop notification (Notification API) + tab title flashing
  *
@@ -72,8 +71,7 @@ if (typeof window !== 'undefined') {
 }
 
 // ── Tauri native reminder ───────────────────────────────────────
-// Replaces the three Electron IPC handlers. Imported dynamically so the Tauri
-// packages never land in the web/Electron bundles.
+// Imported dynamically so Tauri packages never land in the web bundle.
 
 async function tauriWindow() {
   const { getCurrentWindow } = await import('@tauri-apps/api/window')
@@ -82,7 +80,6 @@ async function tauriWindow() {
 
 async function notifyTauri() {
   const win = await tauriWindow()
-  // Same guard the Electron main process applied: stay quiet while the user is looking at us.
   if (await win.isFocused()) return
 
   // The Rust side checks that the window is actually hidden before blinking;
@@ -103,7 +100,6 @@ async function notifyTauri() {
   await win.requestUserAttention(UserAttentionType.Informational)
 }
 
-// Passing null cancels the taskbar highlight, mirroring Electron's flashFrame(false) on focus.
 function clearTauriAttention() {
   if (!isTauri()) return
   tauriWindow()
@@ -135,15 +131,6 @@ function showWebNotification() {
  * Only alert when the page is not in the foreground to avoid disturbing users while they are viewing it.
  */
 export function notifyNewMessage() {
-  // Electron: Play native system Toast + taskbar flashing
-  // Keyed on the preload bridge, not on isElectron(): if the bridge is missing
-  // there is nothing to call, so falling through to the web path is better.
-  if (window.myAPI?.isElectron) {
-    window.myAPI.notify?.(NOTIFY_BODY)
-    window.myAPI.flashWindow?.()
-    return
-  }
-
   // Tauri: same behaviour, driven from the renderer instead of the main process
   if (isTauri()) {
     notifyTauri().catch(() => {})

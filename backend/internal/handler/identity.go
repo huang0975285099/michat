@@ -113,8 +113,13 @@ func (h *IdentityHandler) DeleteAccount(c *gin.Context) {
 // Log out of session (delete server Redis token)
 func (h *IdentityHandler) Logout(c *gin.Context) {
 	token := extractToken(c)
-	if token != "" {
-		h.svc.RevokeSession(c.Request.Context(), token)
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing token"})
+		return
+	}
+	if err := h.svc.RevokeSession(c.Request.Context(), token); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session revocation failed"})
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

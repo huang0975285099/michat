@@ -1,6 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { encryptMessage, decryptMessage, encryptFile, decryptFile, bufToB64, b64ToBuf } from 'src/services/crypto'
+import { encryptMessage, decryptMessage, decryptMessageWithPrivateKey, encryptFile, decryptFile, bufToB64, b64ToBuf, getLocalDataWrappingKey, loadKeyPair, getPinnedPeerPublicKey } from 'src/services/crypto'
+import { sealSignedContent, openSignedContent, openSignedGroupContent } from 'src/services/signed-content.mjs'
+import { signControlProof, verifyControlProof } from 'src/services/control-proof.mjs'
+import { assertTransferActive, eraseAttachmentSecrets, pendingCiphertext, stopSensitiveTransfers } from 'src/services/transfer-security.mjs'
+import { openLocalKeyVault, migrateLocalRecord, identityLocalDatabaseName } from 'src/services/local-key-vault.mjs'
+import { accessPendingStore, invalidPendingContent } from 'src/services/pending-storage.mjs'
 import {
   send, on, off, confirmPendingReads, confirmPendingMessage,
   discardPendingMessagesTo, retryPendingMessage, hasPendingMessage, hasPendingRecall,
@@ -11,7 +16,6 @@ import { buildEncryptedFileOfferPayload, openFileOfferMetadata, sealFileMetadata
 import {
   normalizeReplyReference,
   parseChatMessageContent,
-  parseReplyReference,
   serializeChatMessageContent,
   serializeReplyReference,
 } from 'src/services/chat-message-content.mjs'
@@ -38,6 +42,7 @@ import { encryptGroupMessageContent, decryptGroupMessageContent } from 'src/serv
 // ──Safety constants────────────────────────────────────────────
 
 const DB_NAME = 'e2eechat_messages'
+let activeDatabaseName = DB_NAME
 const DB_VERSION = 7  //v7: Added chunk-encrypted local file copies for large attachments
 const STORE_NAME = 'messages'
 const KEY_STORE_NAME = 'message_key'  //Store message encryption key
@@ -71,62 +76,85 @@ function expectedFileChunkSize(filesize, chunkIndex) {
  * The old format (raw bytes) is automatically migrated the first time it is read.
  */
 async function getOrCreateMessageEncryptKey() {
-  const db = await openMessagesDB()
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(KEY_STORE_NAME, 'readonly')
-    const store = tx.objectStore(KEY_STORE_NAME)
-    const req = store.get('encrypt_key')
-    req.onsuccess = async (e) => {
-      const record = e.target.result
-      if (record) {
-        // New format: CryptoKey objects stored directly
-        if (record.cryptoKey) {
-          resolve(record.cryptoKey)
-          return
-        }
-        // Old format: raw bytes → migrated to CryptoKey storage
-        if (record.key) {
-          try {
-            const key = await crypto.subtle.importKey(
-              'raw', new Uint8Array(record.key),
-              { name: 'AES-GCM', length: 256 },
-              false, ['encrypt', 'decrypt']
-            )
-            const tx2 = db.transaction(KEY_STORE_NAME, 'readwrite')
-            tx2.objectStore(KEY_STORE_NAME).put({ id: 'encrypt_key', cryptoKey: key })
-            tx2.oncomplete = () => resolve(key)
-            tx2.onerror = () => resolve(key)  //Migration failure is still available
-            return
-          } catch (err) {
-            reject(err)
-            return
-          }
-        }
-      }
-      // Generate new non-extractable keys and store them directly in CryptoKey objects
+  const initialize = async () => {
+    const wrappingKey = await getLocalDataWrappingKey()
+    const db = await openMessagesDB(activeDatabaseName)
+    const read = (storeName, key) => new Promise((resolve, reject) => {
+      const transaction = db.transaction(storeName, 'readonly')
+      const request = transaction.objectStore(storeName).get(key)
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const write = (storeName, record) => new Promise((resolve, reject) => {
+      const transaction = db.transaction(storeName, 'readwrite')
+      transaction.objectStore(storeName).put(record)
+      transaction.oncomplete = () => resolve()
+      transaction.onabort = () => reject(transaction.error || new Error('Local key migration aborted'))
+      transaction.onerror = () => reject(transaction.error)
+    })
+    try {
+      const previous = await read(KEY_STORE_NAME, 'encrypt_key')
+      let vault
       try {
-        const key = await crypto.subtle.generateKey(
-          { name: 'AES-GCM', length: 256 },
-          false,
-          ['encrypt', 'decrypt']
-        )
-        const tx2 = db.transaction(KEY_STORE_NAME, 'readwrite')
-        tx2.objectStore(KEY_STORE_NAME).put({ id: 'encrypt_key', cryptoKey: key })
-        tx2.oncomplete = () => resolve(key)
-        tx2.onerror = (e) => reject(e.target.error)
-      } catch (err) {
-        reject(err)
+        vault = await openLocalKeyVault(previous, wrappingKey)
+      } catch (error) {
+        if (error.name !== 'OperationError' || previous?.version !== 2 || !previous.wrappedKey) throw error
+        const identityKeys = await loadKeyPair()
+        const databaseName = await identityLocalDatabaseName(DB_NAME, identityKeys?.pubKeyB64)
+        if (activeDatabaseName === databaseName) throw error
+        db.close()
+        activeDatabaseName = databaseName
+        return initialize()
       }
+      if (previous?.version === 2 && !previous.cryptoKey && !previous.migrating) return vault.key
+      const selectedRecord = await new Promise((resolve, reject) => {
+        const transaction = db.transaction(KEY_STORE_NAME, 'readwrite')
+        const store = transaction.objectStore(KEY_STORE_NAME)
+        const request = store.get('encrypt_key')
+        let selected
+        request.onsuccess = () => {
+          selected = request.result?.version === 2 ? request.result : vault.record
+          if (request.result?.version !== 2) store.put(selected)
+        }
+        transaction.oncomplete = () => resolve(selected)
+        transaction.onabort = () => reject(transaction.error || new Error('Local key initialization aborted'))
+        transaction.onerror = () => reject(transaction.error)
+      })
+      vault = await openLocalKeyVault(selectedRecord, wrappingKey)
+      if (!vault.record.cryptoKey && !vault.record.migrating) return vault.key
+      for (const storeName of [STORE_NAME, FILE_STORE_NAME, FILE_CHUNK_STORE_NAME]) {
+        let lastKey
+        while (true) {
+          const record = await new Promise((resolve, reject) => {
+            const transaction = db.transaction(storeName, 'readonly')
+            const request = transaction.objectStore(storeName).openCursor(lastKey === undefined ? undefined : IDBKeyRange.lowerBound(lastKey, true))
+            request.onsuccess = () => resolve(request.result ? { key: request.result.primaryKey, value: request.result.value } : null)
+            request.onerror = () => reject(request.error)
+          })
+          if (!record) break
+          const migrated = await migrateLocalRecord(storeName, record.value, vault.record.cryptoKey, vault.key)
+          if (migrated !== record.value) await write(storeName, migrated)
+          lastKey = record.key
+        }
+      }
+      const { cryptoKey: legacyKey, migrating, ...protectedRecord } = vault.record
+      void legacyKey
+      void migrating
+      await write(KEY_STORE_NAME, protectedRecord)
+      return vault.key
+    } finally {
+      db.close()
     }
-    req.onerror = (e) => reject(e.target.error)
-  })
+  }
+  if (globalThis.navigator?.locks) return navigator.locks.request('yunmi-local-key-migration', initialize)
+  return initialize()
 }
 
 /**
  * Encrypted message text (for IndexedDB storage)
  */
 async function encryptMessageText(plaintext, key) {
-  if (!key) return plaintext  //No encryption when there is no key (downgrade processing)
+  if (!key) throw new Error('Local encryption key is unavailable')
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const encoded = new TextEncoder().encode(plaintext)
   const ciphertext = await crypto.subtle.encrypt(
@@ -136,6 +164,7 @@ async function encryptMessageText(plaintext, key) {
   )
   return {
     encrypted: true,
+    keyVersion: 2,
     iv: btoa(String.fromCharCode(...iv)),
     ciphertext: btoa(String.fromCharCode(...new Uint8Array(ciphertext)))
   }
@@ -171,26 +200,6 @@ function replyEncryptionPayload(encryptedReply) {
   }
 }
 
-async function decryptReplyReference(payload, fallback = null) {
-  const hasEncryptedReply =
-    typeof payload?.reply_ephemeral_pub_key === 'string' && payload.reply_ephemeral_pub_key &&
-    typeof payload?.reply_iv === 'string' && payload.reply_iv &&
-    typeof payload?.reply_ciphertext === 'string' && payload.reply_ciphertext
-  if (!hasEncryptedReply) return fallback
-
-  try {
-    const plaintext = await decryptMessage({
-      ephemeralPubKey: payload.reply_ephemeral_pub_key,
-      iv: payload.reply_iv,
-      ciphertext: payload.reply_ciphertext,
-    })
-    return parseReplyReference(plaintext) || fallback
-  } catch (error) {
-    console.warn('[chat] decrypt reply reference failed', error)
-    return fallback
-  }
-}
-
 /**
  * Encrypted file binary (for IndexedDB persistence).
  * Both iv and ciphertext are stored in the form of ArrayBuffer/TypedArray (structured cloning to avoid base64 expansion).
@@ -198,7 +207,7 @@ async function decryptReplyReference(payload, fallback = null) {
 async function encryptFileBytes(arrayBuffer, key) {
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, arrayBuffer)
-  return { iv, ciphertext }
+  return { iv, ciphertext, keyVersion: 2 }
 }
 
 /**
@@ -219,7 +228,7 @@ async function encryptLocalFileChunk(arrayBuffer, key, msgId, index) {
     iv,
     additionalData: localFileChunkAAD(msgId, index),
   }, key, arrayBuffer)
-  return { iv, ciphertext }
+  return { iv, ciphertext, keyVersion: 2 }
 }
 
 async function decryptLocalFileChunk(record, key, msgId, index) {
@@ -232,9 +241,9 @@ async function decryptLocalFileChunk(record, key, msgId, index) {
 
 // ── IndexedDB Auxiliary ───────────────────────────────────────────
 
-function openMessagesDB() {
+function openMessagesDB(databaseName = activeDatabaseName) {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION)
+    const req = indexedDB.open(databaseName, DB_VERSION)
     req.onupgradeneeded = (e) => {
       const db = e.target.result
       // Check if object store already exists
@@ -305,11 +314,22 @@ async function dbAddMessage(msg) {
   const db = await openMessagesDB()
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite')
-    tx.objectStore(STORE_NAME).add(msg)
+    const store = tx.objectStore(STORE_NAME)
+    const request = store.get(msg.id)
+    let conflict = null
+    request.onsuccess = () => {
+      const existing = request.result
+      if (!existing) {
+        store.add(msg)
+      } else if (existing.chatId !== msg.chatId || existing.from !== msg.from || !!existing.mine !== !!msg.mine) {
+        conflict = new Error('Message ID belongs to a different sender or conversation')
+        tx.abort()
+      }
+    }
     // ACK the server only after the IndexedDB transaction has actually committed.
     tx.oncomplete = () => resolve()
     tx.onerror = (e) => reject(e.target.error)
-    tx.onabort = (e) => reject(e.target.error || new Error('message persistence aborted'))
+    tx.onabort = (e) => reject(conflict || e.target.error || new Error('message persistence aborted'))
   })
 }
 
@@ -320,6 +340,15 @@ async function dbHasMessage(msgId) {
     const req = tx.objectStore(STORE_NAME).getKey(msgId)
     req.onsuccess = () => resolve(req.result !== undefined)
     req.onerror = (e) => reject(e.target.error)
+  })
+}
+
+async function dbGetMessage(msgId) {
+  const db = await openMessagesDB()
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(msgId)
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
   })
 }
 
@@ -636,6 +665,7 @@ async function dbMarkFileAttachmentReceived(msgId) {
       if (record?.mine && record.type === 'file') {
         isFile = true
         record.attachmentStatus = 'received'
+        record.authenticatedRead = true
         store.put(record)
       }
     }
@@ -646,7 +676,7 @@ async function dbMarkFileAttachmentReceived(msgId) {
 
 export function clearAllMessagesDB() {
   return new Promise((resolve) => {
-    const req = indexedDB.deleteDatabase(DB_NAME)
+    const req = indexedDB.deleteDatabase(activeDatabaseName)
     req.onsuccess = () => resolve()
     req.onerror = () => resolve()
     req.onblocked = () => resolve()
@@ -657,23 +687,12 @@ export function clearAllMessagesDB() {
 
 async function dbAddPending(payload) {
   const db = await openMessagesDB()
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(PENDING_STORE_NAME, 'readwrite')
-    // put instead of add: overwrite when the same msg_id arrives repeatedly to avoid ConstraintError
-    tx.objectStore(PENDING_STORE_NAME).put(payload)
-    tx.oncomplete = () => resolve()
-    tx.onerror = (e) => reject(e.target.error)
-  })
+  return accessPendingStore(db, PENDING_STORE_NAME, payload)
 }
 
 async function dbGetAllPending() {
   const db = await openMessagesDB()
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(PENDING_STORE_NAME, 'readonly')
-    const req = tx.objectStore(PENDING_STORE_NAME).getAll()
-    req.onsuccess = (e) => resolve(e.target.result || [])
-    req.onerror = (e) => reject(e.target.error)
-  })
+  return accessPendingStore(db, PENDING_STORE_NAME)
 }
 
 async function dbGetPending(msgId) {
@@ -749,11 +768,14 @@ export const useChatStore = defineStore('chat', () => {
   // Message storage is asynchronous; the other party may have opened a session and sent back a read notification within a very short window.
   // This type of early receipt is temporarily stored and used immediately when the local message is stored in the database.
   const earlyReadReceipts = new Map()
+  const pendingControls = new Map()
+  let retryPendingControls = async () => {}
   const EARLY_READ_RECEIPT_MAX = 500
   // Large offline attachments are decrypted one at a time. WebSocket listener
   // callbacks are otherwise concurrent and could allocate several 100MB files.
   const offlineAttachmentReceives = new Map()
   let offlineAttachmentReceiveQueue = Promise.resolve()
+  const pendingOfflineDownloadEntries = new Map()
   const offlineUploadOperations = new Map()
   const offlineDownloadOperations = new Map()
   const canceledOfflineDownloadMessages = new Set()
@@ -765,15 +787,165 @@ export const useChatStore = defineStore('chat', () => {
   // Otherwise, during cold start, multiple offline messages enter addMessage concurrently and will each take the "no key → generate new key" branch.
   // A fork occurs, the last one is dropped, and decryption fails when reloading messages previously encrypted with other keys ([Decryption Failed]).
   let messageKeyPromise = null
+  let localKeyGeneration = 0
+  let securityCleanup = Promise.resolve()
 
   async function ensureMessageKey() {
+    if (useIdentityStore().isLocked) throw new Error('Local data is locked')
     if (messageEncryptKey) return messageEncryptKey
     if (!messageKeyPromise) {
+      const generation = localKeyGeneration
       messageKeyPromise = getOrCreateMessageEncryptKey()
-        .then((k) => { messageEncryptKey = k; return k })
-        .catch((e) => { messageKeyPromise = null; throw e })  //Retry if failed
+        .then((k) => {
+          if (generation !== localKeyGeneration || useIdentityStore().isLocked) throw new Error('Local data was locked during key loading')
+          messageEncryptKey = k
+          return k
+        })
+        .catch((e) => { if (generation === localKeyGeneration) messageKeyPromise = null; throw e })
     }
     return messageKeyPromise
+  }
+
+  function lockLocalData() {
+    localKeyGeneration++
+    const cleanup = stopSensitiveTransfers({
+      uploads: offlineUploadOperations,
+      downloads: offlineDownloadOperations,
+      queued: pendingOfflineDownloadEntries,
+      transfers: fileTransfers.value,
+      persistPending: dbAddPending,
+      markUploadPending: (msgId, status) => dbUpdateMessageDelivery(msgId, status),
+    })
+    securityCleanup = Promise.allSettled([securityCleanup, cleanup])
+    fileTransfers.value = {}
+    messageEncryptKey = null
+    messageKeyPromise = null
+    for (const thread of Object.values(messages.value)) {
+      for (const message of thread) {
+        releaseFileObjectUrl(message)
+        eraseAttachmentSecrets(message.offlineAttachment)
+      }
+    }
+    messages.value = {}
+    historyWindowSizes.value = {}
+  }
+
+  function waitForSecurityCleanup() {
+    return securityCleanup
+  }
+
+  function authenticationContext(from, to, msgId, kind, burnAfterRead = false) {
+    return ['yunmi.message.v2', from, to, msgId, kind, Boolean(burnAfterRead)]
+  }
+
+  async function sealOutgoingContent(content, to, msgId, kind = 'message', burnAfterRead = false) {
+    const identity = useIdentityStore()
+    const generation = localKeyGeneration
+    let group
+    let snapshot
+    if (kind === 'group') {
+      const { useGroupStore } = await import('src/stores/group')
+      group = useGroupStore()
+      await group.assertRosterAvailable(to)
+      snapshot = group.membershipStatus[to].snapshot
+      kind = `group:${group.membershipStatus[to].number}`
+    }
+    const record = await loadKeyPair()
+    if (!record?.privateKey || identity.isLocked) throw new Error('Private key is locked')
+    const result = await sealSignedContent(content, authenticationContext(identity.chatId, to, msgId, kind, burnAfterRead), record.privateKey)
+    assertTransferActive(null, generation, localKeyGeneration, identity.isLocked)
+    if (group && (!group.isRosterAvailable(to) || group.membershipStatus[to].snapshot !== snapshot)) throw new Error('Group roster changed')
+    return result
+  }
+
+  async function openIncomingContent(content, payload, kind = 'message') {
+    const identity = useIdentityStore()
+    const generation = localKeyGeneration
+    let group
+    let snapshot
+    let publicKey = identity.getFriendPubKey(payload.from)
+    if (kind === 'group') {
+      const { useGroupStore } = await import('src/stores/group')
+      group = useGroupStore()
+      await group.assertRosterAvailable(payload.group_id)
+      snapshot = group.membershipStatus[payload.group_id].snapshot
+      publicKey = group.getCurrentMemberPubKeys(payload.group_id).find(member => member.chat_id === payload.from)?.public_key
+      kind = `group:${group.membershipStatus[payload.group_id].number}`
+    } else if (!publicKey) {
+      await identity.loadFriendPubKeys()
+      publicKey = identity.getFriendPubKey(payload.from)
+    }
+    if (!publicKey) throw new Error('Sender identity is unavailable')
+    publicKey = group ? publicKey : await identity.cacheFriendPubKey(payload.from, publicKey)
+    const context = authenticationContext(payload.from, payload.group_id || identity.chatId, payload.msg_id, kind, payload.burn_after_read)
+    let result
+    if (group) {
+      try {
+        result = await openSignedGroupContent(content, context, publicKey)
+      } catch (error) {
+        const priorKey = await getPinnedPeerPublicKey(identity.chatId, payload.from)
+        if (!priorKey || priorKey === publicKey) throw error
+        result = await openSignedGroupContent(content, context, priorKey)
+      }
+    } else {
+      result = await openSignedContent(content, context, publicKey)
+    }
+    assertTransferActive(null, generation, localKeyGeneration, identity.isLocked)
+    if (group && (!group.isRosterAvailable(payload.group_id) || group.membershipStatus[payload.group_id].snapshot !== snapshot)) throw new Error('Group roster changed')
+    return result
+  }
+
+  async function outgoingControl(to, msgId, kind, at = getServerNow()) {
+    const identity = useIdentityStore()
+    const generation = localKeyGeneration
+    const from = identity.chatId
+    const record = await loadKeyPair()
+    assertTransferActive(null, generation, localKeyGeneration, identity.isLocked)
+    if (!record?.privateKey) throw new Error('Private key is unavailable')
+    const proof = await signControlProof({ from, to, msgId, kind, at }, record.privateKey)
+    assertTransferActive(null, generation, localKeyGeneration, identity.isLocked)
+    if (from !== identity.chatId) throw new Error('Account changed')
+    return proof
+  }
+
+  async function incomingControl(from, to, msgId, kind, proof) {
+    const identity = useIdentityStore()
+    const generation = localKeyGeneration
+    if (identity.isLocked) throw new Error('Local data is locked')
+    let publicKey
+    if (kind === 'group-recall') {
+      const { useGroupStore } = await import('src/stores/group')
+      const group = useGroupStore()
+      await group.assertRosterAvailable(to)
+      publicKey = group.getCurrentMemberPubKeys(to).find(member => member.chat_id === from)?.public_key
+    } else {
+      publicKey = identity.getFriendPubKey(from)
+      if (!publicKey) {
+        await identity.loadFriendPubKeys()
+        publicKey = identity.getFriendPubKey(from)
+      }
+    }
+    if (!publicKey) throw new Error('Sender identity unavailable')
+    publicKey = kind === 'group-recall' ? publicKey : await identity.cacheFriendPubKey(from, publicKey)
+    const context = { from, to, msgId, kind, proof }
+    let at
+    try {
+      at = await verifyControlProof(context, publicKey)
+    } catch (error) {
+      if (kind !== 'read') throw error
+      const priorKey = await getPinnedPeerPublicKey(identity.chatId, from)
+      if (priorKey && priorKey !== publicKey) {
+        try { at = await verifyControlProof(context, priorKey) } catch { at = undefined }
+      }
+      if (at === undefined) {
+        await identity.loadFriendPubKeys()
+        const refreshedKey = identity.getFriendPubKey(from)
+        if (!refreshedKey || refreshedKey === publicKey) throw error
+        at = await verifyControlProof(context, refreshedKey)
+      }
+    }
+    assertTransferActive(null, generation, localKeyGeneration, identity.isLocked)
+    return at
   }
 
   function ensureThread(chatId) {
@@ -796,7 +968,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function maybeAutoCleanReceivedAttachment(msg) {
-    if (!msg?.mine || !loadAttachmentAutoClean(useIdentityStore().chatId)) return false
+    if (!msg?.mine || msg.authenticatedRead !== true || !loadAttachmentAutoClean(useIdentityStore().chatId)) return false
     await deleteFileArtifacts(msg, msg.id)
     return true
   }
@@ -895,8 +1067,9 @@ export const useChatStore = defineStore('chat', () => {
   function applyEarlyReadReceipt(msg) {
     if (!msg.mine) return null
     const receipt = earlyReadReceipts.get(msg.id)
-    if (!receipt) return null
+    if (!receipt || receipt.from !== msg.chatId) return null
     msg.read = true
+    msg.authenticatedRead = true
     msg.status = 'sent'
     if (msg.type === 'file') msg.attachmentStatus = 'received'
     if (msg.burnAfterRead && !msg.readReceivedAt) {
@@ -926,6 +1099,8 @@ export const useChatStore = defineStore('chat', () => {
    * Add messages to memory and encrypt persistence to IndexedDB
    */
   async function addMessage(chatId, msg, rollbackOnPersistenceFailure = false) {
+    msg.chatId = chatId
+    if (useIdentityStore().isLocked) throw new Error('Local data is locked')
     // Security Check: Preventing Replay Attacks
     if (isMsgIdExists(msg.id)) {
       console.warn('[chat] duplicate message id, ignoring:', msg.id)
@@ -980,6 +1155,7 @@ export const useChatStore = defineStore('chat', () => {
    * Only works on messages that have entered the rendering window to avoid reading all files into memory at once.
    */
   async function rehydrateFileBlobs(msgs) {
+    const generation = localKeyGeneration
     await Promise.all(msgs.map(async (m) => {
       if (m.type !== 'file') return
       try {
@@ -988,6 +1164,7 @@ export const useChatStore = defineStore('chat', () => {
         if (!rec || m.objectUrl) return  //No persistent copy (old data/not saved successfully) → keep null and display "Expired"
         if (rec.chunked && rec.filesize > AUTO_PREVIEW_FILE_BYTES) return
         const blob = await loadStoredFileBlob(m.id, m.filetype || rec.filetype)
+        assertTransferActive(null, generation, localKeyGeneration, useIdentityStore().isLocked)
         if (blob) m.objectUrl = URL.createObjectURL(blob)
       } catch (e) {
         console.warn('[chat] rehydrate file blob failed:', m.id, e)
@@ -999,6 +1176,7 @@ export const useChatStore = defineStore('chat', () => {
    * Load the message with the specified chatId from IndexedDB and decrypt it
    */
   async function loadMessages(chatId) {
+    const generation = localKeyGeneration
     try {
       // Initialize encryption keys
       await ensureMessageKey()
@@ -1038,6 +1216,10 @@ export const useChatStore = defineStore('chat', () => {
       }
 
       decryptedMsgs.sort((a, b) => a.ts - b.ts)
+      if (generation !== localKeyGeneration || useIdentityStore().isLocked) {
+        decryptedMsgs.forEach(releaseFileObjectUrl)
+        return
+      }
       messages.value[chatId] = decryptedMsgs
     } catch (e) {
       console.error('[chat] load messages failed:', e)
@@ -1051,6 +1233,7 @@ export const useChatStore = defineStore('chat', () => {
    * Load all messages from IndexedDB and decrypt (called when app starts)
    */
   async function loadAllMessages() {
+    const generation = localKeyGeneration
     try {
       // Initialize encryption keys
       await ensureMessageKey()
@@ -1112,6 +1295,7 @@ export const useChatStore = defineStore('chat', () => {
       for (const cid in grouped) {
         grouped[cid].sort((a, b) => a.ts - b.ts)
       }
+      if (generation !== localKeyGeneration || useIdentityStore().isLocked) return
       messages.value = grouped
       for (const thread of Object.values(grouped)) {
         for (const msg of thread) {
@@ -1236,10 +1420,11 @@ export const useChatStore = defineStore('chat', () => {
    * @param {object|null} reply - encrypted reference to the replied-to message
    */
   async function sendMessage(toChatId, recipientPubKey, text, burnAfterRead = false, reply = null) {
+    recipientPubKey = await useIdentityStore().cacheFriendPubKey(toChatId, recipientPubKey)
     const msgId = genMsgId()
     const normalizedReply = normalizeReplyReference(reply)
     const [encrypted, encryptedReply] = await Promise.all([
-      encryptMessage(text, recipientPubKey),
+      sealOutgoingContent(serializeChatMessageContent(text, normalizedReply), toChatId, msgId, 'message', burnAfterRead).then(content => encryptMessage(content, recipientPubKey)),
       encryptReplyReference(normalizedReply, recipientPubKey),
     ])
 
@@ -1282,6 +1467,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function retryMessage(toChatId, recipientPubKey, msgId) {
+    recipientPubKey = await useIdentityStore().cacheFriendPubKey(toChatId, recipientPubKey)
     const msg = messages.value[toChatId]?.find(item => item.id === msgId)
     if (!msg?.mine || msg.type === 'file' || typeof msg.text !== 'string') return false
 
@@ -1290,7 +1476,7 @@ export const useChatStore = defineStore('chat', () => {
       retryPendingMessage(msgId)
     } else {
       const [encrypted, encryptedReply] = await Promise.all([
-        encryptMessage(msg.text, recipientPubKey),
+        sealOutgoingContent(serializeChatMessageContent(msg.text, msg.reply), toChatId, msgId, 'message', msg.burnAfterRead).then(content => encryptMessage(content, recipientPubKey)),
         encryptReplyReference(msg.reply, recipientPubKey),
       ])
       send('message', {
@@ -1325,10 +1511,12 @@ export const useChatStore = defineStore('chat', () => {
    * The failure does not affect message sending and receiving, but only degrades to "expire after refresh".
    */
   async function persistFileBlob(chatId, msgId, arrayBuffer, filetype) {
+    const generation = localKeyGeneration
     try {
       await ensureMessageKey()
       const { iv, ciphertext } = await encryptFileBytes(arrayBuffer, messageEncryptKey)
-      await dbPutFile({ id: msgId, chatId, iv, ciphertext, filetype })
+      assertTransferActive(null, generation, localKeyGeneration, useIdentityStore().isLocked)
+      await dbPutFile({ id: msgId, chatId, iv, ciphertext, filetype, keyVersion: 2 })
       return true
     } catch (e) {
       console.error('[chat] persist file blob failed:', msgId, e)
@@ -1342,8 +1530,10 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function persistPlainFileChunk(chatId, msgId, index, plaintext) {
+    const generation = localKeyGeneration
     const { iv, ciphertext } = await encryptLocalFileChunk(plaintext, messageEncryptKey, msgId, index)
-    await dbPutFileChunk(chatId, msgId, index, { iv, ciphertext })
+    assertTransferActive(null, generation, localKeyGeneration, useIdentityStore().isLocked)
+    await dbPutFileChunk(chatId, msgId, index, { iv, ciphertext, keyVersion: 2 })
   }
 
   async function finalizeChunkedFile(chatId, msgId, filetype, filesize, chunkSize, chunkCount) {
@@ -1359,6 +1549,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function persistFileSource(chatId, msgId, source, filetype, chunkSize = LOCAL_FILE_CHUNK_SIZE) {
+    const generation = localKeyGeneration
     try {
       await ensureMessageKey()
       await prepareChunkedFile(msgId)
@@ -1367,9 +1558,11 @@ export const useChatStore = defineStore('chat', () => {
         const start = index * chunkSize
         const end = Math.min(source.size, start + chunkSize)
         const plaintext = await source.slice(start, end).arrayBuffer()
+        assertTransferActive(null, generation, localKeyGeneration, useIdentityStore().isLocked)
         if (plaintext.byteLength !== end - start) throw new Error('Local attachment source changed')
         await persistPlainFileChunk(chatId, msgId, index, plaintext)
       }
+      assertTransferActive(null, generation, localKeyGeneration, useIdentityStore().isLocked)
       await finalizeChunkedFile(chatId, msgId, filetype, source.size, chunkSize, chunkCount)
       return true
     } catch (e) {
@@ -1438,9 +1631,11 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function ensureFileObjectUrl(msg) {
+    const generation = localKeyGeneration
     if (!msg || msg.type !== 'file') return null
     if (msg.objectUrl) return msg.objectUrl
     const blob = await loadStoredFileBlob(msg.id, msg.filetype)
+    assertTransferActive(null, generation, localKeyGeneration, useIdentityStore().isLocked)
     if (!blob) return null
     msg.objectUrl = URL.createObjectURL(blob)
     return msg.objectUrl
@@ -1643,7 +1838,11 @@ export const useChatStore = defineStore('chat', () => {
   /**
    * Add file messages to memory and IndexedDB (metadata only)
    */
-  async function addFileMessage(chatId, msg) {
+  async function addFileMessage(chatId, msg, rollbackOnPersistenceFailure = false) {
+    if (useIdentityStore().isLocked) {
+      if (msg.objectUrl) URL.revokeObjectURL(msg.objectUrl)
+      throw new Error('Local data is locked')
+    }
     if (isMsgIdExists(msg.id)) {
       // Duplicate message: Release the objectUrl passed in by the caller to avoid leaks
       if (msg.objectUrl) URL.revokeObjectURL(msg.objectUrl)
@@ -1651,6 +1850,7 @@ export const useChatStore = defineStore('chat', () => {
     }
     const fullMsg = {
       ...msg,
+      chatId,
       type: 'file',
       read: msg.read || false,
       burnAt: msg.burnAt || null,
@@ -1689,6 +1889,7 @@ export const useChatStore = defineStore('chat', () => {
         burnAt: fullMsg.burnAt || null,
         status: fullMsg.status || (fullMsg.mine ? 'sent' : undefined),
         attachmentStatus: fullMsg.attachmentStatus || (fullMsg.mine ? 'waiting' : 'received'),
+        authenticatedRead: fullMsg.authenticatedRead === true,
         failureCode: fullMsg.failureCode || null,
       })
       if (earlyReceipt) {
@@ -1698,7 +1899,13 @@ export const useChatStore = defineStore('chat', () => {
     } catch (e) {
       // DB write failure: retain messages in memory (still visible to users), clean up orphan file bodies (messages are lost after refresh)
       await dbDeleteFile(msg.id).catch(() => {})
-      console.error('[chat] persist file message failed, kept in memory:', e)
+      console.error('[chat] persist file message failed:', e)
+      if (rollbackOnPersistenceFailure) {
+        const index = messages.value[chatId]?.findIndex(item => item.id === msg.id) ?? -1
+        if (index >= 0) messages.value[chatId].splice(index, 1)
+        releaseFileObjectUrl(fullMsg)
+        if (earlyReceipt) rememberEarlyReadReceipt(earlyReceipt)
+      }
       return false
     }
     return true
@@ -1787,6 +1994,7 @@ export const useChatStore = defineStore('chat', () => {
    * Assemble and decrypt received file data blocks
    */
   async function assembleAndDecrypt(transfer) {
+    const generation = localKeyGeneration
     if (transfer.status === 'processing' || transfer.status === 'done' || transfer.status === 'error') return
     if (transfer.receivedCount < transfer.totalChunks) return
     if (transfer.chunks.some(c => !c)) return
@@ -1810,6 +2018,7 @@ export const useChatStore = defineStore('chat', () => {
         iv: transfer.iv,
         ciphertext: combined.buffer
       })
+      assertTransferActive(null, generation, localKeyGeneration, useIdentityStore().isLocked)
       if (plainBuf.byteLength !== transfer.filesize) {
         throw new Error('The decrypted file size does not match the size reported by the sender')
       }
@@ -1820,6 +2029,7 @@ export const useChatStore = defineStore('chat', () => {
 
       // Persistent encrypted file body can still be downloaded/previewed after refreshing
       await persistFileBlob(transfer.fromChatId, transfer.msgId, plainBuf, transfer.filetype)
+      assertTransferActive(null, generation, localKeyGeneration, useIdentityStore().isLocked)
 
       const added = await addFileMessage(transfer.fromChatId, {
         id: transfer.msgId,
@@ -1876,16 +2086,19 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function performOfflineAttachmentReceive(payload, metadata) {
+    const generation = localKeyGeneration
+    if (useIdentityStore().isLocked) return false
     if (canceledOfflineDownloadMessages.has(payload.msg_id)) return false
     const transferId = metadata.attachmentId
     const transfer = createOfflineReceiveTransfer(payload, metadata)
     fileTransfers.value[transferId] = transfer
-    const operation = { controller: null, paused: false, pauseRequested: false, canceled: false, resume: null }
+    const operation = { controller: null, paused: false, pauseRequested: false, canceled: false, resume: null, metadata }
     offlineDownloadOperations.set(transferId, operation)
     let objectUrl = null
     try {
       await assertLocalAttachmentSpace(metadata.fileSize)
       await ensureMessageKey()
+      assertTransferActive(operation, generation, localKeyGeneration, useIdentityStore().isLocked)
       // Keep already authenticated local chunks so a process restart resumes
       // without downloading or decrypting them again. The manifest is written
       // only after every chunk is present.
@@ -1895,6 +2108,7 @@ export const useChatStore = defineStore('chat', () => {
       while (true) {
         if (operation.canceled) throw new Error('Attachment download canceled')
         await waitForOfflineUploadResume(operation)
+        assertTransferActive(operation, generation, localKeyGeneration, useIdentityStore().isLocked)
         if (operation.canceled) throw new Error('Attachment download canceled')
         transfer.status = 'transferring'
         operation.controller = new AbortController()
@@ -1902,9 +2116,13 @@ export const useChatStore = defineStore('chat', () => {
           blob = await downloadOfflineAttachment(metadata, {
             api: attachmentApi,
             signal: operation.controller.signal,
-            getStoredCiphertextChunk: index => dbGetAttachmentCipherChunk(payload.msg_id, index),
+            getStoredCiphertextChunk: index => {
+              assertTransferActive(operation, generation, localKeyGeneration, useIdentityStore().isLocked)
+              return dbGetAttachmentCipherChunk(payload.msg_id, index)
+            },
             getStoredPlaintextChunk: async index => {
               const chunk = await dbGetFileChunk(payload.msg_id, index)
+              assertTransferActive(operation, generation, localKeyGeneration, useIdentityStore().isLocked)
               return chunk ? decryptLocalFileChunk(chunk, messageEncryptKey, payload.msg_id, index) : null
             },
             onCiphertextChunk: (index, ciphertext) => dbPutAttachmentCipherChunk(
@@ -1915,12 +2133,14 @@ export const useChatStore = defineStore('chat', () => {
               ciphertext,
             ),
             onPlaintextChunk: async (index, plaintext) => {
+              assertTransferActive(operation, generation, localKeyGeneration, useIdentityStore().isLocked)
               await persistPlainFileChunk(payload.from, payload.msg_id, index, plaintext)
               await dbDeleteAttachmentCipherChunk(payload.msg_id, index)
             },
             collectPlaintext,
             onProgress: progress => { transfer.progress = progress },
           })
+          assertTransferActive(operation, generation, localKeyGeneration, useIdentityStore().isLocked)
           break
         } catch (error) {
           if (operation.canceled) throw error
@@ -1974,6 +2194,12 @@ export const useChatStore = defineStore('chat', () => {
       return true
     } catch (error) {
       if (objectUrl) URL.revokeObjectURL(objectUrl)
+      if (operation.securityLocked || generation !== localKeyGeneration) {
+        const pending = pendingCiphertext(payload)
+        if (operation.pauseReason === 'user') pending.attachment_paused = true
+        await dbAddPending(pending)
+        return false
+      }
       if (operation.canceled || canceledOfflineDownloadMessages.has(payload.msg_id)) {
         await dbDeleteFile(payload.msg_id).catch(() => {})
         await dbDeleteFileChunksByMessage(payload.msg_id).catch(() => {})
@@ -2025,20 +2251,32 @@ export const useChatStore = defineStore('chat', () => {
       })
       throw error
     } finally {
-      offlineDownloadOperations.delete(transferId)
+      if (offlineDownloadOperations.get(transferId) === operation) offlineDownloadOperations.delete(transferId)
+      if (operation.securityLocked) eraseAttachmentSecrets(metadata)
     }
   }
 
   function receiveOfflineAttachmentMessage(payload, metadata) {
     const existing = offlineAttachmentReceives.get(payload.msg_id)
     if (existing) return existing
-    const task = offlineAttachmentReceiveQueue.then(() => performOfflineAttachmentReceive(payload, metadata))
+    const generation = localKeyGeneration
+    const entry = { payload: pendingCiphertext(payload), metadata, task: null }
+    pendingOfflineDownloadEntries.set(payload.msg_id, entry)
+    const task = offlineAttachmentReceiveQueue.then(async () => {
+      await dbAddPending(entry.payload)
+      if (!entry.metadata || generation !== localKeyGeneration || useIdentityStore().isLocked) return false
+      const completed = await performOfflineAttachmentReceive(entry.payload, entry.metadata)
+      if (completed) await dbDeletePending(payload.msg_id)
+      return completed
+    })
+    entry.task = task
     offlineAttachmentReceiveQueue = task.catch(() => {})
     offlineAttachmentReceives.set(payload.msg_id, task)
     task.finally(() => {
       if (offlineAttachmentReceives.get(payload.msg_id) === task) {
         offlineAttachmentReceives.delete(payload.msg_id)
       }
+      if (pendingOfflineDownloadEntries.get(payload.msg_id) === entry) pendingOfflineDownloadEntries.delete(payload.msg_id)
     }).catch(() => {})
     return task
   }
@@ -2142,6 +2380,9 @@ export const useChatStore = defineStore('chat', () => {
    * @param {{kind?: 'voice', durationMs?: number, batchId?: string, batchIndex?: number, batchTotal?: number}} options - encrypted attachment metadata and local batch tracking
    */
   async function sendRealtimeFile(toChatId, recipientPubKey, file, burnAfterRead = false, options = {}) {
+    const generation = localKeyGeneration
+    const checkActive = () => assertTransferActive(null, generation, localKeyGeneration, useIdentityStore().isLocked)
+    checkActive()
     validateFile(file)
     if (file.size > REALTIME_MAX_FILE_SIZE) throw new Error('Realtime file transfer is limited to 100 MB')
     await assertLocalAttachmentSpace(file.size)
@@ -2179,18 +2420,27 @@ export const useChatStore = defineStore('chat', () => {
     try {
       // Read and encrypt files
       const fileBuffer = await file.arrayBuffer()
+      checkActive()
       const { ephemeralPubKey, iv, ciphertext } = await encryptFile(fileBuffer, recipientPubKey)
+      checkActive()
       const sealedMetadata = await sealFileMetadata({
         filename: file.name,
         filetype: file.type,
         kind,
         durationMs
-      }, recipientPubKey)
+      }, recipientPubKey, async (content, publicKey) => {
+        const binding = [transferId, ephemeralPubKey, iv, file.size, expectedFileChunks(file.size)]
+        const signed = await sealOutgoingContent(JSON.stringify({ metadata: content, binding }), toChatId, msgId, 'file', burnAfterRead)
+        return encryptMessage(signed, publicKey)
+      })
 
       // First create a local record of the sender to be confirmed and save the file body. In this way, the file_done on the receiving end is even on the sending side.
       // After a momentary disconnection, the file can be reposted offline and the file can be restored to successfully sent based on msg_id by restarting the application.
+      checkActive()
       const localObjectUrl = URL.createObjectURL(new Blob([fileBuffer], { type: file.type }))
+      fileTransfers.value[transferId].objectUrl = localObjectUrl
       await persistFileBlob(toChatId, msgId, fileBuffer, file.type)
+      checkActive()
       await addFileMessage(toChatId, {
         id: msgId,
         from: 'me',
@@ -2207,6 +2457,7 @@ export const useChatStore = defineStore('chat', () => {
       })
 
       // Chunking
+      checkActive()
       const cipherArr = new Uint8Array(ciphertext)
       const chunks = []
       for (let i = 0; i < cipherArr.length; i += CHUNK_SIZE) {
@@ -2231,6 +2482,7 @@ export const useChatStore = defineStore('chat', () => {
 
       // Wait for the other party to accept
       await waitForFileAccept(transferId, 30000)
+      checkActive()
       fileTransfers.value[transferId].status = 'transferring'
 
       // Must listen for completion receipt before sending the first block. When the receiving end receives the last block, it will immediately decrypt it and send it.
@@ -2240,6 +2492,7 @@ export const useChatStore = defineStore('chat', () => {
 
       // Send chunk by chunk
       for (let i = 0; i < chunks.length; i++) {
+        checkActive()
         if (fileTransfers.value[transferId]?.status === 'error') throw new Error('Transfer interrupted')
         const sent = send('file_chunk', {
           to: toChatId,
@@ -2265,6 +2518,7 @@ export const useChatStore = defineStore('chat', () => {
       // Wait for the receiving end to confirm that it has been received and decrypted successfully; if it times out or receives a file_error, it will be treated as a failure.
       // The returned ts comes from the receiving end, and both ends display the same
       const doneResult = await doneResultPromise
+      checkActive()
       if (!doneResult.ok) throw doneResult.error
       const doneTs = doneResult.ts
       fileTransfers.value[transferId].progress = 100
@@ -2297,6 +2551,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function createOfflineTransfer(toChatId, msg, metadata, options = {}) {
     return {
+      metadata,
       id: metadata.attachmentId,
       msgId: msg.id,
       direction: 'send',
@@ -2322,18 +2577,21 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function runOfflineUpload(toChatId, recipientPubKey, file, msg, metadata, options = {}) {
+    const generation = localKeyGeneration
+    recipientPubKey = await useIdentityStore().cacheFriendPubKey(toChatId, recipientPubKey)
     const transferId = metadata.attachmentId
     const existingOperation = offlineUploadOperations.get(transferId)
     if (existingOperation) return existingOperation.promise
 
     const transfer = fileTransfers.value[transferId] || createOfflineTransfer(toChatId, msg, metadata, options)
     fileTransfers.value[transferId] = transfer
-    const operation = { controller: null, paused: false, pauseRequested: false, canceled: false, resume: null, promise: null }
+    const operation = { controller: null, paused: false, pauseRequested: false, canceled: false, resume: null, promise: null, metadata }
     operation.promise = (async () => {
       try {
         while (true) {
           if (operation.canceled) throw new Error('Attachment upload canceled')
           await waitForOfflineUploadResume(operation)
+          assertTransferActive(operation, generation, localKeyGeneration, useIdentityStore().isLocked)
           if (operation.canceled) throw new Error('Attachment upload canceled')
           transfer.status = 'transferring'
           await setMessageAttachmentStatus(msg, 'uploading')
@@ -2346,6 +2604,7 @@ export const useChatStore = defineStore('chat', () => {
               signal: operation.controller.signal,
               onProgress: progress => { transfer.progress = progress },
             })
+            assertTransferActive(operation, generation, localKeyGeneration, useIdentityStore().isLocked)
             break
           } catch (error) {
             if (!operation.pauseRequested) throw error
@@ -2358,7 +2617,9 @@ export const useChatStore = defineStore('chat', () => {
 
         transfer.progress = 95
         transfer.status = 'processing'
-        const encrypted = await encryptMessage(serializeOfflineAttachmentContent(metadata), recipientPubKey)
+        const signedContent = await sealOutgoingContent(serializeOfflineAttachmentContent(metadata), toChatId, msg.id, 'message', msg.burnAfterRead)
+        const encrypted = await encryptMessage(signedContent, recipientPubKey)
+        assertTransferActive(operation, generation, localKeyGeneration, useIdentityStore().isLocked)
         const sentNow = send('message', {
           to: toChatId,
           msg_id: msg.id,
@@ -2380,6 +2641,10 @@ export const useChatStore = defineStore('chat', () => {
         watchOutgoingAttachment(msg)
         return transferId
       } catch (error) {
+        if (operation.securityLocked || generation !== localKeyGeneration) {
+          await dbUpdateMessageDelivery(msg.id, operation.pauseReason === 'user' ? 'paused' : 'pending')
+          return null
+        }
         transfer.status = 'error'
         transfer.errorReason = error?.message || 'Attachment upload failed'
         const reason = classifyAttachmentError(error, 'local')
@@ -2399,7 +2664,8 @@ export const useChatStore = defineStore('chat', () => {
         scheduleTransferCleanup(transferId, 6000)
         throw error
       } finally {
-        offlineUploadOperations.delete(transferId)
+        if (offlineUploadOperations.get(transferId) === operation) offlineUploadOperations.delete(transferId)
+        if (operation.securityLocked) eraseAttachmentSecrets(metadata)
       }
     })()
     offlineUploadOperations.set(transferId, operation)
@@ -2412,6 +2678,9 @@ export const useChatStore = defineStore('chat', () => {
    * The recipient no longer needs to be online while this function runs.
    */
   async function sendOfflineFile(toChatId, recipientPubKey, file, burnAfterRead = false, options = {}) {
+    const generation = localKeyGeneration
+    const checkActive = () => assertTransferActive(null, generation, localKeyGeneration, useIdentityStore().isLocked)
+    checkActive()
     validateFile(file)
     await assertLocalAttachmentSpace(file.size)
     const msgId = genMsgId()
@@ -2422,6 +2691,13 @@ export const useChatStore = defineStore('chat', () => {
       kind,
       durationMs,
     })
+    try {
+      checkActive()
+    } catch (error) {
+      eraseAttachmentSecrets(metadata)
+      await attachmentApi.cancel(metadata.attachmentId).catch(() => {})
+      throw error
+    }
     const preparationMessage = {
       id: msgId,
       filename: file.name,
@@ -2434,8 +2710,10 @@ export const useChatStore = defineStore('chat', () => {
     preparationTransfer.status = 'processing'
     fileTransfers.value[metadata.attachmentId] = preparationTransfer
     const localObjectUrl = URL.createObjectURL(file)
+    preparationTransfer.objectUrl = localObjectUrl
     try {
       await persistFileSource(toChatId, msgId, file, file.type, metadata.chunkSize)
+      checkActive()
     } catch (error) {
       await attachmentApi.cancel(metadata.attachmentId).catch(() => {})
       delete fileTransfers.value[metadata.attachmentId]
@@ -2470,6 +2748,7 @@ export const useChatStore = defineStore('chat', () => {
       throw new Error('Unable to save the attachment message')
     }
     const msg = messages.value[toChatId]?.find(message => message.id === msgId)
+    checkActive()
     preparationTransfer.status = 'pending'
     preparationTransfer.progress = 0
     return runOfflineUpload(toChatId, recipientPubKey, file, msg, metadata, options)
@@ -2562,6 +2841,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function sendFile(toChatId, recipientPubKey, file, burnAfterRead = false, options = {}) {
+    recipientPubKey = await useIdentityStore().cacheFriendPubKey(toChatId, recipientPubKey)
     if (options.transport === 'realtime') {
       return sendRealtimeFile(toChatId, recipientPubKey, file, burnAfterRead, options)
     }
@@ -2586,6 +2866,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function cacheGroupAttachment(groupId, msgId, blob, filetype) {
+    if (useIdentityStore().isLocked) throw new Error('Local data is locked')
     const message = messages.value[groupId]?.find(item => item.id === msgId && item.type === 'file')
     if (!message || blob.size !== message.filesize) return false
     await assertLocalAttachmentSpace(blob.size)
@@ -2603,6 +2884,10 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function recallMessage(chatId, msgId, toChatId) {
+    const original = findLocalMessage(msgId) || await dbGetMessage(msgId)
+    if (!original || original.chatId !== chatId) throw new Error('Message does not belong to this chat')
+    if (toChatId && (!original.mine || toChatId !== chatId)) throw new Error('Cannot recall another sender message')
+    const proof = toChatId ? await outgoingControl(toChatId, msgId, 'recall') : null
     confirmPendingMessage(msgId)
     const pendingTimer = ackTimers.get(msgId)
     if (pendingTimer) {
@@ -2626,7 +2911,7 @@ export const useChatStore = defineStore('chat', () => {
     await deleteFileArtifacts(removed, msgId)
     // Notify the other party to withdraw
     if (toChatId) {
-      send('recall', { to: toChatId, msg_id: msgId })
+      send('recall', { to: toChatId, msg_id: msgId, proof })
     }
   }
 
@@ -2653,20 +2938,29 @@ function validateMsgId(msgId) {
 }
 
   async function sendGroupMessage(groupId, text, reply = null) {
+    const generation = localKeyGeneration
     // Encryption only needs recipient public keys; sender's private key is not required here.
     // Get member pub keys from group store via dynamic import to avoid circular dep
     const { useGroupStore } = await import('src/stores/group')
     const groupStore = useGroupStore()
+    await groupStore.assertRosterAvailable(groupId)
+    const snapshot = groupStore.membershipStatus[groupId].snapshot
+    const checkActive = () => {
+      assertTransferActive(null, generation, localKeyGeneration, useIdentityStore().isLocked)
+    if (!groupStore.isRosterAvailable(groupId) || groupStore.membershipStatus[groupId].snapshot !== snapshot) throw new Error('Group roster changed')
+    }
     const members = groupStore.getMemberPubKeys(groupId)
     if (members.length === 0) return false
     const msgId = genMsgId()
-    const plaintext = serializeChatMessageContent(text, reply)
+    const plaintext = await sealOutgoingContent(serializeChatMessageContent(text, reply), groupId, msgId, 'group')
     const envelope = await encryptGroupMessageContent(plaintext, members, msgId)
+    checkActive()
     const msg = {
       id: msgId, chatId: groupId, from: 'me', text, reply,
       ts: getServerNow(), mine: true, groupId, status: 'pending',
     }
     await addMessage(groupId, msg)
+    checkActive()
     const payload = {
       group_id: groupId, msg_id: msgId,
       iv: envelope.iv, ciphertext: envelope.ciphertext,
@@ -2691,7 +2985,8 @@ function validateMsgId(msgId) {
     if (!arr?.some(message => message.id === msgId && message.mine)) {
       throw new Error('cannot recall: not your message')
     }
-    const sentNow = send('group_recall', { group_id: groupId, msg_id: msgId })
+    const proof = await outgoingControl(groupId, msgId, 'group-recall')
+    const sentNow = send('group_recall', { group_id: groupId, msg_id: msgId, proof })
     if (!sentNow && !hasPendingRecall(msgId)) {
       throw new Error('Group recall outbox is full')
     }
@@ -2699,20 +2994,35 @@ function validateMsgId(msgId) {
   }
 
   async function sendGroupFile(groupId, file) {
+    const generation = localKeyGeneration
     validateFile(file)
     await assertLocalAttachmentSpace(file.size)
     const { useGroupStore } = await import('src/stores/group')
     const groupStore = useGroupStore()
+    await groupStore.assertRosterAvailable(groupId)
+    const snapshot = groupStore.membershipStatus[groupId].snapshot
+    const checkActive = () => {
+      assertTransferActive(null, generation, localKeyGeneration, useIdentityStore().isLocked)
+      if (!groupStore.isRosterAvailable(groupId) || groupStore.membershipStatus[groupId].snapshot !== snapshot) throw new Error('Group roster changed')
+    }
     const members = groupStore.getMemberPubKeys(groupId)
     if (members.length === 0) return false
     const msgId = genMsgId()
     // Create group attachment upload slot
     const metadata = await createGroupAttachmentUpload(file, groupId, { api: { ...attachmentApi, ...groupApi } })
+    const operation = { controller: new AbortController(), metadata }
+    let finishOperation
+    operation.promise = new Promise(resolve => { finishOperation = resolve })
+    offlineUploadOperations.set(metadata.attachmentId, operation)
     try {
-      await uploadOfflineAttachment(file, metadata, { api: attachmentApi })
+      checkActive()
+      await uploadOfflineAttachment(file, metadata, { api: attachmentApi, signal: operation.controller.signal })
+      checkActive()
       await persistFileSource(groupId, msgId, file, file.type, metadata.chunkSize)
-      const plaintext = serializeOfflineAttachmentContent(metadata)
+      checkActive()
+      const plaintext = await sealOutgoingContent(serializeOfflineAttachmentContent(metadata), groupId, msgId, 'group')
       const envelope = await encryptGroupMessageContent(plaintext, members, msgId)
+      checkActive()
       const added = await addFileMessage(groupId, {
         id: msgId, chatId: groupId, from: 'me',
         type: 'file', filename: metadata.filename, filesize: metadata.fileSize, filetype: metadata.filetype,
@@ -2730,6 +3040,7 @@ function validateMsgId(msgId) {
         iv: envelope.iv, ciphertext: envelope.ciphertext,
         key_envelopes: envelope.key_envelopes,
       }
+      checkActive()
       const sentNow = send('group_message', payload)
       const queued = hasPendingMessage(msgId)
       if (!sentNow && !queued) {
@@ -2746,6 +3057,10 @@ function validateMsgId(msgId) {
       await attachmentApi.cancel(metadata.attachmentId).catch(() => {})
       await deleteFileArtifacts(null, msgId)
       throw error
+    } finally {
+      if (offlineUploadOperations.get(metadata.attachmentId) === operation) offlineUploadOperations.delete(metadata.attachmentId)
+      if (operation.securityLocked || generation !== localKeyGeneration) eraseAttachmentSecrets(metadata)
+      finishOperation()
     }
   }
 
@@ -2753,6 +3068,23 @@ function validateMsgId(msgId) {
  * Register WebSocket message listening (called when the chat page is mounted)
    */
   function startListening() {
+    const deferControl = (kind, payload) => {
+      if (!useIdentityStore().isLocked) return false
+      if (pendingControls.size >= 1000) pendingControls.delete(pendingControls.keys().next().value)
+      pendingControls.set(`${kind}:${payload.from}:${payload.group_id || ''}:${payload.msg_id || ''}`, { kind, payload, account: useIdentityStore().chatId })
+      return true
+    }
+    retryPendingControls = async () => {
+      for (const [key, entry] of [...pendingControls]) {
+        if (useIdentityStore().isLocked) return
+        pendingControls.delete(key)
+        if (entry.account !== useIdentityStore().chatId) continue
+        if (entry.kind === 'recall') await onRecall(entry.payload)
+        if (entry.kind === 'group-recall') await onGroupRecall(entry.payload)
+        if (entry.kind === 'read') await onReadReceipt(entry.payload)
+        if (entry.kind === 'read-ack') await onReadAck(entry.payload)
+      }
+    }
     const recalledMessageIds = new Set()
     const rememberRecall = (msgId) => {
       if (recalledMessageIds.size >= 1000 && !recalledMessageIds.has(msgId)) {
@@ -2802,7 +3134,7 @@ function validateMsgId(msgId) {
         console.error('[chat] check persisted message failed', e)
         return
       }
-      if (recalledMessageIds.has(payload.msg_id)) {
+      if (recalledMessageIds.has(`${payload.from}:${payload.msg_id}`)) {
         confirmIncoming('message_received_ack', payload.from, payload.msg_id)
         return
       }
@@ -2814,11 +3146,11 @@ function validateMsgId(msgId) {
       notifyNewMessage()
 
       try {
-        const decryptedContent = await decryptMessage({
+        const decryptedContent = await openIncomingContent(await decryptMessage({
           ephemeralPubKey: payload.ephemeral_pub_key,
           iv: payload.iv,
           ciphertext: payload.ciphertext
-        })
+        }), payload)
         const offlineAttachment = parseOfflineAttachmentContent(decryptedContent)
         if (offlineAttachment) {
           await receiveOfflineAttachmentMessage(payload, offlineAttachment)
@@ -2826,8 +3158,7 @@ function validateMsgId(msgId) {
           return
         }
         const content = parseChatMessageContent(decryptedContent)
-        content.reply = await decryptReplyReference(payload, content.reply)
-        if (recalledMessageIds.has(payload.msg_id)) {
+        if (recalledMessageIds.has(`${payload.from}:${payload.msg_id}`)) {
           confirmIncoming('message_received_ack', payload.from, payload.msg_id)
           return
         }
@@ -2842,33 +3173,29 @@ function validateMsgId(msgId) {
         }, true)
         if (persisted) confirmIncoming('message_received_ack', payload.from, payload.msg_id)
       } catch (e) {
-        // If the private key has been cleared in the locked state, decryption must fail: the original ciphertext is temporarily stored and decrypted after unlocking.
-        // Decryption failure in the non-locked state is considered true damage, and the original "discard" behavior is used.
-        if (useIdentityStore().isLocked) {
-          try {
-            await dbAddPending({
-              msg_id: payload.msg_id,
-              from: payload.from,
-              ephemeral_pub_key: payload.ephemeral_pub_key,
-              iv: payload.iv,
-              ciphertext: payload.ciphertext,
-              reply_ephemeral_pub_key: payload.reply_ephemeral_pub_key,
-              reply_iv: payload.reply_iv,
-              reply_ciphertext: payload.reply_ciphertext,
-              ts: payload.ts,
-              burn_after_read: payload.burn_after_read || false
-            })
-            confirmIncoming('message_received_ack', payload.from, payload.msg_id)
-          } catch (err) {
-            console.error('[chat] stash pending failed', err)
-          }
-        } else {
-          console.error('[chat] decrypt failed', e)
+        try {
+          await dbAddPending({
+            msg_id: payload.msg_id,
+            from: payload.from,
+            ephemeral_pub_key: payload.ephemeral_pub_key,
+            iv: payload.iv,
+            ciphertext: payload.ciphertext,
+            reply_ephemeral_pub_key: payload.reply_ephemeral_pub_key,
+            reply_iv: payload.reply_iv,
+            reply_ciphertext: payload.reply_ciphertext,
+            ts: payload.ts,
+            burn_after_read: payload.burn_after_read || false
+          })
+          confirmIncoming('message_received_ack', payload.from, payload.msg_id)
+        } catch (err) {
+          console.error('[chat] stash pending failed', err)
         }
+        console.error('[chat] message authentication failed, preserving ciphertext', e)
       }
     }
 
     async function onRecall(payload) {
+      if (payload && deferControl('recall', payload)) return
       // Security verification
       if (!payload) {
         console.warn('[chat] empty recall payload')
@@ -2885,7 +3212,17 @@ function validateMsgId(msgId) {
 
       const chatId = payload.from
       const msgId = payload.msg_id
-      rememberRecall(msgId)
+      try {
+        await incomingControl(chatId, useIdentityStore().chatId, msgId, 'recall', payload.proof)
+      } catch (error) {
+        console.warn('[chat] rejected unauthenticated recall', error)
+        return
+      }
+      const original = await dbGetMessage(msgId)
+      const pending = await dbGetPending(msgId)
+      if (original && (original.mine || original.chatId !== chatId || original.from !== chatId)) return
+      if (pending && (pending.from !== chatId || pending.group_id)) return
+      rememberRecall(`${chatId}:${msgId}`)
       const msgs = messages.value[chatId]
       let removed
       if (msgs) {
@@ -2960,6 +3297,7 @@ function validateMsgId(msgId) {
     }
 
     async function onReadReceipt(payload) {
+      if (payload && deferControl('read', payload)) return
       // Security verification
       if (!payload) {
         console.warn('[chat] empty read_receipt payload')
@@ -2989,22 +3327,35 @@ function validateMsgId(msgId) {
     }
 
     async function onReadAck(payload) {
+      if (payload && deferControl('read-ack', payload)) return
       if (!validateChatId(payload?.to) || !Array.isArray(payload?.msg_id) || payload.msg_id.length === 0) return
       const ids = payload.msg_id.filter(validateMsgId)
       if (ids.length === 0) return
-      confirmPendingReads(payload.to, ids)
       const idSet = new Set(ids)
       const msgs = messages.value[payload.to] || []
-      for (const msg of msgs) {
-        if (!msg.mine && idSet.has(msg.id)) msg.receiptSent = true
-      }
-      await Promise.all(ids.map(id => dbMarkReceiptSent(id).catch(() => {})))
-
-      // Use the server's first reading time to calibrate the reader's own destruction time, covering the local time degradation value within a very short window before authentication.
       const receipts = Array.isArray(payload.receipts) ? payload.receipts : []
-      await Promise.all(receipts.map(async receipt => {
-        if (!validateMsgId(receipt?.msg_id) || !Number.isFinite(receipt?.read_at) || receipt.read_at <= 0) return
+      const processed = new Set()
+      for (let receipt of receipts) {
+        if (!idSet.has(receipt?.msg_id) || processed.has(receipt.msg_id)) continue
+        try {
+          const identity = useIdentityStore()
+          const generation = localKeyGeneration
+          const keys = await loadKeyPair()
+          receipt = { ...receipt, read_at: await verifyControlProof({ from: identity.chatId, to: payload.to, msgId: receipt.msg_id, kind: 'read', proof: receipt.proof }, keys.pubKeyB64) }
+          assertTransferActive(null, generation, localKeyGeneration, identity.isLocked)
+          const stored = await dbGetMessage(receipt.msg_id)
+          if (stored && (stored.mine || stored.chatId !== payload.to)) continue
+          assertTransferActive(null, generation, localKeyGeneration, identity.isLocked)
+          await dbMarkReceiptSent(receipt.msg_id)
+          assertTransferActive(null, generation, localKeyGeneration, identity.isLocked)
+        } catch (error) {
+          console.warn('[chat] rejected unauthenticated read acknowledgment', error)
+          continue
+        }
+        processed.add(receipt.msg_id)
+        confirmPendingReads(payload.to, [receipt.msg_id])
         const msg = msgs.find(m => !m.mine && m.id === receipt.msg_id)
+        if (msg) msg.receiptSent = true
         if (msg?.burnAfterRead) {
           msg.readReceivedAt = receipt.read_at
           msg.burnAt = receipt.read_at + BURN_AFTER_READ_DELAY
@@ -3014,7 +3365,7 @@ function validateMsgId(msgId) {
           receipt.read_at,
           receipt.read_at + BURN_AFTER_READ_DELAY
         ).catch(() => {})
-      }))
+      }
     }
 
     // ── File transfer event ─────────────────────────────────────────
@@ -3030,11 +3381,19 @@ function validateMsgId(msgId) {
     }
 
     async function onFileOffer(payload) {
+      const generation = localKeyGeneration
       const { from, transfer_id, msg_id, filesize, total_chunks, ephemeral_pub_key, iv } = payload
       if (!validateChatId(from) || !TRANSFER_ID_PATTERN.test(transfer_id)) return
       let metadata
       try {
-        metadata = await openFileOfferMetadata(payload)
+        if (!payload.metadata_ciphertext) throw new Error('Unsigned file offer is not supported')
+        metadata = await openFileOfferMetadata(payload, async encrypted => {
+          const signed = await openIncomingContent(await decryptMessage(encrypted), payload, 'file')
+          const parsed = JSON.parse(signed)
+          const binding = [transfer_id, ephemeral_pub_key, iv, filesize, total_chunks]
+          if (JSON.stringify(parsed.binding) !== JSON.stringify(binding)) throw new Error('File encryption binding is invalid')
+          return parsed.metadata
+        })
         if (!validateMsgId(msg_id)) throw new Error('File message number is invalid')
         if (!Number.isInteger(total_chunks) || total_chunks !== expectedFileChunks(filesize)) {
           throw new Error('Number of file chunks does not match declared size')
@@ -3044,6 +3403,7 @@ function validateMsgId(msgId) {
         }
         if (fileTransfers.value[transfer_id]) throw new Error('Duplicate file transfer number')
         await assertLocalAttachmentSpace(filesize)
+        assertTransferActive(null, generation, localKeyGeneration, useIdentityStore().isLocked)
       } catch (error) {
         console.warn('[chat] rejected invalid file offer')
         send('file_error', {
@@ -3196,14 +3556,15 @@ function validateMsgId(msgId) {
           { iv: payload.iv, ciphertext: payload.ciphertext, key_envelope: payload.key_envelope },
           keyRecord.privateKey, payload.msg_id,
         )
+        plaintext = await openIncomingContent(plaintext, payload, 'group')
       } catch (e) {
         console.error('[chat] group message decrypt failed', e)
-        const msg = {
-          id: payload.msg_id, chatId: payload.group_id, from: payload.from,
-          text: null, ts: payload.ts || getServerNow(), mine: false,
-          groupId: payload.group_id, decryptionFailed: true, status: 'sent',
-        }
-        await addMessage(payload.group_id, msg)
+        await dbAddPending({
+          msg_id: payload.msg_id, from: payload.from,
+          iv: payload.iv, ciphertext: payload.ciphertext,
+          group_id: payload.group_id, key_envelope: payload.key_envelope,
+          ts: payload.ts, group: true,
+        })
         send('group_message_received_ack', { group_id: payload.group_id, msg_ids: [payload.msg_id] })
         return
       }
@@ -3211,7 +3572,7 @@ function validateMsgId(msgId) {
       // Check if this is an attachment message (needs the raw JSON string, not the parsed object)
       const attachmentMeta = parseOfflineAttachmentContent(plaintext)
       if (attachmentMeta) {
-        await addFileMessage(payload.group_id, {
+        const persisted = await addFileMessage(payload.group_id, {
           id: payload.msg_id, chatId: payload.group_id, from: payload.from,
           type: 'file',
           filename: attachmentMeta.filename, filesize: attachmentMeta.fileSize, filetype: attachmentMeta.filetype,
@@ -3219,7 +3580,8 @@ function validateMsgId(msgId) {
           groupId: payload.group_id, status: 'sent',
           attachmentId: attachmentMeta.attachmentId, offlineAttachment: attachmentMeta,
           localFileAvailable: false,
-        })
+        }, true)
+        if (!persisted) await dbAddPending({ ...pendingCiphertext(payload), group: true })
         send('group_message_received_ack', { group_id: payload.group_id, msg_ids: [payload.msg_id] })
         notifyNewMessage()
         return
@@ -3230,15 +3592,29 @@ function validateMsgId(msgId) {
         ts: payload.ts || getServerNow(), mine: false,
         groupId: payload.group_id, status: 'sent',
       }
-      await addMessage(payload.group_id, msg)
+      const persisted = await addMessage(payload.group_id, msg, true)
+      if (!persisted) await dbAddPending({ ...pendingCiphertext(payload), group: true })
       send('group_message_received_ack', { group_id: payload.group_id, msg_ids: [payload.msg_id] })
       notifyNewMessage()
     }
 
     async function onGroupRecall(payload) {
+      if (payload && deferControl('group-recall', payload)) return
       if (!payload?.group_id || !payload?.msg_id) return
       const chatId = payload.group_id
       const msgId = payload.msg_id
+      try {
+        await incomingControl(payload.from, chatId, msgId, 'group-recall', payload.proof)
+      } catch (error) {
+        console.warn('[chat] rejected unauthenticated group recall', error)
+        return
+      }
+      const original = findLocalMessage(msgId)
+      if (original && (original.chatId !== chatId || original.from !== payload.from || original.mine)) return
+      const stored = await dbGetMessage(msgId)
+      const pending = await dbGetPending(msgId)
+      if (stored && (stored.mine || stored.chatId !== chatId || stored.from !== payload.from)) return
+      if (pending && (pending.group_id !== chatId || pending.from !== payload.from)) return
       const arr = messages.value[chatId]
       if (arr) {
         const idx = arr.findIndex(m => m.id === msgId)
@@ -3253,13 +3629,6 @@ function validateMsgId(msgId) {
       if (!payload?.group_id || !payload?.msg_id) return
       const chatId = payload.group_id
       const msgId = payload.msg_id
-      const arr = messages.value[chatId]
-      if (arr) {
-        const idx = arr.findIndex(m => m.id === msgId)
-        if (idx >= 0) arr.splice(idx, 1)
-      }
-      await dbDeleteMessage(msgId).catch(() => {})
-      await dbDeletePending(msgId).catch(() => {})
       send('group_delete_received_ack', { group_id: chatId, msg_ids: [msgId] })
     }
 
@@ -3308,24 +3677,21 @@ function validateMsgId(msgId) {
   })
 
   async function clearAll() {
+    const previousThreads = Object.values(messages.value)
+    lockLocalData()
+    await waitForSecurityCleanup()
     for (const timer of ackTimers.values()) clearTimeout(timer)
     ackTimers.clear()
     for (const timer of attachmentStatusTimers.values()) clearTimeout(timer)
     attachmentStatusTimers.clear()
-    for (const thread of Object.values(messages.value)) {
+    for (const thread of previousThreads) {
       for (const message of thread) {
         if (!message.mine || !message.offlineAttachment || message.status === 'sent') continue
         stopOfflineUploadOperation(message.offlineAttachment.attachmentId)
         attachmentApi.cancel(message.offlineAttachment.attachmentId).catch(() => {})
       }
     }
-    // Release all in-memory file blob URLs (deleteDatabase will clear the file body storage)
-    for (const cid in messages.value) {
-      for (const m of messages.value[cid]) releaseFileObjectUrl(m)
-    }
     await clearAllMessagesDB()
-    messages.value = {}
-    historyWindowSizes.value = {}
   }
 
   /**
@@ -3350,6 +3716,7 @@ function validateMsgId(msgId) {
    * Mark a group of messages as read and send a read receipt to the sender
    */
   async function markAsRead(chatId) {
+    if (useIdentityStore().isLocked) return
     const msgs = messages.value[chatId] || []
     const readReceivedAt = getServerNow()
     const newlyRead = []        //This new mark is read (for persistent read)
@@ -3382,7 +3749,12 @@ function validateMsgId(msgId) {
     if (pendingReceiptIds.length === 0) return
     // The WebSocket layer uniformly deduplicates, splits each batch into a maximum of 100 items, and only flushes them once to avoid cyclically sending the previous items.
     // Batches that have not yet been ACKed are sent repeatedly, creating an O(n²) request storm.
-    send('read', { to: chatId, msg_id: pendingReceiptIds })
+    const proofs = {}
+    for (const msgId of pendingReceiptIds) {
+      const message = msgs.find(item => item.id === msgId)
+      proofs[msgId] = await outgoingControl(chatId, msgId, 'read', message?.readReceivedAt || readReceivedAt)
+    }
+    send('read', { to: chatId, msg_id: pendingReceiptIds, proofs })
   }
 
   /**
@@ -3424,7 +3796,19 @@ function validateMsgId(msgId) {
    */
   async function handleReadReceipt(fromChatId, receipts, rememberMissing = true) {
     if (!validateChatId(fromChatId) || !Array.isArray(receipts)) return
-    const validReceipts = receipts.filter(r => validateMsgId(r?.msg_id) && Number.isFinite(r?.read_at) && r.read_at > 0)
+    const validReceipts = []
+    for (const receipt of receipts) {
+      if (!validateMsgId(receipt?.msg_id)) continue
+      try {
+        const stored = await dbGetMessage(receipt.msg_id)
+        if (stored && (!stored.mine || stored.chatId !== fromChatId)) continue
+        if (!stored && !rememberMissing) continue
+        const at = await incomingControl(fromChatId, useIdentityStore().chatId, receipt.msg_id, 'read', receipt.proof)
+        validReceipts.push({ ...receipt, from: fromChatId, read_at: at })
+      } catch (error) {
+        console.warn('[chat] rejected unauthenticated read receipt', error)
+      }
+    }
     if (validReceipts.length === 0) return
     validReceipts.forEach(receipt => confirmPendingMessage(receipt.msg_id))
     const receiptByID = new Map(validReceipts.map(r => [r.msg_id, r]))
@@ -3440,6 +3824,7 @@ function validateMsgId(msgId) {
         }
         m.status = 'sent'
         m.read = true
+        m.authenticatedRead = true
         if (m.type === 'file') {
           m.attachmentStatus = 'received'
           if (m.attachmentId) stopAttachmentStatusWatch(m.attachmentId)
@@ -3470,7 +3855,7 @@ function validateMsgId(msgId) {
       await dbUpdateMessageDelivery(receipt.msg_id, 'sent').catch(() => {})
       const isFile = await dbMarkFileAttachmentReceived(receipt.msg_id).catch(() => false)
       if (isFile) {
-        const msg = findLocalMessage(receipt.msg_id) || { id: receipt.msg_id, mine: true, type: 'file' }
+        const msg = findLocalMessage(receipt.msg_id) || { id: receipt.msg_id, mine: true, type: 'file', authenticatedRead: true }
         await maybeAutoCleanReceivedAttachment(msg)
       }
     }))
@@ -3543,7 +3928,23 @@ function validateMsgId(msgId) {
    * Successful → enter the database and delete the temporary storage; still fails after unlocking → treat it as really damaged and delete the temporary storage (self-cleaning);
    * Still locked (private key not ready) → Keep and try again next time you unlock.
    */
-  async function processPendingMessages() {
+  let pendingProcessingPromise = null
+  let pendingProcessingRequested = false
+
+  function processPendingMessages() {
+    pendingProcessingRequested = true
+    if (pendingProcessingPromise) return pendingProcessingPromise
+    pendingProcessingPromise = (async () => {
+      do {
+        pendingProcessingRequested = false
+        await drainPendingMessages()
+      } while (pendingProcessingRequested && !useIdentityStore().isLocked)
+    })().finally(() => { pendingProcessingPromise = null })
+    return pendingProcessingPromise
+  }
+
+  async function drainPendingMessages() {
+    await retryPendingControls()
     let pending
     try {
       pending = await dbGetAllPending()
@@ -3557,32 +3958,40 @@ function validateMsgId(msgId) {
     pending.sort((a, b) => a.ts - b.ts)
 
     for (const p of pending) {
+      const generation = localKeyGeneration
+      let authenticating = false
       try {
         if (await dbHasMessage(p.msg_id)) {
           await dbDeletePending(p.msg_id).catch(() => {})
           continue
         }
+        const keyRecord = await loadKeyPair()
+        if (!keyRecord?.privateKey) break
+        assertTransferActive(null, generation, localKeyGeneration, useIdentityStore().isLocked)
+        authenticating = true
         // Group messages use a different decryption path (content key wrapped in key envelope)
         if (p.group) {
-          const { loadKeyPair } = await import('src/services/crypto')
-          const keyRecord = await loadKeyPair()
-          if (!keyRecord || !keyRecord.privateKey) break
-          const plaintext = await decryptGroupMessageContent(
+          let plaintext = await decryptGroupMessageContent(
             { iv: p.iv, ciphertext: p.ciphertext, key_envelope: p.key_envelope },
             keyRecord.privateKey, p.msg_id,
           )
+          plaintext = await openIncomingContent(plaintext, p, 'group')
+          authenticating = false
           const offlineAttachment = parseOfflineAttachmentContent(plaintext)
           if (offlineAttachment) {
-            await addFileMessage(p.group_id, {
+            const persisted = await addFileMessage(p.group_id, {
               id: p.msg_id, chatId: p.group_id, from: p.from,
               type: 'file',
               filename: offlineAttachment.filename, filesize: offlineAttachment.fileSize, filetype: offlineAttachment.filetype,
               ts: p.ts || getServerNow(), mine: false,
               groupId: p.group_id, status: 'sent',
               attachmentId: offlineAttachment.attachmentId, offlineAttachment,
-            })
-            await dbDeletePending(p.msg_id).catch(() => {})
-            send('group_message_received_ack', { group_id: p.group_id, msg_ids: [p.msg_id] })
+              localFileAvailable: false,
+            }, true)
+            if (persisted) {
+              await dbDeletePending(p.msg_id).catch(() => {})
+              send('group_message_received_ack', { group_id: p.group_id, msg_ids: [p.msg_id] })
+            }
             continue
           }
           const content = parseChatMessageContent(plaintext)
@@ -3597,11 +4006,12 @@ function validateMsgId(msgId) {
           }
           continue
         }
-        const decryptedContent = await decryptMessage({
+        const decryptedContent = await openIncomingContent(await decryptMessageWithPrivateKey({
           ephemeralPubKey: p.ephemeral_pub_key,
           iv: p.iv,
           ciphertext: p.ciphertext
-        })
+        }, keyRecord.privateKey), p)
+        authenticating = false
         const offlineAttachment = parseOfflineAttachmentContent(decryptedContent)
         if (offlineAttachment) {
           if (p.attachment_paused || p.attachment_failed) {
@@ -3615,12 +4025,11 @@ function validateMsgId(msgId) {
             fileTransfers.value[offlineAttachment.attachmentId] = transfer
             continue
           }
-          await receiveOfflineAttachmentMessage(p, offlineAttachment)
-          await dbDeletePending(p.msg_id).catch(() => {})
+          const completed = await receiveOfflineAttachmentMessage(p, offlineAttachment)
+          if (completed) await dbDeletePending(p.msg_id).catch(() => {})
           continue
         }
         const content = parseChatMessageContent(decryptedContent)
-        content.reply = await decryptReplyReference(p, content.reply)
         const persisted = await addMessage(p.from, {
           id: p.msg_id,
           from: p.from,
@@ -3632,12 +4041,15 @@ function validateMsgId(msgId) {
         }, true)
         if (persisted) await dbDeletePending(p.msg_id).catch(() => {})
       } catch (e) {
-        // Still failed after unlocking: If it is still locked, keep it for next time, otherwise it is really damaged and delete it.
-        if (useIdentityStore().isLocked) {
+        if (useIdentityStore().isLocked || generation !== localKeyGeneration) {
           break  //Private key is still unavailable, no need to continue trying
         }
-        console.error('[chat] pending decrypt failed, dropping', p.msg_id, e)
-        await dbDeletePending(p.msg_id).catch(() => {})
+        if (authenticating && invalidPendingContent(e)) {
+          await dbDeletePending(p.msg_id)
+          console.warn('[chat] discarded invalid pending ciphertext', p.msg_id, e)
+          continue
+        }
+        console.error('[chat] pending authentication failed, preserving ciphertext', p.msg_id, e)
       }
     }
   }
@@ -3683,6 +4095,9 @@ function validateMsgId(msgId) {
     ensureHistoryWindowAtLeast,
     clearChatMessages,
     clearAll,
+    lockLocalData,
+    waitForSecurityCleanup,
+    protectLocalData: ensureMessageKey,
     markAsRead,
     markAsReadLocal,
     syncReadStatus,

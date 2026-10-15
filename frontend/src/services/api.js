@@ -93,6 +93,8 @@ export const companyApi = {
 export const groupApi = {
   list: () => api.get('/groups'),
   detail: (groupId) => api.get(`/groups/${encodeURIComponent(groupId)}`),
+  groupReads: (groupId, ids, signal) => api.get(`/groups/${encodeURIComponent(groupId)}/reads`, { params: { msg_ids: ids.join(',') }, signal }),
+  recordGroupReads: (groupId, receipts, signal) => api.post(`/groups/${encodeURIComponent(groupId)}/reads`, { receipts }, { signal }),
   initGroupAttachment: (metadata, signal) => api.post('/attachments/group', metadata, { signal }),
   acknowledgeGroupAttachment: (id, signal) => api.post(`/attachments/${encodeURIComponent(id)}/group-ack`, null, { signal }),
 }

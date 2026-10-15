@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	rdb "github.com/redis/go-redis/v9"
@@ -26,6 +27,7 @@ var (
 	ErrIdentityNotReady = errors.New("identity not ready")
 	ErrAlreadyReady     = errors.New("identity already ready")
 	ErrUserNotFound     = errors.New("user not found")
+	ErrInvalidSession   = errors.New("invalid session")
 )
 
 const (
@@ -73,6 +75,43 @@ type IdentityService struct {
 	db                *sql.DB
 	redis             *rdb.Client
 	attachmentCleanup func(context.Context, []string) error
+	sessionMu         sync.Mutex
+	sessionListeners  map[*sessionListener]struct{}
+}
+
+type sessionListener struct {
+	token  string
+	chatID string
+	close  func()
+}
+
+func (s *IdentityService) SubscribeSessionRevocation(token, chatID string, closeSession func()) func() {
+	listener := &sessionListener{token: token, chatID: chatID, close: closeSession}
+	s.sessionMu.Lock()
+	if s.sessionListeners == nil {
+		s.sessionListeners = make(map[*sessionListener]struct{})
+	}
+	s.sessionListeners[listener] = struct{}{}
+	s.sessionMu.Unlock()
+	return func() {
+		s.sessionMu.Lock()
+		delete(s.sessionListeners, listener)
+		s.sessionMu.Unlock()
+	}
+}
+
+func (s *IdentityService) notifySessionRevocation(token, chatID string) {
+	s.sessionMu.Lock()
+	var callbacks []func()
+	for listener := range s.sessionListeners {
+		if (token != "" && listener.token == token) || (chatID != "" && listener.chatID == chatID) {
+			callbacks = append(callbacks, listener.close)
+		}
+	}
+	s.sessionMu.Unlock()
+	for _, callback := range callbacks {
+		callback()
+	}
 }
 
 func NewIdentityService(db *sql.DB, redis *rdb.Client) *IdentityService {
@@ -169,9 +208,15 @@ func (s *IdentityService) UpdateLastSeen(ctx context.Context, chatID string) {
 func (s *IdentityService) issueSession(ctx context.Context, chatID string) (string, error) {
 	// Get the current session version number
 	genStr, err := s.redis.Get(ctx, pkgredis.SessionGenKey(chatID)).Result()
+	if err != nil && err != rdb.Nil {
+		return "", err
+	}
 	var gen int64
 	if err == nil {
-		gen, _ = strconv.ParseInt(genStr, 10, 64)
+		gen, err = strconv.ParseInt(genStr, 10, 64)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	b := make([]byte, 32)
@@ -187,7 +232,7 @@ func (s *IdentityService) issueSession(ctx context.Context, chatID string) (stri
 func (s *IdentityService) ValidateSession(ctx context.Context, token string) (string, error) {
 	val, err := s.redis.Get(ctx, pkgredis.SessionKey(token)).Result()
 	if err == rdb.Nil {
-		return "", errors.New("invalid or expired session")
+		return "", fmt.Errorf("%w: expired or missing", ErrInvalidSession)
 	}
 	if err != nil {
 		return "", err
@@ -195,12 +240,18 @@ func (s *IdentityService) ValidateSession(ctx context.Context, token string) (st
 
 	// val format: "chatID:gen"
 	idx := strings.LastIndex(val, ":")
-	if idx < 0 {
-		// Compatible with the old format (no version number), return directly
-		return val, nil
+	chatID := val
+	var gen int64
+	if idx >= 0 {
+		chatID = val[:idx]
+		gen, err = strconv.ParseInt(val[idx+1:], 10, 64)
+		if err != nil {
+			return "", fmt.Errorf("%w: invalid generation", ErrInvalidSession)
+		}
 	}
-	chatID := val[:idx]
-	gen, _ := strconv.ParseInt(val[idx+1:], 10, 64)
+	if chatID == "" {
+		return "", fmt.Errorf("%w: missing identity", ErrInvalidSession)
+	}
 
 	// Verify version number
 	curGenStr, err := s.redis.Get(ctx, pkgredis.SessionGenKey(chatID)).Result()
@@ -209,22 +260,29 @@ func (s *IdentityService) ValidateSession(ctx context.Context, token string) (st
 	}
 	var curGen int64
 	if err == nil {
-		curGen, _ = strconv.ParseInt(curGenStr, 10, 64)
+		curGen, err = strconv.ParseInt(curGenStr, 10, 64)
+		if err != nil {
+			return "", fmt.Errorf("%w: invalid generation", ErrInvalidSession)
+		}
 	}
 	if gen != curGen {
-		return "", errors.New("session superseded")
+		return "", fmt.Errorf("%w: superseded", ErrInvalidSession)
 	}
 	return chatID, nil
 }
 
 // revokeAllSessions increments the version number, making all old sessions of this user invalid immediately
 func (s *IdentityService) revokeAllSessions(ctx context.Context, chatID string) error {
-	return s.redis.Incr(ctx, pkgredis.SessionGenKey(chatID)).Err()
+	err := s.redis.Incr(ctx, pkgredis.SessionGenKey(chatID)).Err()
+	s.notifySessionRevocation("", chatID)
+	return err
 }
 
 // RevokeSession logs out the session (delete the token in Redis)
 func (s *IdentityService) RevokeSession(ctx context.Context, token string) error {
-	return s.redis.Del(ctx, pkgredis.SessionKey(token)).Err()
+	err := s.redis.Del(ctx, pkgredis.SessionKey(token)).Err()
+	s.notifySessionRevocation(token, "")
+	return err
 }
 
 // DeleteAccount Cancel account: delete friend relationships, friend applications, read receipts, user records, and all sessions
@@ -285,6 +343,12 @@ func (s *IdentityService) DeleteAccount(ctx context.Context, chatID string) erro
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM friend_requests WHERE from_user_id = ? OR to_user_id = ?`, userID, userID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM group_message_deliveries WHERE member_chat_id = ?`, chatID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM group_members WHERE user_id = ?`, userID); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, userID); err != nil {

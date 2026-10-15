@@ -123,6 +123,7 @@ type Client struct {
 	// Unsent messages will be permanently lost when the connection is destroyed.
 	closed    chan struct{}
 	closeOnce sync.Once
+	session   *clientSession
 
 	// Message current limiting status: fixed window count. Only accessed within the connection's own readPump goroutine
 	// (dispatch is executed synchronously), so no locking is required.
@@ -196,7 +197,7 @@ type groupChecker interface {
 	ActiveMemberChatIDs(ctx context.Context, groupID string) ([]string, error)
 	IsMuted(ctx context.Context, groupID, chatID string) (bool, error)
 	AcceptGroupMessage(ctx context.Context, senderChatID, groupID, msgID, iv, ciphertext string, envelopes []service.KeyEnvelope) (time.Time, bool, error)
-	RecallGroupMessage(ctx context.Context, senderChatID, groupID, msgID string) error
+	RecallGroupMessageWithProof(ctx context.Context, senderChatID, groupID, msgID, proof string) (string, error)
 	DeleteGroupMessage(ctx context.Context, groupID, msgID string) error
 	GetPendingGroupMessages(ctx context.Context, memberChatID string, limit int) ([]*service.PendingGroupMessage, error)
 	MarkGroupMessagesApplied(ctx context.Context, msgIDs []string, memberChatID string) error
@@ -210,12 +211,12 @@ type messageReadStore interface {
 	GetMessageDeliveries(context.Context, string, []string) ([]service.MessageDelivery, error)
 	GetPendingEncryptedMessages(context.Context, string, int) ([]service.PendingEncryptedMessage, error)
 	MarkEncryptedMessagesApplied(context.Context, []string, string, string) error
-	RecallMessage(context.Context, string, string, string) (service.MessageDelivery, bool, error)
+	RecallMessage(context.Context, string, string, string, ...string) (service.MessageDelivery, bool, error)
 	GetPendingRecalls(context.Context, string, int) ([]service.PendingRecall, error)
 	MarkRecallsApplied(context.Context, []string, string, string) error
 	RecordMessage(context.Context, string, string, string) error
 	DeleteMessage(context.Context, string, string, string) error
-	RecordReads(context.Context, []string, string, string) ([]service.ReadReceipt, error)
+	RecordReads(context.Context, []string, string, string, ...map[string]string) ([]service.ReadReceipt, error)
 	GetReadReceiptsForSender(context.Context, string) (map[string][]service.ReadReceipt, error)
 	MarkReadReceiptsApplied(context.Context, []string, string, string) error
 }
@@ -569,7 +570,8 @@ func marshalForwardRecall(item service.PendingRecall) ([]byte, error) {
 			From       string `json:"from"`
 			MsgID      string `json:"msg_id"`
 			RecalledAt int64  `json:"recalled_at"`
-		}{From: item.MsgFrom, MsgID: item.MsgID, RecalledAt: item.RecalledAt}),
+			Proof      string `json:"proof,omitempty"`
+		}{From: item.MsgFrom, MsgID: item.MsgID, RecalledAt: item.RecalledAt, Proof: item.Proof}),
 	})
 }
 
@@ -673,6 +675,8 @@ func (h *Hub) FlushPersistentInbox(c *Client) {
 					Payload: mustMarshal(map[string]interface{}{
 						"group_id": t.GroupID,
 						"msg_id":   t.MsgID,
+						"from":     t.From,
+						"proof":    t.Proof,
 					}),
 				})
 				select {
@@ -711,6 +715,12 @@ func (h *Hub) storeOfflineChecked(chatID string, msg []byte) error {
 
 // ServeClient starts the read/write goroutine
 func (h *Hub) ServeClient(c *Client) {
+	defer c.signalClose()
+	select {
+	case <-c.closed:
+		return
+	default:
+	}
 	h.Register(c)
 
 	// First start writePump and then flush offline messages: FlushOffline directly writes c.send. If the number of offline messages
@@ -748,6 +758,11 @@ func (c *Client) readPump(h *Hub) {
 		// General gate current limit: the number of messages per second for a single connection is capped, and blocking messages will hit CPU/Redis/DB. Silently discarded if exceeded.
 		if !c.msgLimiter.allow(time.Now(), msgMaxPerSec) {
 			continue
+		}
+		select {
+		case <-c.closed:
+			return
+		default:
 		}
 		var msg Message
 		if err := json.Unmarshal(raw, &msg); err != nil {
@@ -1181,6 +1196,7 @@ func (h *Hub) handleHealthPing(from *Client, payload json.RawMessage) {
 
 // RecallPayload recall message payload
 type RecallPayload struct {
+	Proof string `json:"proof,omitempty"`
 	To    string `json:"to"`
 	MsgID string `json:"msg_id"`
 }
@@ -1191,7 +1207,7 @@ func (h *Hub) handleRecall(from *Client, payload json.RawMessage) {
 		log.Printf("[ws] invalid recall payload: %v", err)
 		return
 	}
-	if !chatIDRe.MatchString(p.To) || !msgIDRe.MatchString(p.MsgID) {
+	if !chatIDRe.MatchString(p.To) || !msgIDRe.MatchString(p.MsgID) || len(p.Proof) > service.MaxControlProofBytes {
 		log.Printf("[ws] invalid recall fields")
 		return
 	}
@@ -1208,7 +1224,7 @@ func (h *Hub) handleRecall(from *Client, payload json.RawMessage) {
 		h.sendRecallResult(from, p.MsgID, "retry", "service_unavailable", true)
 		return
 	}
-	_, found, err := h.messageReadSvc.RecallMessage(ctx, p.MsgID, from.ChatID, p.To)
+	delivery, found, err := h.messageReadSvc.RecallMessage(ctx, p.MsgID, from.ChatID, p.To, p.Proof)
 	if err != nil {
 		log.Printf("[ws] persist recall failed: %v", err)
 		code := "temporary_failure"
@@ -1223,7 +1239,7 @@ func (h *Hub) handleRecall(from *Client, payload json.RawMessage) {
 		return
 	}
 	fwd, _ := marshalForwardRecall(service.PendingRecall{
-		MsgID: p.MsgID, MsgFrom: from.ChatID, RecalledAt: time.Now().UnixMilli(),
+		MsgID: p.MsgID, MsgFrom: from.ChatID, RecalledAt: time.Now().UnixMilli(), Proof: delivery.RecallProof,
 	})
 	h.mu.RLock()
 	c, ok := h.clients[p.To]
@@ -1261,8 +1277,9 @@ func (h *Hub) sendRecallResult(to *Client, msgID, status, code string, retryable
 
 // ReadPayload read receipt payload
 type ReadPayload struct {
-	To    string   `json:"to"`     //Message sender chat_id
-	MsgID []string `json:"msg_id"` //List of read message IDs
+	Proofs map[string]string `json:"proofs,omitempty"`
+	To     string            `json:"to"`     //Message sender chat_id
+	MsgID  []string          `json:"msg_id"` //List of read message IDs
 }
 
 // handleRead handles read receipts
@@ -1274,6 +1291,9 @@ func (h *Hub) handleRead(from *Client, payload json.RawMessage) {
 	}
 	if !chatIDRe.MatchString(p.To) || len(p.MsgID) == 0 || len(p.MsgID) > 100 {
 		log.Printf("[ws] invalid read fields")
+		return
+	}
+	if service.ValidateReadProofs(p.MsgID, p.Proofs) != nil {
 		return
 	}
 	// Validate each msg_id format
@@ -1304,7 +1324,7 @@ func (h *Hub) handleRead(from *Client, payload json.RawMessage) {
 		seen[msgID] = struct{}{}
 		uniqueIDs = append(uniqueIDs, msgID)
 	}
-	receipts, err := h.messageReadSvc.RecordReads(ctx, uniqueIDs, p.To, from.ChatID)
+	receipts, err := h.messageReadSvc.RecordReads(ctx, uniqueIDs, p.To, from.ChatID, p.Proofs)
 	if err != nil {
 		// No ACK for transient database errors, the front end retains the entire batch and retries when reconnecting/opening the session again.
 		log.Printf("[ws] record read batch failed: %v", err)
@@ -1592,7 +1612,7 @@ func validateFileOffer(p FileOfferPayload) (metadataMode, error) {
 	if metadataFields == 3 {
 		if !validBase64Size(p.MetadataEphemeralPubKey, 1, 256) ||
 			!validBase64Size(p.MetadataIV, 12, 12) ||
-			!validBase64Size(p.MetadataCiphertext, 1, 1024) {
+			!validBase64Size(p.MetadataCiphertext, 1, 4096) {
 			return fileMetadataLegacy, errors.New("文件元数据加密参数无效")
 		}
 		return fileMetadataEncrypted, nil
@@ -2408,6 +2428,7 @@ func (h *Hub) handleGroupMessage(from *Client, payload json.RawMessage) {
 
 func (h *Hub) handleGroupRecall(from *Client, payload json.RawMessage) {
 	var p struct {
+		Proof   string `json:"proof,omitempty"`
 		GroupID string `json:"group_id"`
 		MsgID   string `json:"msg_id"`
 	}
@@ -2415,14 +2436,14 @@ func (h *Hub) handleGroupRecall(from *Client, payload json.RawMessage) {
 		log.Printf("[ws] group recall rejected")
 		return
 	}
-	if !groupIDRe.MatchString(p.GroupID) || !msgIDRe.MatchString(p.MsgID) {
+	if !groupIDRe.MatchString(p.GroupID) || !msgIDRe.MatchString(p.MsgID) || len(p.Proof) > service.MaxControlProofBytes {
 		return
 	}
 	if h.groupSvc == nil {
 		return
 	}
 	ctx := context.Background()
-	err := h.groupSvc.RecallGroupMessage(ctx, from.ChatID, p.GroupID, p.MsgID)
+	proof, err := h.groupSvc.RecallGroupMessageWithProof(ctx, from.ChatID, p.GroupID, p.MsgID, p.Proof)
 	if err != nil {
 		log.Printf("[ws] group recall rejected")
 		return
@@ -2440,6 +2461,7 @@ func (h *Hub) handleGroupRecall(from *Client, payload json.RawMessage) {
 				"group_id": p.GroupID,
 				"from":     from.ChatID,
 				"msg_id":   p.MsgID,
+				"proof":    proof,
 			}),
 		})
 		h.mu.RLock()

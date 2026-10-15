@@ -21,7 +21,7 @@ class MemoryStorage {
   }
 }
 
-async function createWebSocketHarness({ messageSync = false, healthCheck = false, reliableInbox = false, acceptedMessageIds = [], autoHealthPong = true } = {}) {
+async function createWebSocketHarness({ messageSync = false, healthCheck = false, reliableInbox = false, acceptedMessageIds = [], autoHealthPong = true, initialQueue = [], authResults = [] } = {}) {
   const localStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
   const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window')
   const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document')
@@ -31,6 +31,7 @@ async function createWebSocketHarness({ messageSync = false, healthCheck = false
   const sentMessages = []
   const controlMessages = []
   const storage = new MemoryStorage([['session_token', 'test-token']])
+  if (initialQueue.length) storage.setItem('ws_pending_queue', JSON.stringify(initialQueue))
   const accepted = new Set(acceptedMessageIds)
 
   class FakeEventTarget {
@@ -82,6 +83,7 @@ async function createWebSocketHarness({ messageSync = false, healthCheck = false
           message_sync: messageSync,
           health_check: healthCheck,
           reliable_inbox: reliableInbox,
+          ...authResults.shift(),
         }))
       } else if (message.type === 'message_status_query') {
         controlMessages.push(message)
@@ -165,6 +167,85 @@ async function createWebSocketHarness({ messageSync = false, healthCheck = false
 function waitForTimers(ms = 40) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
+
+test('temporary authentication failures retry with backoff while keeping the session token', async () => {
+  const env = await createWebSocketHarness({ authResults: [{ success: false, retryable: true, reason: 'session validation failed' }] })
+  try {
+    await env.websocket.connect()
+    assert.equal(env.websocket.wsConnectionState.value, 'reconnecting')
+    assert.equal(env.storage.getItem('session_token'), 'test-token')
+    await waitForTimers(1100)
+    assert.equal(env.sockets.length, 2)
+    assert.equal(env.websocket.wsConnectionState.value, 'connected')
+    env.socket.emit('auth_result', { success: false, retryable: true })
+    assert.equal(env.websocket.wsConnectionState.value, 'reconnecting')
+  } finally {
+    env.websocket.disconnect()
+    env.restore()
+  }
+})
+
+test('definitive authentication rejection stops automatic reconnect', async () => {
+  const env = await createWebSocketHarness({ authResults: [{ success: false, reason: 'session binding failed' }] })
+  try {
+    await env.websocket.connect()
+    assert.equal(env.websocket.wsConnectionState.value, 'disconnected')
+    assert.equal(env.websocket.getConnectionDiagnostics().some(entry => entry.event === 'reconnect_scheduled'), false)
+  } finally {
+    env.websocket.disconnect()
+    env.restore()
+  }
+})
+
+test('reload normalization retains group recall and first read proof across split batches', async () => {
+  const ids = Array.from({ length: 101 }, (_, index) => 'id-' + index)
+  const proofs = Object.fromEntries(ids.map(id => [id, 'proof-' + id]))
+  const env = await createWebSocketHarness({ reliableInbox: true, initialQueue: [
+    { type: 'read', payload: { to: 'peer', msg_id: ids, proofs } },
+    { type: 'read', payload: { to: 'peer', msg_id: [ids[0]], proofs: { [ids[0]]: 'replacement' } } },
+    { type: 'read', payload: { to: 'peer', msg_id: ['legacy'] } },
+    { type: 'group_recall', payload: { group_id: 'group', msg_id: 'group-message', proof: 'group-proof' } },
+  ] })
+  try {
+    await env.websocket.connect()
+    await waitForTimers()
+    const reads = env.sentMessages.filter(item => item.type === 'read')
+    assert.equal(reads.length, 3)
+    assert.equal(reads[0].payload.proofs[ids[0]], proofs[ids[0]])
+    assert.equal(reads[1].payload.proofs[ids[100]], proofs[ids[100]])
+    assert.equal(reads[2].payload.proofs, undefined)
+    assert.equal(env.sentMessages.find(item => item.type === 'group_recall').payload.proof, 'group-proof')
+  } finally {
+    env.websocket.clearPendingQueue()
+    env.websocket.disconnect()
+    env.restore()
+  }
+})
+
+test('control outbox merges first proofs and removes ACKed proof IDs', async () => {
+  const env = await createWebSocketHarness({ reliableInbox: true })
+  try {
+    env.websocket.send('read', { to: 'peer', msg_id: ['one'], proofs: { one: 'first' } })
+    env.websocket.send('read', { to: 'peer', msg_id: ['one', 'two'], proofs: { one: 'retry', two: 'second' } })
+    env.websocket.send('recall', { to: 'peer', msg_id: 'recall', proof: 'original' })
+    env.websocket.send('recall', { to: 'peer', msg_id: 'recall', proof: 'replacement' })
+    env.websocket.send('group_recall', { group_id: 'group', msg_id: 'group-recall', proof: 'group-proof' })
+    let queued = JSON.parse(env.storage.getItem('ws_pending_queue'))
+    assert.deepEqual(queued.find(item => item.type === 'read').payload.proofs, { one: 'first', two: 'second' })
+    assert.equal(queued.find(item => item.type === 'recall').payload.proof, 'original')
+    env.websocket.confirmPendingReads('peer', ['one'])
+    queued = JSON.parse(env.storage.getItem('ws_pending_queue'))
+    assert.deepEqual(queued.find(item => item.type === 'read').payload.proofs, { two: 'second' })
+    await env.websocket.connect()
+    await waitForTimers()
+    assert.equal(env.sentMessages.find(item => item.type === 'group_recall').payload.proof, 'group-proof')
+    assert.deepEqual(env.sentMessages.find(item => item.type === 'read').payload.proofs, { two: 'second' })
+  } finally {
+    env.websocket.clearPendingQueue()
+    env.websocket.disconnect()
+    env.restore()
+  }
+})
 
 test('replays an incoming call offer that arrived before listener registration', async () => {
   const env = await createWebSocketHarness()

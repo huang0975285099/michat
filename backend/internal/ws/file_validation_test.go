@@ -68,6 +68,14 @@ func TestValidateFileOfferAccepts100MBFile(t *testing.T) {
 	}
 }
 
+func TestValidateFileOfferAcceptsSignedMetadataEnvelope(t *testing.T) {
+	offer := validEncryptedFileOffer()
+	offer.MetadataCiphertext = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{5}, 2048))
+	if _, err := validateFileOffer(offer); err != nil {
+		t.Fatalf("validate signed metadata envelope: %v", err)
+	}
+}
+
 func TestValidateFileOfferRejectsMalformedEncryptedMetadata(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -79,7 +87,7 @@ func TestValidateFileOfferRejectsMalformedEncryptedMetadata(t *testing.T) {
 			p.MetadataIV = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 11))
 		}},
 		{name: "oversized ciphertext", mutate: func(p *FileOfferPayload) {
-			p.MetadataCiphertext = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{5}, 1025))
+			p.MetadataCiphertext = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{5}, 4097))
 		}},
 		{name: "wrong chunk count", mutate: func(p *FileOfferPayload) { p.TotalChunks = 2 }},
 		{name: "oversized file", mutate: func(p *FileOfferPayload) { p.Filesize = maxFileSize + 1 }},

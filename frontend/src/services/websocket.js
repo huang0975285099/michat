@@ -237,12 +237,12 @@ function loadPendingQueue() {
         }
         continue
       }
-      if (item?.type === 'recall') {
-        const loadedRecalls = result.reduce((count, existing) => count + (existing.type === 'recall' ? 1 : 0), 0)
-        if (loadedRecalls < MAX_PENDING_RECALLS && isValidPendingRecall(item.payload) && !result.some(existing =>
-          existing.type === 'recall' && existing.payload.msg_id === item.payload.msg_id
+      if (item?.type === 'recall' || item?.type === 'group_recall') {
+        const loadedRecalls = result.reduce((count, existing) => count + (existing.type === item.type ? 1 : 0), 0)
+        if (loadedRecalls < MAX_PENDING_RECALLS && (item.type === 'recall' ? isValidPendingRecall(item.payload) : isValidPendingGroupRecall(item.payload)) && !result.some(existing =>
+          existing.type === item.type && existing.payload.msg_id === item.payload.msg_id
         )) {
-          result.push({ type: 'recall', payload: { ...item.payload } })
+          result.push({ type: item.type, payload: { ...item.payload } })
         }
         continue
       }
@@ -251,16 +251,13 @@ function loadPendingQueue() {
       }
       const to = item.payload?.to
       if (typeof to !== 'string' || !Array.isArray(item.payload?.msg_id)) continue
-      if (!readsByPeer.has(to)) readsByPeer.set(to, new Set())
+      if (!readsByPeer.has(to)) readsByPeer.set(to, new Map())
       for (const id of item.payload.msg_id) {
-        if (typeof id === 'string' && id) readsByPeer.get(to).add(id)
+        if (typeof id === 'string' && id) mergeReadProof(readsByPeer.get(to), id, item.payload.proofs?.[id])
       }
     }
     for (const [to, ids] of readsByPeer) {
-      const all = [...ids]
-      for (let i = 0; i < all.length; i += READ_BATCH_SIZE) {
-        result.push({ type: 'read', payload: { to, msg_id: all.slice(i, i + READ_BATCH_SIZE) } })
-      }
+      result.push(...readBatches(to, ids))
     }
     return result
   } catch {
@@ -331,7 +328,7 @@ function queuePendingRecall(payload) {
   if (!isValidPendingRecall(payload)) return false
   const existing = pendingQueue.find(item => item.type === 'recall' && item.payload?.msg_id === payload.msg_id)
   if (existing) {
-    existing.payload = { ...payload }
+    existing.payload = { ...existing.payload, proof: existing.payload.proof === undefined ? payload.proof : existing.payload.proof }
     savePendingQueue()
     return true
   }
@@ -362,7 +359,7 @@ function queuePendingGroupRecall(payload) {
   if (!isValidPendingGroupRecall(payload)) return false
   const existing = pendingQueue.find(item => item.type === 'group_recall' && item.payload?.msg_id === payload.msg_id)
   if (existing) {
-    existing.payload = { ...payload }
+    existing.payload = { ...existing.payload, proof: existing.payload.proof === undefined ? payload.proof : existing.payload.proof }
     savePendingQueue()
     return true
   }
@@ -446,7 +443,7 @@ function syncServerClock(serverTime) {
 // Using server authentication time + monotonic clock advancement, modifying the device time while the page is open will not extend the time it disappears after reading.
 // It is degraded to the local time before the authentication is completed.
 export function getServerNow() {
-  return getCalibratedServerNow() ?? Date.now()
+  return Math.floor(getCalibratedServerNow() ?? Date.now())
 }
 
 // Security-sensitive UI (such as screenshot watermarks) must not silently use
@@ -456,23 +453,40 @@ export function getCalibratedServerNow() {
   return serverClock.epochMs + (performance.now() - serverClock.monotonicMs)
 }
 
-function queuePendingRead(payload) {
-  if (!payload || typeof payload.to !== 'string' || !Array.isArray(payload.msg_id)) return
-  const ids = new Set()
-  for (const item of pendingQueue) {
-    if (item?.type === 'read' && item.payload?.to === payload.to && Array.isArray(item.payload.msg_id)) {
-      item.payload.msg_id.forEach(id => { if (typeof id === 'string' && id) ids.add(id) })
+function mergeReadProof(proofs, id, proof) {
+  if (!proofs.has(id) || proofs.get(id) === undefined) proofs.set(id, proof)
+}
+
+function readBatch(to, ids, proofs) {
+  const entries = ids.filter(id => proofs.get(id) !== undefined).map(id => [id, proofs.get(id)])
+  return { to, msg_id: ids, ...(entries.length ? { proofs: Object.fromEntries(entries) } : {}) }
+}
+
+function readBatches(to, proofs) {
+  const batches = []
+  for (const signed of [true, false]) {
+    const ids = [...proofs.keys()].filter(id => (proofs.get(id) !== undefined) === signed)
+    for (let index = 0; index < ids.length; index += READ_BATCH_SIZE) {
+      batches.push({ type: 'read', payload: readBatch(to, ids.slice(index, index + READ_BATCH_SIZE), proofs) })
     }
   }
-  payload.msg_id.forEach(id => { if (typeof id === 'string' && id) ids.add(id) })
+  return batches
+}
+
+function queuePendingRead(payload) {
+  if (!payload || typeof payload.to !== 'string' || !Array.isArray(payload.msg_id)) return
+  const ids = new Map()
+  for (const item of pendingQueue) {
+    if (item?.type === 'read' && item.payload?.to === payload.to && Array.isArray(item.payload.msg_id)) {
+      item.payload.msg_id.forEach(id => { if (typeof id === 'string' && id) mergeReadProof(ids, id, item.payload.proofs?.[id]) })
+    }
+  }
+  payload.msg_id.forEach(id => { if (typeof id === 'string' && id) mergeReadProof(ids, id, payload.proofs?.[id]) })
 
   for (let i = pendingQueue.length - 1; i >= 0; i--) {
     if (pendingQueue[i]?.type === 'read' && pendingQueue[i].payload?.to === payload.to) pendingQueue.splice(i, 1)
   }
-  const all = [...ids]
-  for (let i = 0; i < all.length; i += READ_BATCH_SIZE) {
-    pendingQueue.push({ type: 'read', payload: { to: payload.to, msg_id: all.slice(i, i + READ_BATCH_SIZE) } })
-  }
+  pendingQueue.push(...readBatches(payload.to, ids))
   savePendingQueue()
 }
 
@@ -485,6 +499,7 @@ export function confirmPendingReads(to, msgIds) {
     const item = pendingQueue[i]
     if (item?.type !== 'read' || item.payload?.to !== to || !Array.isArray(item.payload.msg_id)) continue
     item.payload.msg_id = item.payload.msg_id.filter(id => !confirmed.has(id))
+    for (const id of confirmed) if (item.payload.proofs) delete item.payload.proofs[id]
     if (item.payload.msg_id.length === 0) pendingQueue.splice(i, 1)
   }
   savePendingQueue()
@@ -699,8 +714,8 @@ export function connect() {
             beginPendingMessageSync()
           } else {
             console.warn('[ws] auth failed:', msg.payload?.reason)
-            // Authentication failed, disconnected
-            disconnect()
+            if (msg.payload?.retryable === true) forceReconnect('auth_temporarily_unavailable')
+            else disconnect()
           }
           return
         }
@@ -785,7 +800,10 @@ function sendAuth(token, resolve, authenticatingSocket = socket) {
           // Restore original message processing
           authenticatingSocket.onmessage = origOnMessage
           resolve()
-          if (!msg.payload?.success) disconnect()
+          if (!msg.payload?.success) {
+            if (msg.payload?.retryable === true) forceReconnect('auth_temporarily_unavailable')
+            else disconnect()
+          }
           return
         }
         // Other messages are handed over to the original processing
@@ -972,7 +990,7 @@ function flushPendingQueue() {
     }
     if (item.type !== 'read') return []
     const ids = (item.payload?.msg_id || []).filter(id => !pendingReadInFlight.has(`${item.payload.to}\u0000${id}`))
-    return ids.length > 0 ? [{ type: item.type, payload: { ...item.payload, msg_id: ids } }] : []
+    return ids.length > 0 ? [{ type: item.type, payload: readBatch(item.payload.to, ids, new Map(ids.map(id => [id, item.payload.proofs?.[id]]))) }] : []
   })
   const sentItems = []
   // Queue entries are retained until read_ack; connections that are disconnected immediately after sending will be safely retransmitted upon reconnection.

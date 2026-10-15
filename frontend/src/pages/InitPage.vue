@@ -163,7 +163,7 @@ const inviteCode = ref("");
 const inviterInfo = ref(null);
 const inviteError = ref(false);
 
-// Native clients (Electron / Tauri desktop, Capacitor Android) can also be registered without an invitation code
+// Native clients (Tauri desktop, Capacitor Android) can also be registered without an invitation code
 const isNativeApp = isNativeShell();
 
 function goHome() {

@@ -12,6 +12,8 @@
  * - Security improvements: Private keys are stored encrypted by default and protected with device keys
  */
 
+import { isStrongSecurityCode } from './security-lock.mjs'
+
 const DB_NAME = 'e2eechat'
 const DB_VERSION = 2  //Upgrade version to support device key storage
 const STORE_NAME = 'identity'
@@ -52,9 +54,10 @@ async function dbPut(record, storeName = STORE_NAME) {
   const db = await openDB()
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readwrite')
-    const req = tx.objectStore(storeName).put(record)
-    req.onsuccess = () => resolve()
-    req.onerror = (e) => reject(e.target.error)
+    tx.objectStore(storeName).put(record)
+    tx.oncomplete = () => resolve()
+    tx.onabort = () => reject(tx.error || new Error('Key storage transaction aborted'))
+    tx.onerror = (e) => reject(e.target.error)
   })
 }
 
@@ -66,6 +69,26 @@ async function dbDelete(key, storeName = STORE_NAME) {
     req.onsuccess = () => resolve()
     req.onerror = (e) => reject(e.target.error)
   })
+}
+
+async function replaceKeyRecord(previous, replacement) {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readwrite')
+    const store = transaction.objectStore(STORE_NAME)
+    const request = store.get(KEY_RECORD_ID)
+    let updated = false
+    request.onsuccess = () => {
+      const current = request.result
+      const fields = ['pubKeyB64', 'hasSecurityCode', 'encryptedPrivateKey', 'deviceKeyIv', 'iv', 'salt', 'privKeyB64', 'updatedAt']
+      if (!current || fields.some(field => current[field] !== previous[field])) return
+      store.put(replacement)
+      updated = true
+    }
+    transaction.oncomplete = () => resolve(updated)
+    transaction.onabort = () => reject(transaction.error || new Error('Identity key update aborted'))
+    transaction.onerror = () => reject(transaction.error)
+  }).finally(() => db.close())
 }
 
 // ──Device key (used to encrypt the private key)────────────────────────────────────
@@ -157,7 +180,6 @@ export async function generateAndStoreKeyPair() {
   await dbPut({
     id: KEY_RECORD_ID,
     publicKey: keyPair.publicKey,
-    privateKey: keyPair.privateKey,  //CryptoKey object, IndexedDB can store
     pubKeyB64,
     encryptedPrivateKey: bufToB64(encryptedPrivKey),  //Encrypted private key
     deviceKeyIv: bufToB64(iv),  //Encryption IV
@@ -194,10 +216,25 @@ export async function loadKeyPair() {
     keys.privKeyB64 = null
     return keys
   }
+  if (record.hasSecurityCode) throw new Error('Private key is locked')
 
   // If there is a CryptoKey object in IndexedDB, use it directly (the fastest for daily operations)
   if (record.privateKey) {
     keys.privateKey = record.privateKey
+    if (!record.hasDeviceEncryption) {
+      const deviceKey = await getOrCreateDeviceKey()
+      const iv = crypto.getRandomValues(new Uint8Array(12))
+      const rawKey = await crypto.subtle.exportKey('pkcs8', keys.privateKey)
+      const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, deviceKey, rawKey)
+      const { privateKey: storedKey, privKeyB64: storedBackup, ...protectedRecord } = record
+      void storedKey
+      void storedBackup
+      if (!await replaceKeyRecord(record, { ...protectedRecord, hasDeviceEncryption: true, encryptedPrivateKey: bufToB64(encrypted), deviceKeyIv: bufToB64(iv) })) throw new Error('Identity key changed during migration')
+    } else {
+      const { privateKey: storedKey, ...protectedRecord } = record
+      void storedKey
+      if (!await replaceKeyRecord(record, protectedRecord)) throw new Error('Identity key changed during migration')
+    }
     return keys
   }
 
@@ -221,12 +258,6 @@ export async function loadKeyPair() {
         ['deriveKey', 'deriveBits']
       )
 
-      // Cache CryptoKey objects for quick subsequent access
-      await dbPut({
-        ...record,
-        privateKey: keys.privateKey
-      })
-
       return keys
     } catch (e) {
       console.error('[crypto] decrypt private key failed:', e)
@@ -244,6 +275,12 @@ export async function loadKeyPair() {
       true,
       ['deriveKey', 'deriveBits']
     )
+    const deviceKey = await getOrCreateDeviceKey()
+    const iv = crypto.getRandomValues(new Uint8Array(12))
+    const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, deviceKey, privKeyBuf)
+    const { privKeyB64: storedBackup, ...protectedRecord } = record
+    void storedBackup
+    if (!await replaceKeyRecord(record, { ...protectedRecord, hasDeviceEncryption: true, encryptedPrivateKey: bufToB64(encrypted), deviceKeyIv: bufToB64(iv) })) throw new Error('Identity key changed during migration')
   }
 
   return keys
@@ -254,6 +291,9 @@ export async function loadKeyPair() {
  * Also delete the device key
  */
 export async function clearKeyPair() {
+  lock()
+  if (autoLockTimer) clearInterval(autoLockTimer)
+  autoLockTimer = null
   await dbDelete(KEY_RECORD_ID)
   await dbDelete('device_encrypt_key', DEVICE_KEY_STORE)
 }
@@ -263,10 +303,15 @@ export async function clearKeyPair() {
  * Requires unlocked status in security code mode
  */
 export async function exportPrivateKey() {
+  const generation = keyLockGeneration
+  const checked = value => {
+    if (generation !== keyLockGeneration) throw new Error('Private key was locked during export')
+    return value
+  }
   // Unlocked encryption mode
   if (decryptedPrivateKeyCache) {
     const buf = await crypto.subtle.exportKey('pkcs8', decryptedPrivateKeyCache)
-    return bufToB64(buf)
+    return checked(bufToB64(buf))
   }
 
   const record = await dbGet(KEY_RECORD_ID)
@@ -279,7 +324,7 @@ export async function exportPrivateKey() {
   // Export from CryptoKey
   if (record.privateKey) {
     const buf = await crypto.subtle.exportKey('pkcs8', record.privateKey)
-    return bufToB64(buf)
+    return checked(bufToB64(buf))
   }
 
   // Export after decryption from encrypted storage
@@ -293,11 +338,11 @@ export async function exportPrivateKey() {
       deviceKey,
       encryptedBuf
     )
-    return bufToB64(privKeyBuf)
+    return checked(bufToB64(privKeyBuf))
   }
 
   // Compatible with old data
-  return record.privKeyB64
+  return checked(record.privKeyB64)
 }
 
 /**
@@ -349,7 +394,6 @@ export async function importPrivateKey(privKeyB64) {
   await dbPut({
     id: KEY_RECORD_ID,
     publicKey,
-    privateKey,  //CryptoKey object
     pubKeyB64,
     encryptedPrivateKey: bufToB64(encryptedPrivKey),
     deviceKeyIv: bufToB64(iv),
@@ -489,13 +533,77 @@ const STORE_LOCK = 'lock_config'
 
 // Memory variables (not persisted)
 let decryptedPrivateKeyCache = null  //Unlocked private key
+let keyLockGeneration = 0
+
+export async function getLocalDataWrappingKey() {
+  const record = await loadKeyPair()
+  if (!record?.privateKey) throw new Error('Private key is locked')
+  const privateMaterial = await crypto.subtle.exportKey('pkcs8', record.privateKey)
+  const material = await crypto.subtle.importKey('raw', privateMaterial, 'HKDF', false, ['deriveKey'])
+  return crypto.subtle.deriveKey({
+    name: 'HKDF', hash: 'SHA-256',
+    salt: new Uint8Array(32),
+    info: new TextEncoder().encode('yunmi.local-data-key.v2'),
+  }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])
+}
+
+export async function canonicalPeerPublicKey(publicKeyB64) {
+  if (!publicKeyB64) throw new Error('Peer identity is missing')
+  const publicKey = await crypto.subtle.importKey('spki', b64ToBuf(publicKeyB64), { name: 'ECDH', namedCurve: 'P-256' }, true, [])
+  return bufToB64(await crypto.subtle.exportKey('spki', publicKey))
+}
+
+export async function getPinnedPeerPublicKey(accountId, peerId) {
+  if (!accountId || !peerId) return null
+  const db = await openDB()
+  try {
+    const record = await new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, 'readonly')
+      const request = transaction.objectStore(STORE_NAME).get(`peer:${accountId}:${peerId}`)
+      request.onsuccess = () => resolve(request.result || null)
+      request.onerror = () => reject(request.error)
+    })
+    return record?.publicKey || null
+  } finally {
+    db.close()
+  }
+}
+
+export async function pinPeerPublicKey(accountId, peerId, publicKeyB64) {
+  if (!accountId || !peerId || !publicKeyB64) throw new Error('Peer identity is missing')
+  const canonicalKey = await canonicalPeerPublicKey(publicKeyB64)
+  const id = `peer:${accountId}:${peerId}`
+  const db = await openDB()
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readwrite')
+    const store = transaction.objectStore(STORE_NAME)
+    const request = store.get(id)
+    let mismatch = false
+    request.onsuccess = () => {
+      if (request.result && request.result.publicKey !== canonicalKey) {
+        mismatch = true
+        transaction.abort()
+      } else if (!request.result) {
+        store.put({ id, publicKey: canonicalKey })
+      }
+    }
+    transaction.oncomplete = () => resolve()
+    transaction.onabort = () => {
+      const error = mismatch ? new Error('Peer identity key has changed') : transaction.error || new Error('Peer identity storage aborted')
+      if (mismatch) error.code = 'peer_key_changed'
+      reject(error)
+    }
+    transaction.onerror = () => reject(transaction.error)
+  }).finally(() => db.close())
+  return canonicalKey
+}
 
 // ── Derive the encryption key ─────────────────────────────────────────────
 
 /**
  * Deriving AES-256-GCM encryption keys from security codes using PBKDF2
  */
-async function deriveKeyFromCode(code, salt) {
+async function deriveKeyFromCode(code, salt, iterations = 600000) {
   const codeKeyMaterial = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(code),
@@ -508,7 +616,7 @@ async function deriveKeyFromCode(code, salt) {
     {
       name: 'PBKDF2',
       salt: salt,
-      iterations: 100000,
+      iterations,
       hash: 'SHA-256'
     },
     codeKeyMaterial,
@@ -525,9 +633,10 @@ async function deriveKeyFromCode(code, salt) {
  * @param {string} code - 6-digit security code
  */
 export async function setupSecurityCode(code) {
+  const generation = keyLockGeneration
   // Check format
-  if (!/^\d{6}$/.test(code)) {
-    throw new Error('The security code must be 6 pure digits')
+  if (!isStrongSecurityCode(code)) {
+    throw new Error('Use 12–128 characters including letters and numbers')
   }
 
   // Load existing private key
@@ -552,6 +661,8 @@ export async function setupSecurityCode(code) {
     privKeyBuf
   )
 
+  if (generation !== keyLockGeneration) throw new Error('Private key was locked during security code setup')
+
   // 4. Store the encrypted private key + salt value + IV
   await dbPut({
     id: KEY_RECORD_ID,
@@ -560,11 +671,13 @@ export async function setupSecurityCode(code) {
     iv: bufToB64(iv),
     pubKeyB64: record.pubKeyB64,
     hasSecurityCode: true,
+    iterations: 600000,
+    credentialType: 'passphrase',
     updatedAt: Date.now()
   })
 
   // 5. Clear memory cache
-  decryptedPrivateKeyCache = null
+  lock()
 
   return true
 }
@@ -577,13 +690,16 @@ export async function setupSecurityCode(code) {
  * @returns {boolean} whether successful
  */
 export async function verifySecurityCode(code) {
+  const generation = keyLockGeneration
   const record = await dbGet(KEY_RECORD_ID)
   if (!record || !record.hasSecurityCode) {
     return false
   }
 
   const salt = b64ToBuf(record.salt)
-  const encryptionKey = await deriveKeyFromCode(code, salt)
+  const iterations = record.iterations ?? 100000
+  if (![100000, 600000].includes(iterations)) return false
+  const encryptionKey = await deriveKeyFromCode(code, salt, iterations)
 
   try {
     // Try to decrypt the private key
@@ -603,6 +719,18 @@ export async function verifySecurityCode(code) {
     )
 
     // Cache decrypted private key
+    if (generation !== keyLockGeneration) return false
+    if (iterations < 600000 || record.privateKey || record.privKeyB64) {
+      const upgradedKey = await deriveKeyFromCode(code, salt)
+      const iv = crypto.getRandomValues(new Uint8Array(12))
+      const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, upgradedKey, privateKeyBuf)
+      if (generation !== keyLockGeneration) return false
+      const { privateKey: storedKey, privKeyB64: storedBackup, ...protectedRecord } = record
+      void storedKey
+      void storedBackup
+      if (!await replaceKeyRecord(record, { ...protectedRecord, iv: bufToB64(iv), encryptedPrivateKey: bufToB64(encrypted), iterations: 600000 })) return false
+    }
+    if (generation !== keyLockGeneration) return false
     decryptedPrivateKeyCache = privateKey
 
     return true
@@ -642,6 +770,7 @@ export async function hasSecurityCode() {
  * Lock now (clear private key cache in memory)
  */
 export function lock() {
+  keyLockGeneration++
   decryptedPrivateKeyCache = null
 }
 
@@ -676,17 +805,22 @@ export async function disableSecurityCode(code) {
 
   const record = await dbGet(KEY_RECORD_ID)
 
-  // Restore no security code mode: only CryptoKey objects are saved, no raw bytes are saved (to prevent clear text from being written to disk)
+  const deviceKey = await getOrCreateDeviceKey()
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const rawKey = await crypto.subtle.exportKey('pkcs8', decryptedPrivateKeyCache)
+  const encryptedPrivateKey = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, deviceKey, rawKey)
   await dbPut({
     id: KEY_RECORD_ID,
-    privateKey: decryptedPrivateKeyCache,
     pubKeyB64: record.pubKeyB64,
     hasSecurityCode: false,
+    hasDeviceEncryption: true,
+    encryptedPrivateKey: bufToB64(encryptedPrivateKey),
+    deviceKeyIv: bufToB64(iv),
     updatedAt: Date.now()
   })
 
   // clear cache
-  decryptedPrivateKeyCache = null
+  lock()
 
   return true
 }
@@ -841,12 +975,5 @@ export async function decryptFile(payload) {
  * Export private key (need to be in unlocked state)
  */
 export async function exportPrivateKeyWithCode() {
-  if (decryptedPrivateKeyCache) {
-    const buf = await crypto.subtle.exportKey('pkcs8', decryptedPrivateKeyCache)
-    return bufToB64(buf)
-  }
-  // Fallback to clear text mode
-  const record = await loadKeyPair()
-  if (!record) throw new Error('no key pair found')
-  return record.privKeyB64 || bufToB64(await crypto.subtle.exportKey('pkcs8', record.privateKey))
+  return exportPrivateKey()
 }

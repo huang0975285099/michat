@@ -288,9 +288,9 @@
                         v-model="setupCode1"
                         outlined
                         dense
-                        maxlength="6"
-                        inputmode="numeric"
-                        :placeholder="t('profile.sixDigits')"
+                        maxlength="128"
+                        type="password"
+                        :placeholder="t('profile.strongCodeHint')"
                         class="q-mb-sm"
                     />
 
@@ -299,9 +299,9 @@
                         v-model="setupCode2"
                         outlined
                         dense
-                        maxlength="6"
-                        inputmode="numeric"
-                        :placeholder="t('profile.sixDigits')"
+                        maxlength="128"
+                        type="password"
+                        :placeholder="t('profile.strongCodeHint')"
                         class="q-mb-sm"
                     />
 
@@ -360,6 +360,7 @@
                         class="full-width"
                         @click="showDisableConfirm = true"
                     />
+                    <q-btn flat color="primary" :label="t('profile.changeCode')" @click="showLockSettings = false; showSetupDialog = true" />
                 </q-card-section>
                 <q-card-actions align="right">
                     <q-btn flat :label="t('common.close')" v-close-popup />
@@ -382,9 +383,9 @@
                         v-model="disableCode"
                         outlined
                         dense
-                        maxlength="6"
-                        inputmode="numeric"
-                        :placeholder="t('profile.sixDigits')"
+                        maxlength="128"
+                        type="password"
+                        :placeholder="t('profile.codeLabel')"
                     />
                 </q-card-section>
                 <q-card-actions align="right">
@@ -393,7 +394,7 @@
                         unelevated
                         color="negative"
                         :label="t('profile.confirmDisableCode')"
-                        :disable="disableCode.length !== 6"
+                        :disable="!disableCode.length"
                         @click="doDisable"
                     />
                 </q-card-actions>
@@ -630,6 +631,7 @@ import { isNativeShell } from "src/services/platform";
 import DeterministicAvatar from "src/components/DeterministicAvatar.vue";
 import { useI18n } from "src/i18n";
 import { openUpdateUrl, selectUpdateUrl } from "src/services/native-update.mjs";
+import { isStrongSecurityCode } from "src/services/security-lock.mjs";
 
 const $q = useQuasar();
 const router = useRouter();
@@ -763,7 +765,7 @@ function lockTimeoutLabel(value) {
 
 const canSetup = computed(
     () =>
-        /^\d{6}$/.test(setupCode1.value) &&
+        isStrongSecurityCode(setupCode1.value) &&
         setupCode1.value === setupCode2.value,
 );
 
@@ -789,13 +791,23 @@ function openBackupDialog() {
 watch(showBackupDialog, async (open) => {
     if (open) {
         try {
-            privKey.value = await identity.exportKey();
+            const exported = await identity.exportKey();
+            if (showBackupDialog.value && !identity.isLocked) privKey.value = exported;
         } catch {
             privKey.value = t("profile.keyReadFailed");
         }
     } else {
         privKey.value = "";
     }
+});
+
+watch(() => identity.isLocked, locked => {
+    if (!locked) return;
+    showBackupDialog.value = false;
+    privKey.value = '';
+    setupCode1.value = '';
+    setupCode2.value = '';
+    disableCode.value = '';
 });
 
 function copyId() {

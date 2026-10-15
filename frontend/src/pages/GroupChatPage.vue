@@ -18,6 +18,13 @@
       {{ t('groups.removed') }}
     </div>
 
+    <div v-if="!groupStore.isMembershipTrusted(groupId)" class="group-security-alert" role="alert">
+      <div class="group-security-alert-copy">
+        <q-icon name="gpp_maybe" size="19px" />
+        <span class="group-security-alert-text">{{ t('groupSecurity.unapproved') }}</span>
+      </div>
+      <q-btn flat :label="t('groupSecurity.shortTitle')" @click="$router.push(`/group/${groupId}/info`)" />
+    </div>
     <div class="messages-container" ref="messagesContainer" @scroll="onMessagesScroll">
       <div v-if="messages.length === 0" class="empty-hint">{{ t('groups.noMessages') }}</div>
       <div
@@ -111,6 +118,7 @@
                 <q-icon v-if="msg.status === 'pending'" name="schedule" size="13px"><q-tooltip>{{ t('chat.sending') }}</q-tooltip></q-icon>
                 <q-icon v-else-if="msg.status === 'queued'" name="cloud_upload" size="13px"><q-tooltip>{{ t('chat.queued') }}</q-tooltip></q-icon>
                 <q-icon v-else-if="msg.status === 'failed'" name="error_outline" size="13px"><q-tooltip>{{ t('chat.messageSendFailed') }}</q-tooltip></q-icon>
+                <button v-if="msg.status === 'sent'" type="button" class="group-read-button" @click.stop="openReaders(msg)">{{ readRows(msg.id).length ? t('groupReads.count', { read: readCount(msg.id), total: readRows(msg.id).length }) : t('groupReads.view') }}</button>
               </div>
               <message-action-menu :can-reply="canReply(msg)" :can-copy="canCopy(msg)" :can-delete="canDelete(msg)" :can-recall="canRecall(msg)" @reply="startReply(msg)" @copy="copyMessage(msg)" @delete="deleteMessage(msg)" @recall="onRecall(msg)" />
             </div>
@@ -147,7 +155,7 @@
     </div>
     <div class="composer" v-if="!dissolved && !removed">
       <div v-if="muted" class="muted-notice">
-        {{ t('groups.muted') }}<span v-if="muteEndTime"> {{ t('groups.mutedUntil', { time: muteEndTime }) }}</span>
+        {{ t('groups.muted') }}
       </div>
       <template v-else>
       <div v-if="replyTarget" class="reply-composer-bar">
@@ -213,6 +221,7 @@
       :start-id="imagePreview.startId"
       @download="downloadGalleryImage"
     />
+    <group-read-dialog v-model="showReadDialog" :receipts="selectedReadRows" />
   </q-page>
 </template>
 
@@ -227,6 +236,8 @@ import { useIdentityStore } from 'src/stores/identity'
 import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
 import MessageActionMenu from 'src/components/MessageActionMenu.vue'
 import ImageGalleryDialog from 'src/components/ImageGalleryDialog.vue'
+import GroupReadDialog from 'src/components/GroupReadDialog.vue'
+import { useGroupReadReceipts } from 'src/composables/useGroupReadReceipts'
 import { attachmentApi, groupApi } from 'src/services/api.js'
 import { downloadOfflineAttachment, acknowledgeGroupAttachment } from 'src/services/offline-attachment.mjs'
 import { useChatHistoryWindow } from 'src/composables/useChatHistoryWindow'
@@ -272,12 +283,15 @@ const pageEl = ref(null)
 let heightResizeObserver = null
 let highlightTimer = null
 let pageUnmounted = false
+let sensitiveGeneration = 0
+const sensitiveTaskValid = generation => generation === sensitiveGeneration && !identity.isLocked && !pageUnmounted
 const isPageActive = ref(false)
 
 // 历史窗口：全量消息留在 store（群信息页等依赖全量数组），页面只渲染最近一窗口，
 // 滚动到顶部补页——与 ChatPage 共用同一机制（useChatHistoryWindow）
 const { visibleMessages, hasOlder, loadingOlder, loadOlder } = useChatHistoryWindow(chatStore, groupId)
 const messages = visibleMessages
+const { rows: readRows, readCount, selectedRows: selectedReadRows, showDialog: showReadDialog, openReaders } = useGroupReadReceipts(groupId, isPageActive, messages)
 
 // 图片预览画廊（与 ChatPage 一致）
 const imagePreview = ref({ show: false, startId: '' })
@@ -290,7 +304,7 @@ const galleryImages = computed(() => messages.value
   })))
 
 function openImagePreview(message) {
-  if (!message?.id || !message.objectUrl) return
+  if (identity.isLocked || pageUnmounted || !message?.id || !message.objectUrl) return
   imagePreview.value = { show: true, startId: message.id }
 }
 
@@ -304,12 +318,7 @@ const memberCount = computed(() => groupStore.getMembers(groupId).length)
 const dissolved = computed(() => groupStore.isDissolved(groupId))
 const removed = computed(() => groupStore.isRemoved(groupId))
 const muted = computed(() => groupStore.amIMuted(groupId))
-const muteEndTime = computed(() => {
-  const members = groupStore.getMembers(groupId)
-  const me = members.find(m => m.chat_id === identity.chatId)
-  return me?.muted_until ? new Date(me.muted_until).toLocaleString() : null
-})
-const canInput = computed(() => !muted.value && !dissolved.value && !removed.value)
+const canInput = computed(() => !identity.isLocked && !muted.value && !dissolved.value && !removed.value)
 const canSend = computed(() => inputText.value.trim().length > 0 && canInput.value && !sending.value)
 
 function canReply(message) {
@@ -451,6 +460,7 @@ function notifyImageRejections(rejected) {
 
 async function addSelectedImages(files) {
   if (imageProcessing.value.active || imageSending.value.active || !canInput.value) return
+  const generation = sensitiveGeneration
   const existing = new Map(selectedImages.value.map(item => [imageSelectionKey(item.originalFile), item]))
   const merged = mergeImageSelection(selectedImages.value.map(item => item.originalFile), Array.from(files || [], normalizedImageFile))
   const next = []
@@ -462,14 +472,16 @@ async function addSelectedImages(files) {
         next.push(item)
         continue
       }
-      if (pageUnmounted) break
+      if (!sensitiveTaskValid(generation)) break
       imageProcessing.value.current++
       try {
         const prepared = await compressImageForSending(file)
+        if (!sensitiveTaskValid(generation)) break
         if (prepared.file.size > MAX_IMAGE_FILE_BYTES) throw new Error(t('chat.attachmentFileTooLarge', { size: formatFileSize(prepared.file.size), max: formatFileSize(MAX_IMAGE_FILE_BYTES) }))
         chatStore.validateFile(prepared.file)
         next.push({ id: crypto.randomUUID(), originalFile: file, preparedFile: prepared.file, previewUrl: URL.createObjectURL(prepared.file) })
       } catch (error) {
+        if (!sensitiveTaskValid(generation)) break
         if (error?.code !== 'dimensions_too_large' && file.size <= MAX_IMAGE_FILE_BYTES) {
           try {
             chatStore.validateFile(file)
@@ -481,9 +493,9 @@ async function addSelectedImages(files) {
       }
     }
   } finally {
-    imageProcessing.value = { active: false, current: 0, total: 0 }
+    if (sensitiveTaskValid(generation)) imageProcessing.value = { active: false, current: 0, total: 0 }
   }
-  if (pageUnmounted) {
+  if (!sensitiveTaskValid(generation)) {
     next.forEach(disposeSelectedImage)
     return
   }
@@ -507,15 +519,17 @@ async function onComposerPaste(event) {
 async function sendSelectedImages() {
   if (!selectedImages.value.length || imageSending.value.active || imageProcessing.value.active || imageOriginalOversize.value || !canInput.value) return
   const queue = [...selectedImages.value]
+  const generation = sensitiveGeneration
   imageSending.value = { active: true, current: 0, total: queue.length }
   try {
     for (const item of queue) {
-      if (pageUnmounted) break
+      if (!sensitiveTaskValid(generation) || !canInput.value) break
       imageSending.value.current++
       const file = imageSendMode.value === 'original' ? item.originalFile : item.preparedFile
       try {
         chatStore.validateFile(file)
         const sent = await chatStore.sendGroupFile(groupId, file)
+        if (!sensitiveTaskValid(generation)) return
         if (!sent) throw new Error(t('chat.messageSendFailed'))
         const index = selectedImages.value.findIndex(selected => selected.id === item.id)
         if (index >= 0) disposeSelectedImage(selectedImages.value.splice(index, 1)[0])
@@ -524,11 +538,11 @@ async function sendSelectedImages() {
         break
       }
     }
-    if (!selectedImages.value.length && !pageUnmounted) {
+    if (!selectedImages.value.length && sensitiveTaskValid(generation)) {
       $q.notify({ type: 'positive', message: t('chat.imagesSent', { count: queue.length }), timeout: 1800 })
     }
   } finally {
-    imageSending.value = { active: false, current: 0, total: 0 }
+    if (sensitiveTaskValid(generation)) imageSending.value = { active: false, current: 0, total: 0 }
     await nextTick()
     scrollToBottom()
   }
@@ -549,6 +563,7 @@ function updatePageHeight() {
 }
 
 onMounted(async () => {
+  isPageActive.value = true
   groupStore.setMyChatId(identity.chatId)
   // 先确定页面高度再加载消息，保证滚动到底部计算正确
   updatePageHeight()
@@ -581,7 +596,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  isPageActive.value = false
   pageUnmounted = true
+  sensitiveGeneration += 1
   selectedImages.value.forEach(disposeSelectedImage)
   selectedImages.value = []
   if (highlightTimer) clearTimeout(highlightTimer)
@@ -685,8 +702,37 @@ watch(
 // ── 群文件下载 ──
 const fileBusy = ref({})
 
+watch(() => identity.isLocked, locked => {
+  if (!locked) return
+  sensitiveGeneration += 1
+  imagePreview.value = { show: false, startId: '' }
+  selectedImages.value.forEach(disposeSelectedImage)
+  selectedImages.value = []
+  for (const [message, url] of previewUrls) {
+    if (message.objectUrl === url) message.objectUrl = null
+    URL.revokeObjectURL(url)
+  }
+  previewUrls.clear()
+  for (const message of messages.value) {
+    if (message.objectUrl) URL.revokeObjectURL(message.objectUrl)
+    message.objectUrl = null
+  }
+  fileBusy.value = {}
+  if (fileInput.value) fileInput.value.value = ''
+  if (imageInput.value) imageInput.value.value = ''
+  inputText.value = ''
+  replyTarget.value = null
+  morePanelOpen.value = false
+  sending.value = false
+  imageProcessing.value = { active: false, current: 0, total: 0 }
+  imageSending.value = { active: false, current: 0, total: 0 }
+}, { flush: 'sync' })
+
 async function loadGroupFile(message) {
+  const generation = sensitiveGeneration
+  if (!sensitiveTaskValid(generation)) return null
   const localUrl = message.objectUrl || (message.localFileAvailable ? await chatStore.ensureFileObjectUrl(message) : null)
+  if (!sensitiveTaskValid(generation)) return null
   if (localUrl) return fetch(localUrl).then(response => response.blob())
   const metadata = message.offlineAttachment
   if (!metadata?.attachmentId) return null
@@ -703,32 +749,35 @@ async function onPreviewFile(message) {
 }
 
 async function loadGroupImagePreview(message, openPreview = false) {
-  if (fileBusy.value[message.id] || pageUnmounted) return
+  const generation = sensitiveGeneration
+  if (fileBusy.value[message.id] || !sensitiveTaskValid(generation)) return
   fileBusy.value[message.id] = true
   try {
     if (message.localFileAvailable && await chatStore.ensureFileObjectUrl(message)) {
+      if (!sensitiveTaskValid(generation)) return
       if (openPreview) openImagePreview(message)
       return
     }
     const blob = await loadGroupFile(message)
-    if (!blob) return
+    if (!blob || !sensitiveTaskValid(generation)) return
     try {
       const cached = await chatStore.cacheGroupAttachment(groupId, message.id, blob, message.filetype)
-      if (!cached) return
+      if (!cached || !sensitiveTaskValid(generation)) return
       await acknowledgeGroupAttachment(message.offlineAttachment, { api: groupApi }).catch(error => {
         console.warn('[group] attachment ack failed', error)
       })
     } catch (error) {
+      if (!sensitiveTaskValid(generation)) return
       console.warn('[group] local image cache failed', error)
       message.objectUrl = URL.createObjectURL(blob)
       previewUrls.set(message, message.objectUrl)
     }
     await nextTick()
-    if (openPreview) openImagePreview(message)
+    if (openPreview && sensitiveTaskValid(generation)) openImagePreview(message)
   } catch (error) {
     if (openPreview) $q.notify({ type: 'negative', message: t('chat.actionFailed') })
   } finally {
-    fileBusy.value[message.id] = false
+    if (sensitiveTaskValid(generation)) fileBusy.value[message.id] = false
   }
 }
 
@@ -746,6 +795,8 @@ watch(
 )
 
 async function onDownloadFile(msg) {
+  const generation = sensitiveGeneration
+  if (!sensitiveTaskValid(generation)) return
   if (fileBusy.value[msg.id]) return
   if (!msg.objectUrl && !msg.localFileAvailable && !msg.offlineAttachment?.attachmentId) return
   fileBusy.value[msg.id] = true
@@ -753,7 +804,7 @@ async function onDownloadFile(msg) {
   let browserDownloadStarted = false
   try {
     const blob = await loadGroupFile(msg)
-    if (!blob) return
+    if (!blob || !sensitiveTaskValid(generation)) return
     const chunkSize = 1024 * 1024
     const getDescriptor = async () => ({
       size: blob.size,
@@ -770,7 +821,7 @@ async function onDownloadFile(msg) {
       const result = await saveChunkReaderWithBrowserPicker({ filename: msg.filename, totalBytes: blob.size, getDescriptor })
       if (!result.unsupported) saved = result
     }
-    if (saved?.canceled) return
+    if (!sensitiveTaskValid(generation) || saved?.canceled) return
     if (!saved) {
       temporaryUrl = URL.createObjectURL(blob)
       triggerBrowserDownload(temporaryUrl, msg.filename)
@@ -797,7 +848,7 @@ async function onDownloadFile(msg) {
       if (browserDownloadStarted) setTimeout(() => URL.revokeObjectURL(temporaryUrl), 30000)
       else URL.revokeObjectURL(temporaryUrl)
     }
-    fileBusy.value[msg.id] = false
+    if (sensitiveTaskValid(generation)) fileBusy.value[msg.id] = false
   }
 }
 
@@ -812,6 +863,7 @@ async function onSend(event) {
     return
   }
   sending.value = true
+  const generation = sensitiveGeneration
   const pendingReply = replyTarget.value
   inputText.value = ''
   replyTarget.value = null
@@ -820,6 +872,7 @@ async function onSend(event) {
     if (!sent) throw new Error(t('chat.messageSendFailed'))
   } catch (e) {
     console.error('[group] send failed', e)
+    if (!sensitiveTaskValid(generation)) return
     inputText.value = text
     replyTarget.value = pendingReply
     $q.notify({ type: 'negative', message: t('chat.messageSendError', { error: e.message }) })
@@ -1053,6 +1106,18 @@ function shouldCompact(msgs, idx) {
 .composer-more-icon { width: 52px; height: 52px; display: flex; align-items: center; justify-content: center; border: 1px solid #e6edf4; border-radius: 15px; background: #fff; color: #557693; box-shadow: 0 2px 8px rgba(26,52,82,0.035); }
 .composer-more-action:disabled { opacity: 0.5; cursor: default; }
 .muted-notice, .dissolved-notice { text-align: center; color: #e8463a; padding: 8px; font-size: 13px; }
+.group-read-button { padding: 0 0 0 6px; border: 0; background: transparent; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
+.group-security-alert { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px; border-bottom: 1px solid #f2b9b6; color: #b42318; background: #fff0ef; font-size: 12px; line-height: 1.35; }
+.group-security-alert-copy { display: flex; flex: 1 1 auto; min-width: 0; align-items: center; justify-content: flex-start; gap: 7px; }
+.group-security-alert-copy > .q-icon { flex: 0 0 auto; }
+.group-security-alert-text { min-width: 0; }
+.group-security-alert :deep(.q-btn) { flex: 0 0 auto; min-height: 28px; padding: 0 8px; border-radius: 8px; color: #a51d17; font-weight: 650; }
+@media (max-width: 520px) {
+  .group-security-alert { flex-wrap: nowrap; gap: 5px; padding: 3px 8px; }
+  .group-security-alert-copy { flex: 1 1 auto; }
+  .group-security-alert-text { flex: 0 1 auto; }
+  .group-security-alert :deep(.q-btn) { margin-left: auto; padding: 0 5px; }
+}
 .file-card {
   display: flex;
   align-items: center;

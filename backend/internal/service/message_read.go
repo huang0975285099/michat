@@ -20,6 +20,7 @@ func NewMessageReadService(db *sql.DB) *MessageReadService {
 type ReadReceipt struct {
 	MsgID  string `json:"msg_id"`
 	ReadAt int64  `json:"read_at"`
+	Proof  string `json:"proof,omitempty"`
 }
 
 var (
@@ -37,10 +38,11 @@ const (
 // MessageDelivery contains delivery metadata. Ciphertext is kept separately and only until
 // the recipient confirms that it has been durably stored on the device.
 type MessageDelivery struct {
-	MsgID   string `json:"msg_id"`
-	MsgFrom string `json:"-"`
-	MsgTo   string `json:"-"`
-	SentAt  int64  `json:"ts"`
+	MsgID       string `json:"msg_id"`
+	MsgFrom     string `json:"-"`
+	MsgTo       string `json:"-"`
+	SentAt      int64  `json:"ts"`
+	RecallProof string `json:"-"`
 }
 
 // PendingEncryptedMessage is an E2EE envelope waiting for recipient persistence.
@@ -55,6 +57,7 @@ type PendingRecall struct {
 	MsgID      string `json:"msg_id"`
 	MsgFrom    string `json:"from"`
 	RecalledAt int64  `json:"recalled_at"`
+	Proof      string `json:"proof,omitempty"`
 }
 
 func msgIDTimestamp(msgID string) (int64, bool) {
@@ -242,7 +245,11 @@ func (s *MessageReadService) MarkEncryptedMessagesApplied(ctx context.Context, m
 
 // RecallMessage validates ownership, removes any not-yet-delivered ciphertext, and creates
 // an idempotent tombstone for the recipient. Repeating an already-applied recall does not reopen it.
-func (s *MessageReadService) RecallMessage(ctx context.Context, msgID, msgFrom, msgTo string) (MessageDelivery, bool, error) {
+func (s *MessageReadService) RecallMessage(ctx context.Context, msgID, msgFrom, msgTo string, proofs ...string) (MessageDelivery, bool, error) {
+	proof, err := controlProof(proofs)
+	if err != nil {
+		return MessageDelivery{}, false, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return MessageDelivery{}, false, err
@@ -255,9 +262,9 @@ func (s *MessageReadService) RecallMessage(ctx context.Context, msgID, msgFrom, 
 	var delivery MessageDelivery
 	var recalledAt sql.NullTime
 	if err = tx.QueryRowContext(ctx, `
-		SELECT msg_id, msg_from, msg_to, CAST(UNIX_TIMESTAMP(sent_at) * 1000 AS SIGNED), recalled_at
+		SELECT msg_id, msg_from, msg_to, CAST(UNIX_TIMESTAMP(sent_at) * 1000 AS SIGNED), recalled_at, COALESCE(recall_proof, '')
 		FROM message_deliveries WHERE msg_id = ? FOR UPDATE`, msgID,
-	).Scan(&delivery.MsgID, &delivery.MsgFrom, &delivery.MsgTo, &delivery.SentAt, &recalledAt); err != nil {
+	).Scan(&delivery.MsgID, &delivery.MsgFrom, &delivery.MsgTo, &delivery.SentAt, &recalledAt, &delivery.RecallProof); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return MessageDelivery{}, false, nil
 		}
@@ -281,9 +288,13 @@ func (s *MessageReadService) RecallMessage(ctx context.Context, msgID, msgFrom, 
 	if _, err = tx.ExecContext(ctx, `
 		UPDATE message_deliveries
 		SET encrypted_envelope = NULL, envelope_size = 0,
+		    recall_proof = IF(recalled_at IS NULL, ?, recall_proof),
 		    recalled_at = COALESCE(recalled_at, NOW(3))
-		WHERE msg_id = ?`, msgID); err != nil {
+		WHERE msg_id = ?`, proof, msgID); err != nil {
 		return MessageDelivery{}, false, err
+	}
+	if !recalledAt.Valid {
+		delivery.RecallProof = proof
 	}
 	if err = tx.Commit(); err != nil {
 		return MessageDelivery{}, false, err
@@ -296,7 +307,7 @@ func (s *MessageReadService) GetPendingRecalls(ctx context.Context, msgTo string
 		limit = MaxPendingMessageCount
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT msg_id, msg_from, CAST(UNIX_TIMESTAMP(recalled_at) * 1000 AS SIGNED)
+		SELECT msg_id, msg_from, CAST(UNIX_TIMESTAMP(recalled_at) * 1000 AS SIGNED), COALESCE(recall_proof, '')
 		FROM message_deliveries
 		WHERE msg_to = ? AND recalled_at IS NOT NULL AND recall_applied_at IS NULL
 		ORDER BY recalled_at, msg_id LIMIT ?`, msgTo, limit)
@@ -307,7 +318,7 @@ func (s *MessageReadService) GetPendingRecalls(ctx context.Context, msgTo string
 	result := make([]PendingRecall, 0)
 	for rows.Next() {
 		var item PendingRecall
-		if err = rows.Scan(&item.MsgID, &item.MsgFrom, &item.RecalledAt); err != nil {
+		if err = rows.Scan(&item.MsgID, &item.MsgFrom, &item.RecalledAt, &item.Proof); err != nil {
 			return nil, err
 		}
 		result = append(result, item)
@@ -393,19 +404,32 @@ func (s *MessageReadService) DeleteMessage(ctx context.Context, msgID, msgFrom, 
 
 // RecordReads records the first read time in batches (idempotent). INSERT ... SELECT also verifies that each message was actually sent by
 // msgFrom is sent to readerChatID; an ID that does not match the delivery record will not create a receipt and will not appear in the return value.
-func (s *MessageReadService) RecordReads(ctx context.Context, msgIDs []string, msgFrom, readerChatID string) ([]ReadReceipt, error) {
+func (s *MessageReadService) RecordReads(ctx context.Context, msgIDs []string, msgFrom, readerChatID string, proofMaps ...map[string]string) ([]ReadReceipt, error) {
+	var proofs map[string]string
+	if len(proofMaps) > 0 {
+		proofs = proofMaps[0]
+	}
+	if err := ValidateReadProofs(msgIDs, proofs); err != nil {
+		return nil, err
+	}
 	if len(msgIDs) == 0 {
 		return []ReadReceipt{}, nil
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(msgIDs)), ",")
 	insertArgs := make([]any, 0, len(msgIDs)+3)
+	proofCase := "CASE msg_id"
+	for _, id := range msgIDs {
+		proofCase += " WHEN ? THEN ?"
+		insertArgs = append(insertArgs, id, proofs[id])
+	}
+	proofCase += " END"
 	insertArgs = append(insertArgs, readerChatID, msgFrom, readerChatID)
 	for _, id := range msgIDs {
 		insertArgs = append(insertArgs, id)
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT IGNORE INTO message_reads (msg_id, msg_from, msg_to, reader_chat_id)
-		SELECT msg_id, msg_from, msg_to, ?
+		INSERT IGNORE INTO message_reads (proof, msg_id, msg_from, msg_to, reader_chat_id)
+		SELECT `+proofCase+`, msg_id, msg_from, msg_to, ?
 		FROM message_deliveries
 		WHERE msg_from = ? AND msg_to = ? AND msg_id IN (`+placeholders+`)`, insertArgs...)
 	if err != nil {
@@ -440,13 +464,13 @@ func (s *MessageReadService) RecordReads(ctx context.Context, msgIDs []string, m
 			}
 		}
 		if len(legacyIDs) > 0 {
-			values := strings.TrimSuffix(strings.Repeat("(?,?,?,?),", len(legacyIDs)), ",")
+			values := strings.TrimSuffix(strings.Repeat("(?,?,?,?,?),", len(legacyIDs)), ",")
 			args := make([]any, 0, len(legacyIDs)*4)
 			for _, id := range legacyIDs {
-				args = append(args, id, msgFrom, readerChatID, readerChatID)
+				args = append(args, id, msgFrom, readerChatID, readerChatID, proofs[id])
 			}
 			if _, err = s.db.ExecContext(ctx,
-				`INSERT IGNORE INTO message_reads (msg_id, msg_from, msg_to, reader_chat_id) VALUES `+values,
+				`INSERT IGNORE INTO message_reads (msg_id, msg_from, msg_to, reader_chat_id, proof) VALUES `+values,
 				args...,
 			); err != nil {
 				return nil, err
@@ -467,7 +491,7 @@ func (s *MessageReadService) queryReceipts(ctx context.Context, msgIDs []string,
 		queryArgs = append(queryArgs, id)
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT msg_id, CAST(UNIX_TIMESTAMP(read_at) * 1000 AS SIGNED)
+		SELECT msg_id, CAST(UNIX_TIMESTAMP(read_at) * 1000 AS SIGNED), COALESCE(proof, '')
 		FROM message_reads
 		WHERE msg_from = ? AND msg_to = ? AND reader_chat_id = ? AND msg_id IN (`+placeholders+`)`, queryArgs...)
 	if err != nil {
@@ -478,7 +502,7 @@ func (s *MessageReadService) queryReceipts(ctx context.Context, msgIDs []string,
 	receipts := make([]ReadReceipt, 0, len(msgIDs))
 	for rows.Next() {
 		var receipt ReadReceipt
-		if err = rows.Scan(&receipt.MsgID, &receipt.ReadAt); err != nil {
+		if err = rows.Scan(&receipt.MsgID, &receipt.ReadAt, &receipt.Proof); err != nil {
 			return nil, err
 		}
 		receipts = append(receipts, receipt)
@@ -531,7 +555,7 @@ func (s *MessageReadService) DeleteOldReadReceipts(ctx context.Context, olderTha
 // WebSocket re-invests when reconnecting to prevent the Redis offline queue from losing the burn-after-read start time after expiration.
 func (s *MessageReadService) GetReadReceiptsForSender(ctx context.Context, msgFrom string) (map[string][]ReadReceipt, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT msg_id, reader_chat_id, CAST(UNIX_TIMESTAMP(read_at) * 1000 AS SIGNED)
+		SELECT msg_id, reader_chat_id, CAST(UNIX_TIMESTAMP(read_at) * 1000 AS SIGNED), COALESCE(proof, '')
 		FROM message_reads WHERE msg_from = ? AND sender_applied = 0`, msgFrom)
 	if err != nil {
 		return nil, err
@@ -541,7 +565,7 @@ func (s *MessageReadService) GetReadReceiptsForSender(ctx context.Context, msgFr
 	for rows.Next() {
 		var receipt ReadReceipt
 		var reader string
-		if err = rows.Scan(&receipt.MsgID, &reader, &receipt.ReadAt); err != nil {
+		if err = rows.Scan(&receipt.MsgID, &reader, &receipt.ReadAt, &receipt.Proof); err != nil {
 			return nil, err
 		}
 		result[reader] = append(result[reader], receipt)
@@ -571,7 +595,7 @@ func (s *MessageReadService) MarkReadReceiptsApplied(ctx context.Context, msgIDs
 // Compensation query for missed read receipts while the sender is offline
 func (s *MessageReadService) GetReadReceiptsByPeer(ctx context.Context, msgFrom, readerChatID string) ([]ReadReceipt, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT msg_id, CAST(UNIX_TIMESTAMP(read_at) * 1000 AS SIGNED)
+		`SELECT msg_id, CAST(UNIX_TIMESTAMP(read_at) * 1000 AS SIGNED), COALESCE(proof, '')
 		 FROM message_reads WHERE msg_from = ? AND reader_chat_id = ?`,
 		msgFrom, readerChatID,
 	)
@@ -583,7 +607,7 @@ func (s *MessageReadService) GetReadReceiptsByPeer(ctx context.Context, msgFrom,
 	var receipts []ReadReceipt
 	for rows.Next() {
 		var receipt ReadReceipt
-		if err = rows.Scan(&receipt.MsgID, &receipt.ReadAt); err != nil {
+		if err = rows.Scan(&receipt.MsgID, &receipt.ReadAt, &receipt.Proof); err != nil {
 			return nil, err
 		}
 		receipts = append(receipts, receipt)

@@ -13,7 +13,7 @@ export async function fetchVersionInfo() {
   return data || {}
 }
 
-// Whether it is a native client (desktop Electron / Tauri / Android Capacitor); to update the native client, download the installation package
+// Whether it is a native client (Tauri desktop / Android Capacitor); native clients update by downloading the installation package
 export function isNativeClient() {
   return isNativeShell()
 }

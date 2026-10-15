@@ -1,5 +1,6 @@
 <template>
   <div class="group-info-page">
+    <safety-number-dialog v-model="showSafetyNumberDialog" :number="selectedSafetyNumber" :peer-name="selectedMemberName" :peer-id="selectedMemberId" :key-changed="selectedMemberKeyChanged || identity.hasFriendKeyChanged(selectedMemberId)" />
     <div class="header">
       <q-btn flat round dense icon="arrow_back" @click="$router.back()" />
       <div class="header-name">{{ groupName }}</div>
@@ -16,6 +17,66 @@
       </div>
     </div>
 
+    <section class="security-section">
+      <div class="security-heading">
+        <div class="security-icon"><q-icon name="verified_user" size="21px" /></div>
+        <div class="security-heading-copy">
+          <h3>{{ t('groupSecurity.title') }}</h3>
+          <span>{{ t('groupSecurity.subtitle') }}</span>
+        </div>
+      </div>
+
+      <div class="security-status" :class="groupStore.isMembershipTrusted(groupId) ? 'is-trusted' : 'is-unapproved'" role="status">
+        <q-icon :name="groupStore.isMembershipTrusted(groupId) ? 'check_circle' : 'gpp_maybe'" size="20px" />
+        <span>{{ t(groupStore.isMembershipTrusted(groupId) ? 'groupSecurity.trusted' : 'groupSecurity.unapproved') }}</span>
+      </div>
+
+      <p class="security-instructions">{{ t('groupSecurity.instructions') }}</p>
+
+      <div class="verification-number">
+        <div class="verification-number-label">
+          <q-icon name="tag" size="17px" />
+          <span>{{ t('groupSecurity.number') }}</span>
+        </div>
+        <div class="verification-number-value">{{ membership?.number || '—' }}</div>
+      </div>
+
+      <div class="fingerprints-heading">
+        <span>{{ t('groupSecurity.members') }}</span>
+        <q-badge color="grey-3" text-color="grey-8" :label="activeMembers.length" />
+      </div>
+      <div class="fingerprint-list">
+        <div v-for="member in activeMembers" :key="member.chat_id" class="fingerprint-row">
+          <div class="fingerprint-member">
+            <deterministic-avatar :seed="member.chat_id" :size="36" />
+            <div class="fingerprint-member-copy">
+              <strong>{{ member.nickname || member.chat_id }}</strong>
+              <span>{{ member.chat_id }}</span>
+            </div>
+          </div>
+          <code class="fingerprint-value">{{ membership?.fingerprints?.[member.chat_id] || '—' }}</code>
+        </div>
+        <div v-if="activeMembers.length === 0" class="fingerprint-empty">{{ t('groupSecurity.noMembers') }}</div>
+      </div>
+
+      <div v-if="membership?.pinError" class="security-warning">
+        <q-icon name="warning_amber" size="20px" />
+        <span>{{ t('groupSecurity.pinConflict') }}</span>
+      </div>
+
+      <q-checkbox v-model="independentlyVerified" class="verification-check" :label="t('groupSecurity.verified')" :disable="identity.isLocked || !membership?.snapshot" />
+
+      <div class="security-actions">
+        <q-btn unelevated color="primary" icon="verified" :label="t('groupSecurity.approve')" :loading="approving" :disable="identity.isLocked || approving || !independentlyVerified || !membership?.snapshot || membership?.pinError" @click="approveDisplayedRoster" />
+        <q-btn outline color="primary" icon="refresh" :label="t('groupSecurity.refresh')" :loading="refreshingRoster" :disable="refreshingRoster" @click="refreshRoster" />
+      </div>
+
+      <details class="security-limitations">
+        <summary>{{ t('groupSecurity.limitationsTitle') }}</summary>
+        <p>{{ t('groupSecurity.limitations') }}</p>
+      </details>
+    </section>
+
     <div class="members-section">
       <h3>成员（{{ members.length }}）</h3>
       <div v-for="m in members" :key="m.chat_id" class="member-row">
@@ -24,6 +85,7 @@
           <span class="member-id">{{ m.chat_id }}</span>
           <span v-if="m.state === 'removed'" class="badge removed">已移除</span>
           <span v-else-if="isMuted(m)" class="badge muted">禁言中</span>
+          <q-btn v-if="m.chat_id !== identity.chatId && m.public_key" flat round dense icon="verified_user" :aria-label="t('chat.verifyIdentity')" @click="showMemberSafetyNumber(m)" />
         </div>
       </div>
     </div>
@@ -46,17 +108,79 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useGroupStore } from 'src/stores/group'
 import { useChatStore } from 'src/stores/chat'
+import { useIdentityStore } from 'src/stores/identity'
+import { useQuasar } from 'quasar'
+import { useI18n } from 'src/i18n'
+import { loadKeyPair } from 'src/services/crypto.js'
+import { safetyNumber } from 'src/services/signed-content.mjs'
 import { attachmentApi, groupApi } from 'src/services/api.js'
 import { downloadOfflineAttachment, acknowledgeGroupAttachment } from 'src/services/offline-attachment.mjs'
+import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
+import SafetyNumberDialog from 'src/components/SafetyNumberDialog.vue'
 
 const route = useRoute()
 const groupStore = useGroupStore()
 const chatStore = useChatStore()
+const identity = useIdentityStore()
+const $q = useQuasar()
+const { t } = useI18n()
 const groupId = route.params.groupId
+const membership = computed(() => groupStore.membershipStatus[groupId])
+const activeMembers = computed(() => members.value.filter(member => member.state === 'active'))
+const independentlyVerified = ref(true)
+const approving = ref(false)
+const refreshingRoster = ref(false)
+const showSafetyNumberDialog = ref(false)
+const selectedSafetyNumber = ref('')
+const selectedMemberName = ref('')
+const selectedMemberId = ref('')
+const selectedMemberKeyChanged = ref(false)
+let reviewLockGeneration = 0
+watch(() => identity.isLocked, () => { reviewLockGeneration += 1 }, { flush: 'sync' })
+watch(() => [membership.value?.snapshot, identity.isLocked], () => { independentlyVerified.value = true }, { flush: 'sync' })
+
+async function approveDisplayedRoster() {
+  if (!independentlyVerified.value || identity.isLocked || approving.value) return
+  const snapshot = membership.value?.snapshot
+  const generation = reviewLockGeneration
+  approving.value = true
+  try {
+    await groupStore.approveMembership(groupId, snapshot, () => !identity.isLocked && generation === reviewLockGeneration)
+    await chatStore.processPendingMessages()
+  } catch {
+    $q.notify({ type: 'negative', message: t('groupSecurity.approvalFailed') })
+  } finally {
+    independentlyVerified.value = true
+    approving.value = false
+  }
+}
+
+async function refreshRoster() {
+  if (refreshingRoster.value) return
+  refreshingRoster.value = true
+  try {
+    await groupStore.loadGroupDetail(groupId)
+  } finally {
+    refreshingRoster.value = false
+  }
+}
+
+async function showMemberSafetyNumber(member) {
+  try {
+    const ownKeys = await loadKeyPair()
+    selectedSafetyNumber.value = await safetyNumber(identity.chatId, ownKeys.pubKeyB64, member.chat_id, member.public_key)
+    selectedMemberName.value = member.nickname || ''
+    selectedMemberId.value = member.chat_id
+    selectedMemberKeyChanged.value = membership.value?.changedMemberIds?.includes(member.chat_id) || false
+    showSafetyNumberDialog.value = true
+  } catch {
+    $q.notify({ type: 'negative', message: t('chat.actionFailed') })
+  }
+}
 
 const groupName = computed(() => groupStore.getGroupName(groupId))
 const members = computed(() => groupStore.getMembers(groupId))
@@ -147,6 +271,7 @@ async function onDownloadFile(msg) {
 }
 
 onMounted(async () => {
+  groupStore.setMyChatId(identity.chatId)
   await groupStore.loadGroupDetail(groupId)
   await chatStore.loadMessages(groupId)
 })
@@ -160,6 +285,48 @@ onMounted(async () => {
 .info-row { display: flex; justify-content: space-between; padding: 6px 0; }
 .label { color: #888; font-size: 14px; }
 .value { font-size: 14px; }
+.security-section {
+  margin: 16px;
+  padding: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(35, 105, 190, 0.13);
+  border-radius: 18px;
+  background: linear-gradient(150deg, #fff 0%, #f7faff 100%);
+  box-shadow: 0 8px 24px rgba(32, 71, 120, 0.07);
+}
+.security-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.security-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 14px; color: #1769c2; background: #e8f2ff; }
+.security-heading-copy { min-width: 0; }
+.security-heading h3 { margin: 0; color: #172b45; font-size: 17px; font-weight: 700; }
+.security-heading-copy > span { display: block; margin-top: 3px; color: #8190a3; font-size: 12px; }
+.security-status { display: flex; align-items: flex-start; gap: 9px; padding: 12px; border-radius: 12px; font-size: 13px; line-height: 1.5; }
+.security-status.is-trusted { color: #16734a; background: #eaf8f0; }
+.security-status.is-unapproved { color: #a75b00; background: #fff5e5; }
+.security-status .q-icon { flex: 0 0 auto; margin-top: 1px; }
+.security-instructions { margin: 14px 2px 16px; color: #65758a; font-size: 13px; line-height: 1.65; }
+.verification-number { padding: 13px 14px; border: 1px solid #dce8f6; border-radius: 13px; background: #fff; }
+.verification-number-label { display: flex; align-items: center; gap: 6px; color: #74849a; font-size: 12px; }
+.verification-number-value { margin-top: 8px; color: #135dae; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: clamp(19px, 5vw, 26px); font-weight: 750; letter-spacing: 0.08em; line-height: 1.35; overflow-wrap: anywhere; }
+.fingerprints-heading { display: flex; align-items: center; gap: 8px; margin: 18px 1px 9px; color: #344860; font-size: 13px; font-weight: 650; }
+.fingerprint-list { overflow: hidden; border: 1px solid #e7edf4; border-radius: 13px; background: #fff; }
+.fingerprint-row { padding: 12px; }
+.fingerprint-row + .fingerprint-row { border-top: 1px solid #edf1f5; }
+.fingerprint-member { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.fingerprint-member-copy { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.fingerprint-member-copy strong { overflow: hidden; color: #273b52; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.fingerprint-member-copy span { overflow: hidden; color: #8a97a7; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.fingerprint-value { display: block; margin: 9px 0 0 46px; color: #37618d; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; white-space: normal; }
+.fingerprint-empty { padding: 18px 12px; color: #8a97a7; font-size: 13px; text-align: center; }
+.security-warning { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; padding: 11px; border-radius: 11px; color: #a53630; background: #fff0ef; font-size: 12px; line-height: 1.5; }
+.security-warning .q-icon { flex: 0 0 auto; }
+.verification-check { display: flex; width: 100%; min-height: 40px; align-items: flex-start; margin: 12px 0 4px; color: #40546a; font-size: 13px; }
+.verification-check :deep(.q-checkbox__inner) { flex: 0 0 40px; }
+.verification-check :deep(.q-checkbox__label) { flex: 1 1 auto; min-width: 0; padding-top: 9px; line-height: 1.5; white-space: normal; }
+.security-actions { display: flex; width: 100%; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 9px; margin-top: 10px; }
+.security-actions .q-btn { min-height: 40px; border-radius: 10px; }
+.security-limitations { margin-top: 15px; border-top: 1px solid #e6edf5; color: #8190a3; font-size: 11px; line-height: 1.65; }
+.security-limitations summary { padding-top: 12px; color: #687b91; cursor: pointer; font-weight: 600; }
+.security-limitations p { margin: 8px 0 0; }
 .members-section { padding: 12px 16px; }
 .members-section h3 { margin: 0 0 8px; font-size: 16px; }
 .member-row { padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.05); }
@@ -202,4 +369,9 @@ onMounted(async () => {
 }
 .file-dl:hover { background: rgba(25, 118, 210, 0.18); }
 .file-dl:disabled { cursor: wait; opacity: 0.7; }
+@media (max-width: 420px) {
+  .security-section { margin: 12px; padding: 15px; border-radius: 16px; }
+  .security-actions { flex-direction: column; }
+  .security-actions .q-btn { width: 100%; }
+}
 </style>

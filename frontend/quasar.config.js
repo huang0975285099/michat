@@ -90,23 +90,6 @@ export default defineConfig(() => {
       hideSplashscreen: true,
       iosStatusBarPadding: true
     },
-    electron: {
-      bundler: 'builder',
-      builder: {
-        appId: 'com.yzs88.e2eechat',
-        productName: 'Yunmi',
-        win: {
-          target: [{ target: 'nsis', arch: ['x64'] }],
-          icon: 'src-electron/icons/icon.ico'
-        },
-        nsis: {
-          oneClick: false,
-          allowToChangeInstallationDirectory: true,
-          installerLanguages: ['zh_CN'],
-          language: '2052'
-        }
-      }
-    },
     bex: {}
   }
 })

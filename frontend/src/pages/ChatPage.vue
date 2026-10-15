@@ -10,6 +10,7 @@
       <q-icon name="circle" :color="friendOnline ? 'positive' : 'grey-4'" size="10px" class="peer-online">
         <q-tooltip>{{ friendOnline ? t("common.online") : t("common.offline") }}</q-tooltip>
       </q-icon>
+      <q-btn flat round dense :icon="identityStore.hasFriendKeyChanged(friendChatId) ? 'gpp_maybe' : 'verified_user'" :color="identityStore.hasFriendKeyChanged(friendChatId) ? 'negative' : undefined" class="peer-action" :aria-label="t('chat.verifyIdentity')" @click="showSafetyNumber" />
       <q-btn
         flat round dense icon="call" class="peer-action"
         :disable="callStore.state !== 'idle'"
@@ -598,10 +599,13 @@
       :start-id="imagePreview.startId"
       @download="downloadGalleryImage"
     />
+    <safety-number-dialog v-model="showSafetyNumberDialog" :number="safetyNumberValue" :peer-name="friendNickname" :peer-id="friendChatId" :key-changed="identityStore.hasFriendKeyChanged(friendChatId)" />
   </q-page>
 </template>
 
 <script setup>
+import { loadKeyPair } from 'src/services/crypto.js'
+import { safetyNumber } from 'src/services/signed-content.mjs'
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { copyToClipboard, useQuasar } from 'quasar'
@@ -620,6 +624,7 @@ import {
 } from 'src/services/voice-recorder.mjs'
 import DeterministicAvatar from 'src/components/DeterministicAvatar.vue'
 import ImageGalleryDialog from 'src/components/ImageGalleryDialog.vue'
+import SafetyNumberDialog from 'src/components/SafetyNumberDialog.vue'
 import MessageActionMenu from 'src/components/MessageActionMenu.vue'
 import { useI18n } from 'src/i18n'
 import {
@@ -725,6 +730,18 @@ const pendingImageBottomIds = new Set()
 const measuredImageIds = new Set()
 const imagePreview = ref({ show: false, startId: '' })
 const selectedImages = ref([])
+let privateViewGeneration = 0
+
+watch(() => identityStore.isLocked, locked => {
+  if (!locked) return
+  privateViewGeneration++
+  selectedImages.value.forEach(disposeSelectedImage)
+  selectedImages.value = []
+  imagePreview.value.show = false
+  inputText.value = ''
+  replyTarget.value = null
+  morePanelOpen.value = false
+})
 const imageSendMode = ref('high_quality')
 const imageProcessing = ref({ active: false, current: 0, total: 0 })
 const imageBatch = ref({
@@ -1358,9 +1375,22 @@ function insertEmoji(emoji) {
 // Friend information (obtained from cache or API)
 const friendNickname = ref('...')
 const friendOnline = ref(false)
+const showSafetyNumberDialog = ref(false)
+const safetyNumberValue = ref('')
 
 // Obtain friend's public key: only obtain it from trusted sources (local cache or API), prohibit injection from URL parameters
 const friendPubKey = ref(identityStore.getFriendPubKey(friendChatId) || '')
+
+async function showSafetyNumber() {
+  try {
+    if (!await fetchFriendInfo({ notifyOnFailure: true })) return
+    const ownKeys = await loadKeyPair()
+    safetyNumberValue.value = await safetyNumber(identityStore.chatId, ownKeys.pubKeyB64, friendChatId, friendPubKey.value)
+    showSafetyNumberDialog.value = true
+  } catch {
+    $q.notify({ type: 'negative', message: t('chat.actionFailed') })
+  }
+}
 
 // 历史窗口：全量消息留在 store（聊天列表未读数/预览依赖），页面只渲染最近一窗口，
 // 滚动到顶部补页——与 GroupChatPage 共用同一机制（useChatHistoryWindow）
@@ -1540,8 +1570,7 @@ async function fetchFriendInfo({ notifyOnFailure = false } = {}) {
     const friend = data.find(f => f.chat_id === friendChatId)
     if (friend) {
       if (friend.public_key) {
-        friendPubKey.value = friend.public_key
-        identityStore.cacheFriendPubKey(friendChatId, friend.public_key)
+        friendPubKey.value = await identityStore.cacheFriendPubKey(friendChatId, friend.public_key)
       }
       friendNickname.value = friend.nickname
       friendOnline.value = !!friend.online
@@ -1634,6 +1663,8 @@ function setImageSendMode(mode) {
 }
 
 async function addSelectedImages(files) {
+  const generation = privateViewGeneration
+  if (identityStore.isLocked) return
   const incoming = Array.from(files || [], normalizedImageFile)
   if (!incoming.length || imageProcessing.value.active || imageBatch.value.sending) return
 
@@ -1652,11 +1683,12 @@ async function addSelectedImages(files) {
         nextItems.push(existing)
         continue
       }
-      if (chatPageUnmounted) break
+      if (chatPageUnmounted || generation !== privateViewGeneration || identityStore.isLocked) break
 
       imageProcessing.value.current++
       try {
         const prepared = await compressImageForSending(file)
+        if (generation !== privateViewGeneration || identityStore.isLocked) break
         if (prepared.file.size > MAX_IMAGE_FILE_BYTES) {
           rejected.push({ file, reason: 'output_size' })
           continue
@@ -1670,6 +1702,7 @@ async function addSelectedImages(files) {
           previewUrl: URL.createObjectURL(prepared.file),
         })
       } catch (error) {
+        if (generation !== privateViewGeneration || identityStore.isLocked) break
         if (error?.code === 'dimensions_too_large') {
           rejected.push({ file, reason: 'dimensions_too_large' })
           continue
@@ -1697,7 +1730,7 @@ async function addSelectedImages(files) {
     imageProcessing.value = { active: false, current: 0, total: 0 }
   }
 
-  if (chatPageUnmounted) {
+  if (chatPageUnmounted || generation !== privateViewGeneration || identityStore.isLocked) {
     nextItems.forEach(disposeSelectedImage)
     return
   }
@@ -1754,6 +1787,8 @@ function consumeSelectedImage(id) {
 }
 
 async function sendSelectedImages() {
+  const generation = privateViewGeneration
+  if (identityStore.isLocked) return
   if (imageBatch.value.sending || imageProcessing.value.active || isTransferring.value || !selectedImages.value.length) return
   if (imageSendBlocked.value) {
     $q.notify({
@@ -1787,17 +1822,18 @@ async function sendSelectedImages() {
 
   try {
     for (let index = 0; index < queue.length; index++) {
-      if (chatPageUnmounted) break
+      if (chatPageUnmounted || generation !== privateViewGeneration || identityStore.isLocked) break
       const item = queue[index]
       imageBatch.value.current = index + 1
       try {
-        await chatStore.sendFile(
+        const sent = await chatStore.sendFile(
           friendChatId,
           recipientKey,
           item.file,
           burnAfterRead,
           { batchId, batchIndex: index, batchTotal: queue.length },
         )
+        if (!sent || generation !== privateViewGeneration || identityStore.isLocked) break
         completed++
         imageBatch.value.completedBytes += item.file.size
         consumeSelectedImage(item.id)
