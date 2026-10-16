@@ -16,6 +16,111 @@ function compile(source, startMarker, endMarker, dependencies, name) {
   return new Function(...Object.keys(dependencies), `${source.slice(start, end)}; return ${name}`)(...Object.values(dependencies))
 }
 
+function attachmentStatusHarness() {
+  const transfers = ref({})
+  const cleanup = []
+  const persisted = []
+  const dependencies = {
+    fileTransfers: transfers,
+    scheduleTransferCleanup: (...args) => cleanup.push(args),
+    dbUpdateMessageAttachmentStatus: async (...args) => persisted.push(args),
+  }
+  const handlers = compile(chatSource, '  async function setMessageAttachmentStatus(', '\n  async function maybeAutoCleanReceivedAttachment(', dependencies,
+    '({ setMessageAttachmentStatus, completeAcknowledgedOfflineTransfer })')
+  return { ...handlers, transfers, cleanup, persisted }
+}
+
+test('received attachments clear matching stale send progress and never regress to waiting', async () => {
+  const state = attachmentStatusHarness()
+  const msg = { id: 'file-message-id', mine: true, offlineAttachment: { attachmentId: 'attachment-one' }, attachmentStatus: 'preparing' }
+  state.transfers.value['attachment-one'] = { msgId: msg.id, direction: 'send', status: 'pending', progress: 0 }
+  await state.setMessageAttachmentStatus(msg, 'received')
+  assert.equal(state.transfers.value['attachment-one'].status, 'done')
+  assert.equal(state.transfers.value['attachment-one'].progress, 100)
+  assert.deepEqual(state.cleanup, [['attachment-one', 1000]])
+  await state.setMessageAttachmentStatus(msg, 'waiting')
+  assert.equal(msg.attachmentStatus, 'received')
+  assert.deepEqual(state.persisted, [[msg.id, 'received', undefined]])
+  state.completeAcknowledgedOfflineTransfer(msg)
+  assert.equal(state.cleanup.length, 1)
+})
+
+test('server acknowledgment finishes upload progress without pretending the recipient has received it', async () => {
+  const state = attachmentStatusHarness()
+  const msg = { id: 'file-message-id', mine: true, type: 'file', offlineAttachment: { attachmentId: 'attachment-one' }, attachmentStatus: 'preparing' }
+  state.transfers.value['attachment-one'] = { msgId: msg.id, direction: 'send', status: 'pending', progress: 0 }
+  const dependencies = {
+    validateMsgId: () => true,
+    ackTimers: new Map(),
+    findLocalMessage: () => msg,
+    confirmPendingMessage() {},
+    dbUpdateMessageDelivery: async () => {},
+    completeAcknowledgedOfflineTransfer: state.completeAcknowledgedOfflineTransfer,
+    setMessageAttachmentStatus: state.setMessageAttachmentStatus,
+  }
+  const onAck = compile(chatSource, '    async function onAck(payload)', '\n    async function onReadReceipt(', dependencies, 'onAck')
+  await onAck({ msg_id: msg.id, status: 'accepted', ts: 123 })
+  assert.equal(msg.status, 'sent')
+  assert.equal(msg.attachmentStatus, 'waiting')
+  assert.equal(state.transfers.value['attachment-one'].status, 'done')
+})
+
+test('attachment completion cannot clear a different message or a receive transfer', () => {
+  const state = attachmentStatusHarness()
+  const msg = { id: 'file-message-id', mine: true, offlineAttachment: { attachmentId: 'attachment-one' } }
+  state.transfers.value['attachment-one'] = { msgId: 'another-message-id', direction: 'send', status: 'pending' }
+  state.completeAcknowledgedOfflineTransfer(msg)
+  assert.equal(state.transfers.value['attachment-one'].status, 'pending')
+  state.transfers.value['attachment-one'] = { msgId: msg.id, direction: 'receive', status: 'transferring' }
+  state.completeAcknowledgedOfflineTransfer(msg)
+  assert.equal(state.transfers.value['attachment-one'].status, 'transferring')
+  assert.deepEqual(state.cleanup, [])
+})
+
+test('upload completion is reactive and late upload work cannot overwrite a received receipt', async () => {
+  const state = attachmentStatusHarness()
+  const metadata = { attachmentId: 'attachment-one' }
+  const msg = { id: 'file-message-id', mine: true, status: 'pending', offlineAttachment: metadata }
+  const statuses = []
+  const deliveries = []
+  let stopWatching
+  let timers = 0
+  const dependencies = {
+    localKeyGeneration: 0,
+    useIdentityStore: () => ({ isLocked: false, cacheFriendPubKey: async () => 'public-key' }),
+    offlineUploadOperations: new Map(),
+    fileTransfers: state.transfers,
+    createOfflineTransfer: () => ({ msgId: msg.id, direction: 'send', status: 'pending', progress: 0 }),
+    waitForOfflineUploadResume: async () => {},
+    assertTransferActive() {},
+    setMessageAttachmentStatus: state.setMessageAttachmentStatus,
+    dbUpdateMessageDelivery: async (...args) => deliveries.push(args),
+    uploadOfflineAttachment: async () => {
+      stopWatching = watch(() => state.transfers.value['attachment-one'].status, status => statuses.push(status), { flush: 'sync' })
+    },
+    attachmentApi: {},
+    sealOutgoingContent: async () => 'signed',
+    serializeOfflineAttachmentContent: () => 'metadata',
+    encryptMessage: async () => ({}),
+    send: () => { msg.status = 'sent'; msg.attachmentStatus = 'received'; return true },
+    hasPendingMessage: () => false,
+    armMessageAckTimer: () => { timers++ },
+    scheduleTransferCleanup: (...args) => state.cleanup.push(args),
+    watchOutgoingAttachment() {},
+  }
+  const upload = compile(chatSource, '  async function runOfflineUpload(', '\n  /**', dependencies, 'runOfflineUpload')
+  try {
+    await upload('1234-ABCD', 'public-key', {}, msg, metadata)
+    assert.deepEqual(statuses, ['processing', 'done'])
+    assert.equal(msg.status, 'sent')
+    assert.equal(msg.attachmentStatus, 'received')
+    assert.equal(deliveries.at(-1)[1], 'sent')
+    assert.equal(timers, 0)
+  } finally {
+    stopWatching?.()
+  }
+})
+
 test('message persistence ignores same-sender replays without overwriting read state and rejects cross-thread ID collisions', async () => {
   const record = { id: 'a-b-c', chatId: 'group-one', from: '1234-ABCD', mine: false, read: true, text: 'original ciphertext' }
   const records = new Map([[record.id, record]])

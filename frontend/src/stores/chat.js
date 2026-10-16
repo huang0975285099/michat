@@ -962,9 +962,21 @@ export const useChatStore = defineStore('chat', () => {
 
   async function setMessageAttachmentStatus(msg, status, failureCode) {
     if (!msg) return
+    if (msg.attachmentStatus === 'received' && ['preparing', 'uploading', 'waiting', 'paused'].includes(status)) return
     msg.attachmentStatus = status
+    if (status === 'received') completeAcknowledgedOfflineTransfer(msg)
     if (failureCode !== undefined) msg.failureCode = failureCode
     await dbUpdateMessageAttachmentStatus(msg.id, status, failureCode).catch(() => {})
+  }
+
+  function completeAcknowledgedOfflineTransfer(msg) {
+    if (!msg?.mine || !msg.offlineAttachment) return
+    const transferId = msg.offlineAttachment.attachmentId
+    const transfer = fileTransfers.value[transferId]
+    if (!transfer || transfer.msgId !== msg.id || transfer.direction !== 'send' || transfer.status === 'done') return
+    transfer.progress = 100
+    transfer.status = 'done'
+    scheduleTransferCleanup(transferId, 1000)
   }
 
   async function maybeAutoCleanReceivedAttachment(msg) {
@@ -1071,7 +1083,10 @@ export const useChatStore = defineStore('chat', () => {
     msg.read = true
     msg.authenticatedRead = true
     msg.status = 'sent'
-    if (msg.type === 'file') msg.attachmentStatus = 'received'
+    if (msg.type === 'file') {
+      msg.attachmentStatus = 'received'
+      completeAcknowledgedOfflineTransfer(msg)
+    }
     if (msg.burnAfterRead && !msg.readReceivedAt) {
       msg.readReceivedAt = receipt.read_at
       msg.burnAt = receipt.read_at + BURN_AFTER_READ_DELAY
@@ -2583,8 +2598,8 @@ export const useChatStore = defineStore('chat', () => {
     const existingOperation = offlineUploadOperations.get(transferId)
     if (existingOperation) return existingOperation.promise
 
-    const transfer = fileTransfers.value[transferId] || createOfflineTransfer(toChatId, msg, metadata, options)
-    fileTransfers.value[transferId] = transfer
+    fileTransfers.value[transferId] ||= createOfflineTransfer(toChatId, msg, metadata, options)
+    const transfer = fileTransfers.value[transferId]
     const operation = { controller: null, paused: false, pauseRequested: false, canceled: false, resume: null, promise: null, metadata }
     operation.promise = (async () => {
       try {
@@ -2631,13 +2646,13 @@ export const useChatStore = defineStore('chat', () => {
         const queued = hasPendingMessage(msg.id)
         if (!sentNow && !queued) throw new Error('Unable to queue the encrypted attachment message')
 
-        msg.status = sentNow ? 'pending' : 'queued'
-        await setMessageAttachmentStatus(msg, 'waiting')
-        await dbUpdateMessageDelivery(msg.id, msg.status).catch(() => {})
-        if (sentNow) armMessageAckTimer(msg.id)
+        if (msg.status !== 'sent') msg.status = sentNow ? 'pending' : 'queued'
         transfer.progress = 100
         transfer.status = 'done'
         scheduleTransferCleanup(transferId, 1000)
+        await setMessageAttachmentStatus(msg, 'waiting')
+        await dbUpdateMessageDelivery(msg.id, msg.status).catch(() => {})
+        if (msg.status === 'pending') armMessageAckTimer(msg.id)
         watchOutgoingAttachment(msg)
         return transferId
       } catch (error) {
@@ -3264,6 +3279,10 @@ function validateMsgId(msgId) {
           msg.ts = payload.ts
           msg.status = 'sent'
           msg.failureCode = null
+          completeAcknowledgedOfflineTransfer(msg)
+          if (msg.offlineAttachment && ['preparing', 'uploading'].includes(msg.attachmentStatus)) {
+            await setMessageAttachmentStatus(msg, 'waiting')
+          }
         }
         await dbUpdateMessageDelivery(msgId, 'sent', payload.ts, null)
         return
@@ -3827,6 +3846,7 @@ function validateMsgId(msgId) {
         m.authenticatedRead = true
         if (m.type === 'file') {
           m.attachmentStatus = 'received'
+          completeAcknowledgedOfflineTransfer(m)
           if (m.attachmentId) stopAttachmentStatusWatch(m.attachmentId)
         }
         // Messages that will burn after reading: The destruction countdown will only start when a receipt is received "for the first time".
